@@ -1,10 +1,10 @@
 # 🚀 superFetch
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)[![Node.js](https://img.shields.io/badge/Node.js-≥18.0.0-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)[![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)[![MCP](https://img.shields.io/badge/MCP-1.0.4-8B5CF6?logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZmlsbD0id2hpdGUiIGQ9Ik0xMiAyQzYuNDggMiAyIDYuNDggMiAxMnM0LjQ4IDEwIDEwIDEwIDEwLTQuNDggMTAtMTBTMTcuNTIgMiAxMiAyem0wIDE4Yy00LjQyIDAtOC0zLjU4LTgtOHMzLjU4LTggOC04IDggMy41OCA4IDgtMy41OCA4LTggOHoiLz48L3N2Zz4=)](https://modelcontextprotocol.io/)
+[![npm version](https://img.shields.io/npm/v/@j0hanz/superfetch.svg)](https://www.npmjs.com/package/@j0hanz/superfetch)[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)[![Node.js](https://img.shields.io/badge/Node.js-≥18.0.0-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)[![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)[![MCP](https://img.shields.io/badge/MCP-1.0.4-8B5CF6?logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZmlsbD0id2hpdGUiIGQ9Ik0xMiAyQzYuNDggMiAyIDYuNDggMiAxMnM0LjQ4IDEwIDEwIDEwIDEwLTQuNDggMTAtMTBTMTcuNTIgMiAxMiAyem0wIDE4Yy00LjQyIDAtOC0zLjU4LTgtOHMzLjU4LTggOC04IDggMy41OCA4IDgtMy41OCA4LTggOHoiLz48L3N2Zz4=)](https://modelcontextprotocol.io/)
 
 A [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server that fetches, extracts, and transforms web content into AI-optimized formats using Mozilla Readability.
 
-[Installation](#installation) · [Tools](#available-tools) · [Configuration](#configuration) · [Contributing](#contributing)
+[Quick Start](#quick-start) · [Tools](#available-tools) · [Configuration](#configuration) · [Contributing](#contributing)
 
 ---
 
@@ -25,14 +25,74 @@ A [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server that f
 
 ---
 
-## Installation
+## Quick Start
 
-### Prerequisites
+Add superFetch to your MCP client configuration — no installation required!
 
-- **Node.js** ≥18.0.0
-- **npm** or **yarn**
+### Claude Desktop
 
-### Quick Start
+Add to your `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "superFetch": {
+      "command": "npx",
+      "args": ["-y", "@j0hanz/superfetch@latest", "--stdio"]
+    }
+  }
+}
+```
+
+### VS Code
+
+Add to `.vscode/mcp.json` in your workspace:
+
+```json
+{
+  "servers": {
+    "superFetch": {
+      "command": "npx",
+      "args": ["-y", "@j0hanz/superfetch@latest", "--stdio"]
+    }
+  }
+}
+```
+
+### With Environment Variables
+
+```json
+{
+  "servers": {
+    "superFetch": {
+      "command": "npx",
+      "args": ["-y", "@j0hanz/superfetch@latest", "--stdio"],
+      "env": {
+        "CACHE_TTL": "7200",
+        "LOG_LEVEL": "debug"
+      }
+    }
+  }
+}
+```
+
+---
+
+## Installation (Alternative)
+
+### Global Installation
+
+```bash
+npm install -g @j0hanz/superfetch
+
+# Run in stdio mode
+superfetch --stdio
+
+# Run HTTP server
+superfetch
+```
+
+### From Source
 
 ```bash
 git clone https://github.com/j0hanz/super-fetch-mcp-server.git
@@ -123,12 +183,34 @@ Fetches a webpage and converts it to clean Markdown.
 
 ## Configuration
 
-### MCP Client Setup
+### Alternative MCP Client Setups
 
 <details>
-<summary><strong>Claude Desktop</strong></summary>
+<summary><strong>VS Code (HTTP mode)</strong> — requires running server separately</summary>
 
-Add to `claude_desktop_config.json`:
+First, start the HTTP server:
+
+```bash
+npx -y @j0hanz/superfetch@latest
+```
+
+Then add to `.vscode/mcp.json`:
+
+```json
+{
+  "servers": {
+    "superFetch": {
+      "type": "http",
+      "url": "http://127.0.0.1:3000/mcp"
+    }
+  }
+}
+```
+
+</details>
+
+<details>
+<summary><strong>Claude Desktop (local path)</strong> — for development</summary>
 
 ```json
 {
@@ -136,43 +218,6 @@ Add to `claude_desktop_config.json`:
     "superFetch": {
       "command": "node",
       "args": ["/path/to/super-fetch-mcp-server/dist/index.js", "--stdio"]
-    }
-  }
-}
-```
-
-</details>
-
-<details>
-<summary><strong>VS Code</strong> (HTTP mode)</summary>
-
-Add to your user settings or `.vscode/mcp.json`:
-
-```json
-{
-  "mcp": {
-    "servers": {
-      "superFetch": {
-        "url": "http://127.0.0.1:3000/mcp"
-      }
-    }
-  }
-}
-```
-
-</details>
-
-<details>
-<summary><strong>VS Code</strong> (stdio mode)</summary>
-
-```json
-{
-  "mcp": {
-    "servers": {
-      "superFetch": {
-        "command": "node",
-        "args": ["/path/to/super-fetch-mcp-server/dist/index.js", "--stdio"]
-      }
     }
   }
 }

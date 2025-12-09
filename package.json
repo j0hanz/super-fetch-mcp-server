@@ -1,10 +1,25 @@
 {
-  "name": "superfetch",
+  "name": "@j0hanz/superfetch",
   "version": "1.0.0",
   "description": "Intelligent web content fetcher MCP server that converts HTML to clean, AI-readable JSONL format",
   "type": "module",
   "main": "dist/index.js",
-  "author": "",
+  "bin": {
+    "superfetch": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/j0hanz/super-fetch-mcp-server.git"
+  },
+  "homepage": "https://github.com/j0hanz/super-fetch-mcp-server#readme",
+  "bugs": {
+    "url": "https://github.com/j0hanz/super-fetch-mcp-server/issues"
+  },
+  "author": "j0hanz",
   "license": "MIT",
   "keywords": [
     "mcp",
@@ -17,7 +32,9 @@
   ],
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc",
+    "build": "tsc && shx chmod +x dist/*.js",
+    "prepare": "npm run build",
+    "prepublishOnly": "npm run build && npm run lint",
     "start": "node dist/index.js",
     "format": "prettier --write .",
     "type-check": "tsc --noEmit",
@@ -52,6 +69,7 @@
     "eslint-config-prettier": "^10.1.8",
     "knip": "^5.72.0",
     "prettier": "^3.7.4",
+    "shx": "^0.3.4",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.49.0"
