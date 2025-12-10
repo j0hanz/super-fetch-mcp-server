@@ -1,10 +1,17 @@
 # 🚀 superFetch
 
-[![npm version](https://img.shields.io/npm/v/@j0hanz/superfetch.svg)](https://www.npmjs.com/package/@j0hanz/superfetch)[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)[![Node.js](https://img.shields.io/badge/Node.js-≥18.0.0-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)[![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)[![MCP](https://img.shields.io/badge/MCP-1.0.4-8B5CF6?logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZmlsbD0id2hpdGUiIGQ9Ik0xMiAyQzYuNDggMiAyIDYuNDggMiAxMnM0LjQ4IDEwIDEwIDEwIDEwLTQuNDggMTAtMTBTMTcuNTIgMiAxMiAyem0wIDE4Yy00LjQyIDAtOC0zLjU4LTgtOHMzLjU4LTggOC04IDggMy41OCA4IDgtMy41OCA4LTggOHoiLz48L3N2Zz4=)](https://modelcontextprotocol.io/)
+[![npm version](https://img.shields.io/npm/v/@j0hanz/superfetch.svg)](https://www.npmjs.com/package/@j0hanz/superfetch)
+[![MCP Registry](https://img.shields.io/badge/MCP_Registry-io.github.j0hanz%2Fsuperfetch-8B5CF6)](https://registry.modelcontextprotocol.io/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Node.js](https://img.shields.io/badge/Node.js-≥18.0.0-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![MCP SDK](https://img.shields.io/badge/MCP_SDK-1.0.4-8B5CF6)](https://modelcontextprotocol.io/)
 
 A [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server that fetches, extracts, and transforms web content into AI-optimized formats using Mozilla Readability.
 
 [Quick Start](#quick-start) · [Tools](#available-tools) · [Configuration](#configuration) · [Contributing](#contributing)
+
+> 📦 **Published to [MCP Registry](https://registry.modelcontextprotocol.io/)** — Search for `io.github.j0hanz/superfetch`
 
 ---
 
@@ -136,16 +143,15 @@ node dist/index.js --stdio
 
 ### `fetch-url`
 
-Fetches a webpage and converts it to AI-readable format.
+Fetches a webpage and converts it to AI-readable JSONL format with semantic content blocks.
 
-| Parameter            | Type                      | Default    | Description                |
-| -------------------- | ------------------------- | ---------- | -------------------------- |
-| `url`                | string                    | _required_ | URL to fetch               |
-| `format`             | `'jsonl'` \| `'markdown'` | `'jsonl'`  | Output format              |
-| `extractMainContent` | boolean                   | `true`     | Use Readability extraction |
-| `includeMetadata`    | boolean                   | `true`     | Include page metadata      |
-| `maxContentLength`   | number                    | –          | Max content length (chars) |
-| `customHeaders`      | object                    | –          | Custom HTTP headers        |
+| Parameter            | Type     | Default    | Description                                  |
+| -------------------- | -------- | ---------- | -------------------------------------------- |
+| `url`                | string   | _required_ | URL to fetch                                 |
+| `extractMainContent` | boolean  | `true`     | Use Readability to extract main content      |
+| `includeMetadata`    | boolean  | `true`     | Include page metadata (title, description)   |
+| `maxContentLength`   | number   | –          | Maximum content length in characters         |
+| `customHeaders`      | object   | –          | Custom HTTP headers for the request          |
 
 ### `fetch-links`
 
@@ -239,6 +245,7 @@ Then add to `.vscode/mcp.json`:
 | `CACHE_TTL`          | `3600`               | Cache TTL (seconds)       |
 | `CACHE_MAX_KEYS`     | `100`                | Maximum cache entries     |
 | `LOG_LEVEL`          | `info`               | Logging level             |
+| `ENABLE_LOGGING`     | `true`               | Enable/disable logging    |
 
 ---
 
@@ -299,13 +306,14 @@ Default: **100 requests/minute** per IP (configurable)
 | ------------------ | ------------------------------- |
 | Runtime            | Node.js ≥18                     |
 | Language           | TypeScript 5.9                  |
-| MCP SDK            | @modelcontextprotocol/sdk 1.0.4 |
-| Content Extraction | @mozilla/readability            |
-| HTML Parsing       | Cheerio, JSDOM                  |
-| Markdown           | Turndown                        |
-| HTTP               | Express, Axios                  |
-| Caching            | node-cache                      |
-| Validation         | Zod                             |
+| MCP SDK            | @modelcontextprotocol/sdk ^1.0.4 |
+| Content Extraction | @mozilla/readability             |
+| HTML Parsing       | Cheerio, JSDOM                   |
+| Markdown           | Turndown                         |
+| HTTP               | Express, Axios                   |
+| Caching            | node-cache                       |
+| Validation         | Zod                              |
+| Logging            | Winston                          |
 
 ---
 
@@ -325,3 +333,9 @@ For examples of other MCP servers, see: [github.com/modelcontextprotocol/servers
 ## License
 
 MIT License — see [LICENSE](LICENSE) for details.
+
+---
+
+<p align="center">
+  <sub>Built with ❤️ by <a href="https://github.com/j0hanz">j0hanz</a></sub>
+</p>
