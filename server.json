@@ -6,12 +6,12 @@
     "url": "https://github.com/j0hanz/super-fetch-mcp-server",
     "source": "github"
   },
-  "version": "1.0.3",
+  "version": "1.0.4",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "@j0hanz/superfetch",
-      "version": "1.0.3",
+      "version": "1.0.4",
       "transport": {
         "type": "stdio"
       }
