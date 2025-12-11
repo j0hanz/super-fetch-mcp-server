@@ -16,6 +16,7 @@ import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import readline from 'readline';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -69,6 +70,21 @@ function readJson(filePath) {
 function writeJson(filePath, data) {
   const fullPath = path.join(rootDir, filePath);
   fs.writeFileSync(fullPath, JSON.stringify(data, null, 2) + '\n');
+}
+
+// Cross-platform prompt for user input
+function prompt(question) {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout
+  });
+
+  return new Promise(resolve => {
+    rl.question(question, answer => {
+      rl.close();
+      resolve(answer.trim().toLowerCase());
+    });
+  });
 }
 
 // Main release process
@@ -125,9 +141,9 @@ async function main() {
   log('\n🌐 Pushing to GitHub...', 'blue');
   log('This will trigger automated publishing to npm and MCP Registry', 'yellow');
   
-  const push = execSilent('read -p "Push to GitHub? (y/N): " answer && echo $answer');
+  const push = await prompt('Push to GitHub? (y/N): ');
   
-  if (push.toLowerCase() === 'y') {
+  if (push === 'y') {
     exec(`git push origin ${currentBranch}`);
     exec(`git push origin v${newVersion}`);
     
