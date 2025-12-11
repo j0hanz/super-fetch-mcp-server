@@ -15,8 +15,33 @@ import {
   FETCH_MARKDOWN_TOOL_NAME,
   FETCH_MARKDOWN_TOOL_DESCRIPTION,
 } from './handlers/fetch-markdown.tool.js';
+import {
+  fetchUrlsToolHandler,
+  FETCH_URLS_TOOL_NAME,
+  FETCH_URLS_TOOL_DESCRIPTION,
+} from './handlers/fetch-urls.tool.js';
 
 // Zod schemas for runtime validation - single source of truth
+
+// Common request options shared across tools
+const RequestOptionsSchema = {
+  customHeaders: z
+    .record(z.string())
+    .optional()
+    .describe('Custom HTTP headers for the request'),
+  timeout: z
+    .number()
+    .min(1000)
+    .max(60000)
+    .optional()
+    .describe('Request timeout in milliseconds (1000-60000)'),
+  retries: z
+    .number()
+    .min(1)
+    .max(10)
+    .optional()
+    .describe('Number of retry attempts (1-10)'),
+};
 
 // Input schemas
 const FetchUrlInputSchema = {
@@ -41,10 +66,7 @@ const FetchUrlInputSchema = {
     .optional()
     .default('jsonl')
     .describe('Output format'),
-  customHeaders: z
-    .record(z.string())
-    .optional()
-    .describe('Custom HTTP headers for the request'),
+  ...RequestOptionsSchema,
 };
 
 const FetchLinksInputSchema = {
@@ -59,6 +81,22 @@ const FetchLinksInputSchema = {
     .optional()
     .default(true)
     .describe('Include internal links'),
+  maxLinks: z
+    .number()
+    .positive()
+    .max(1000)
+    .optional()
+    .describe('Maximum number of links to return (1-1000)'),
+  filterPattern: z
+    .string()
+    .optional()
+    .describe('Regex pattern to filter links (matches against href)'),
+  includeImages: z
+    .boolean()
+    .optional()
+    .default(false)
+    .describe('Include image links (img src attributes)'),
+  ...RequestOptionsSchema,
 };
 
 const FetchMarkdownInputSchema = {
@@ -73,6 +111,58 @@ const FetchMarkdownInputSchema = {
     .optional()
     .default(true)
     .describe('Include YAML frontmatter metadata'),
+  maxContentLength: z
+    .number()
+    .positive()
+    .optional()
+    .describe('Maximum content length in characters'),
+  generateToc: z
+    .boolean()
+    .optional()
+    .default(false)
+    .describe('Generate table of contents from headings'),
+  ...RequestOptionsSchema,
+};
+
+const FetchUrlsInputSchema = {
+  urls: z
+    .array(z.string().min(1))
+    .min(1)
+    .max(10)
+    .describe('Array of URLs to fetch (1-10 URLs)'),
+  extractMainContent: z
+    .boolean()
+    .optional()
+    .default(true)
+    .describe('Use Readability to extract main article content'),
+  includeMetadata: z
+    .boolean()
+    .optional()
+    .default(true)
+    .describe('Include page metadata (title, description, etc.)'),
+  maxContentLength: z
+    .number()
+    .positive()
+    .optional()
+    .describe('Maximum content length per URL in characters'),
+  format: z
+    .enum(['jsonl', 'markdown'])
+    .optional()
+    .default('jsonl')
+    .describe('Output format for all URLs'),
+  concurrency: z
+    .number()
+    .min(1)
+    .max(5)
+    .optional()
+    .default(3)
+    .describe('Maximum concurrent requests (1-5)'),
+  continueOnError: z
+    .boolean()
+    .optional()
+    .default(true)
+    .describe('Continue processing if some URLs fail'),
+  ...RequestOptionsSchema,
 };
 
 // Output schemas for structured content validation
@@ -98,10 +188,18 @@ const FetchLinksOutputSchema = {
       z.object({
         href: z.string().describe('The link URL'),
         text: z.string().describe('The link anchor text'),
-        type: z.enum(['internal', 'external']).describe('Link type'),
+        type: z.enum(['internal', 'external', 'image']).describe('Link type'),
       })
     )
     .describe('Array of extracted links'),
+  filtered: z
+    .number()
+    .optional()
+    .describe('Number of links filtered out by pattern'),
+  truncated: z
+    .boolean()
+    .optional()
+    .describe('Whether results were truncated by maxLinks'),
   error: z.string().optional().describe('Error message if the request failed'),
   errorCode: z.string().optional().describe('Error code if the request failed'),
 };
@@ -113,9 +211,53 @@ const FetchMarkdownOutputSchema = {
     .string()
     .describe('ISO timestamp of when the content was fetched'),
   markdown: z.string().describe('The extracted content in Markdown format'),
+  toc: z
+    .array(
+      z.object({
+        level: z.number().describe('Heading level (1-6)'),
+        text: z.string().describe('Heading text'),
+        slug: z.string().describe('URL-friendly anchor slug'),
+      })
+    )
+    .optional()
+    .describe('Table of contents (if generateToc is true)'),
   cached: z.boolean().describe('Whether the result was served from cache'),
+  truncated: z
+    .boolean()
+    .optional()
+    .describe('Whether content was truncated by maxContentLength'),
   error: z.string().optional().describe('Error message if the request failed'),
   errorCode: z.string().optional().describe('Error code if the request failed'),
+};
+
+const FetchUrlsOutputSchema = {
+  results: z
+    .array(
+      z.object({
+        url: z.string().describe('The fetched URL'),
+        success: z.boolean().describe('Whether the fetch was successful'),
+        title: z.string().optional().describe('Page title'),
+        content: z.string().optional().describe('The extracted content'),
+        contentBlocks: z
+          .number()
+          .optional()
+          .describe('Number of content blocks (JSONL only)'),
+        cached: z.boolean().optional().describe('Whether served from cache'),
+        error: z.string().optional().describe('Error message if failed'),
+        errorCode: z.string().optional().describe('Error code if failed'),
+      })
+    )
+    .describe('Array of results for each URL'),
+  summary: z
+    .object({
+      total: z.number().describe('Total URLs processed'),
+      successful: z.number().describe('Number of successful fetches'),
+      failed: z.number().describe('Number of failed fetches'),
+      cached: z.number().describe('Number served from cache'),
+      totalContentBlocks: z.number().describe('Total content blocks extracted'),
+    })
+    .describe('Summary statistics'),
+  fetchedAt: z.string().describe('ISO timestamp of batch completion'),
 };
 
 /**
@@ -157,5 +299,17 @@ export function registerTools(server: McpServer): void {
       outputSchema: FetchMarkdownOutputSchema,
     },
     async (args) => fetchMarkdownToolHandler(args)
+  );
+
+  // Register fetch-urls batch tool
+  server.registerTool(
+    FETCH_URLS_TOOL_NAME,
+    {
+      title: 'Fetch URLs (Batch)',
+      description: FETCH_URLS_TOOL_DESCRIPTION,
+      inputSchema: FetchUrlsInputSchema,
+      outputSchema: FetchUrlsOutputSchema,
+    },
+    async (args) => fetchUrlsToolHandler(args)
   );
 }

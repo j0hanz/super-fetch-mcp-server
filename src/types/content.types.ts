@@ -96,5 +96,5 @@ export interface CacheEntry {
 export interface ExtractedLink {
   href: string;
   text: string;
-  type: 'internal' | 'external';
+  type: 'internal' | 'external' | 'image';
 }

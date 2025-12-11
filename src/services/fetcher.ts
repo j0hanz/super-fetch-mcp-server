@@ -4,6 +4,7 @@ import https from 'https';
 import { config } from '../config/index.js';
 import { FetchError, TimeoutError } from '../errors/app-error.js';
 import { logDebug, logError } from './logger.js';
+import { getHtml, setHtml } from './cache.js';
 
 const BLOCKED_HEADERS = new Set([
   'host',
@@ -181,22 +182,40 @@ function isHtmlContentType(contentType: string): boolean {
 
 /**
  * Fetches URL with exponential backoff retry logic
+ * Uses HTML cache to prevent duplicate network requests for the same URL
  * @param url - URL to fetch
  * @param customHeaders - Optional custom headers
  * @param maxRetries - Maximum retry attempts (1-10, defaults to 3)
+ * @param skipCache - Skip the HTML cache (useful when fresh content is required)
  */
 export async function fetchUrlWithRetry(
   url: string,
   customHeaders?: Record<string, string>,
-  maxRetries = 3
-): Promise<string> {
+  maxRetries = 3,
+  skipCache = false
+): Promise<{ html: string; fromHtmlCache: boolean }> {
+  // Check HTML cache first (prevents duplicate network requests within 60s window)
+  if (!skipCache) {
+    const cachedHtml = getHtml(url);
+    if (cachedHtml) {
+      logDebug('HTML Cache Hit', { url });
+      return { html: cachedHtml, fromHtmlCache: true };
+    }
+  }
+
   // Validate maxRetries within bounds
   const retries = Math.min(Math.max(1, maxRetries), 10);
   let lastError: Error | undefined;
 
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
-      return await fetchUrl(url, customHeaders);
+      const html = await fetchUrl(url, customHeaders);
+
+      // Store in HTML cache for future requests
+      setHtml(url, html);
+      logDebug('HTML Cache Set', { url });
+
+      return { html, fromHtmlCache: false };
     } catch (error) {
       lastError = error instanceof Error ? error : new Error('Unknown error');
 

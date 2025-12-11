@@ -55,5 +55,9 @@ export function handleToolError(
   }
 
   const message = error instanceof Error ? error.message : 'Unknown error';
-  return createToolErrorResponse(`${fallbackMessage}: ${message}`, url, 'UNKNOWN_ERROR');
+  return createToolErrorResponse(
+    `${fallbackMessage}: ${message}`,
+    url,
+    'UNKNOWN_ERROR'
+  );
 }

@@ -140,33 +140,94 @@ node dist/index.js --stdio
 
 Fetches a webpage and converts it to AI-readable JSONL format with semantic content blocks.
 
-| Parameter            | Type     | Default    | Description                                  |
-| -------------------- | -------- | ---------- | -------------------------------------------- |
-| `url`                | string   | _required_ | URL to fetch                                 |
-| `extractMainContent` | boolean  | `true`     | Use Readability to extract main content      |
-| `includeMetadata`    | boolean  | `true`     | Include page metadata (title, description)   |
-| `maxContentLength`   | number   | –          | Maximum content length in characters         |
-| `customHeaders`      | object   | –          | Custom HTTP headers for the request          |
+| Parameter            | Type    | Default    | Description                                  |
+| -------------------- | ------- | ---------- | -------------------------------------------- |
+| `url`                | string  | _required_ | URL to fetch                                 |
+| `extractMainContent` | boolean | `true`     | Use Readability to extract main content      |
+| `includeMetadata`    | boolean | `true`     | Include page metadata (title, description)   |
+| `maxContentLength`   | number  | –          | Maximum content length in characters         |
+| `customHeaders`      | object  | –          | Custom HTTP headers for the request          |
+| `timeout`            | number  | `30000`    | Request timeout in milliseconds (1000-60000) |
+| `retries`            | number  | `3`        | Number of retry attempts (1-10)              |
 
 ### `fetch-links`
 
-Extracts hyperlinks from a webpage with classification.
+Extracts hyperlinks from a webpage with classification. Supports filtering, image links, and link limits.
 
-| Parameter         | Type    | Default    | Description               |
-| ----------------- | ------- | ---------- | ------------------------- |
-| `url`             | string  | _required_ | URL to extract links from |
-| `includeExternal` | boolean | `true`     | Include external links    |
-| `includeInternal` | boolean | `true`     | Include internal links    |
+| Parameter         | Type    | Default    | Description                                  |
+| ----------------- | ------- | ---------- | -------------------------------------------- |
+| `url`             | string  | _required_ | URL to extract links from                    |
+| `includeExternal` | boolean | `true`     | Include external links                       |
+| `includeInternal` | boolean | `true`     | Include internal links                       |
+| `includeImages`   | boolean | `false`    | Include image links (img src attributes)     |
+| `maxLinks`        | number  | –          | Maximum number of links to return (1-1000)   |
+| `filterPattern`   | string  | –          | Regex pattern to filter links (matches href) |
+| `customHeaders`   | object  | –          | Custom HTTP headers for the request          |
+| `timeout`         | number  | `30000`    | Request timeout in milliseconds (1000-60000) |
+| `retries`         | number  | `3`        | Number of retry attempts (1-10)              |
 
 ### `fetch-markdown`
 
-Fetches a webpage and converts it to clean Markdown.
+Fetches a webpage and converts it to clean Markdown with optional table of contents.
 
-| Parameter            | Type    | Default    | Description               |
-| -------------------- | ------- | ---------- | ------------------------- |
-| `url`                | string  | _required_ | URL to fetch              |
-| `extractMainContent` | boolean | `true`     | Extract main content only |
-| `includeMetadata`    | boolean | `true`     | Include YAML frontmatter  |
+| Parameter            | Type    | Default    | Description                                  |
+| -------------------- | ------- | ---------- | -------------------------------------------- |
+| `url`                | string  | _required_ | URL to fetch                                 |
+| `extractMainContent` | boolean | `true`     | Extract main content only                    |
+| `includeMetadata`    | boolean | `true`     | Include YAML frontmatter                     |
+| `maxContentLength`   | number  | –          | Maximum content length in characters         |
+| `generateToc`        | boolean | `false`    | Generate table of contents from headings     |
+| `customHeaders`      | object  | –          | Custom HTTP headers for the request          |
+| `timeout`            | number  | `30000`    | Request timeout in milliseconds (1000-60000) |
+| `retries`            | number  | `3`        | Number of retry attempts (1-10)              |
+
+### `fetch-urls` (Batch)
+
+Fetches multiple URLs in parallel with concurrency control. Ideal for comparing content or processing multiple pages efficiently.
+
+| Parameter            | Type     | Default    | Description                                  |
+| -------------------- | -------- | ---------- | -------------------------------------------- |
+| `urls`               | string[] | _required_ | Array of URLs to fetch (1-10 URLs)           |
+| `extractMainContent` | boolean  | `true`     | Use Readability to extract main content      |
+| `includeMetadata`    | boolean  | `true`     | Include page metadata                        |
+| `maxContentLength`   | number   | –          | Maximum content length per URL in characters |
+| `format`             | string   | `'jsonl'`  | Output format: `'jsonl'` or `'markdown'`     |
+| `concurrency`        | number   | `3`        | Maximum concurrent requests (1-5)            |
+| `continueOnError`    | boolean  | `true`     | Continue processing if some URLs fail        |
+| `customHeaders`      | object   | –          | Custom HTTP headers for all requests         |
+| `timeout`            | number   | `30000`    | Request timeout in milliseconds (1000-60000) |
+| `retries`            | number   | `3`        | Number of retry attempts (1-10)              |
+
+**Example Output:**
+
+```json
+{
+  "results": [
+    {
+      "url": "https://example.com",
+      "success": true,
+      "title": "Example",
+      "content": "...",
+      "cached": false
+    },
+    {
+      "url": "https://example.org",
+      "success": true,
+      "title": "Example Org",
+      "content": "...",
+      "cached": false
+    }
+  ],
+  "summary": {
+    "total": 2,
+    "successful": 2,
+    "failed": 0,
+    "cached": 0,
+    "totalContentBlocks": 15
+  },
+  "fetchedAt": "2024-12-11T10:30:00.000Z"
+}
+```
 
 ### Resources
 
@@ -297,10 +358,10 @@ Default: **100 requests/minute** per IP (configurable)
 
 ### Tech Stack
 
-| Category           | Technology                      |
-| ------------------ | ------------------------------- |
-| Runtime            | Node.js ≥18                     |
-| Language           | TypeScript 5.9                  |
+| Category           | Technology                       |
+| ------------------ | -------------------------------- |
+| Runtime            | Node.js ≥18                      |
+| Language           | TypeScript 5.9                   |
 | MCP SDK            | @modelcontextprotocol/sdk ^1.0.4 |
 | Content Extraction | @mozilla/readability             |
 | HTML Parsing       | Cheerio, JSDOM                   |

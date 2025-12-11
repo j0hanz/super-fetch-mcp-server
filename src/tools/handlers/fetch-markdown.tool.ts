@@ -1,27 +1,83 @@
-import { validateAndNormalizeUrl } from '../../utils/url-validator.js';
-import { fetchUrlWithRetry } from '../../services/fetcher.js';
 import { extractContent } from '../../services/extractor.js';
 import { htmlToMarkdown } from '../../transformers/markdown.transformer.js';
-import * as cache from '../../services/cache.js';
 import { config } from '../../config/index.js';
-import { logError } from '../../services/logger.js';
+import { logDebug, logError } from '../../services/logger.js';
 import {
   createToolErrorResponse,
   handleToolError,
 } from '../../utils/tool-error-handler.js';
+import { executeFetchPipeline } from '../utils/fetch-pipeline.js';
 import type { FetchMarkdownInput } from '../../types/index.js';
 
 export const FETCH_MARKDOWN_TOOL_NAME = 'fetch-markdown';
 export const FETCH_MARKDOWN_TOOL_DESCRIPTION =
-  'Fetches a webpage and converts it to clean Markdown format with optional frontmatter';
+  'Fetches a webpage and converts it to clean Markdown format with optional frontmatter, table of contents, and content length limits';
 
-function extractAndConvertToMarkdown(
+interface TocEntry {
+  level: number;
+  text: string;
+  slug: string;
+}
+
+interface MarkdownTransformResult {
+  markdown: string;
+  title: string | undefined;
+  toc: TocEntry[] | undefined;
+  truncated: boolean;
+}
+
+interface TransformOptions {
+  extractMainContent: boolean;
+  includeMetadata: boolean;
+  generateToc: boolean;
+  maxContentLength?: number;
+}
+
+/**
+ * Generates a URL-friendly slug from text
+ */
+function slugify(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^\w\s-]/g, '')
+    .replace(/\s+/g, '-')
+    .replace(/--+/g, '-')
+    .trim();
+}
+
+/**
+ * Extracts table of contents from markdown
+ */
+function extractToc(markdown: string): TocEntry[] {
+  const toc: TocEntry[] = [];
+  const headingRegex = /^(#{1,6})\s+(.+)$/gm;
+  let match;
+
+  while ((match = headingRegex.exec(markdown)) !== null) {
+    const level = match[1].length;
+    const text = match[2].trim();
+    toc.push({
+      level,
+      text,
+      slug: slugify(text),
+    });
+  }
+
+  return toc;
+}
+
+/**
+ * Transforms HTML to clean Markdown with optional frontmatter
+ */
+function transformToMarkdown(
   html: string,
   url: string,
-  options: { extractMainContent: boolean; includeMetadata: boolean }
-): { markdown: string; title: string | undefined } {
-  // Use the optimized extractContent that parses JSDOM only once
+  options: TransformOptions
+): MarkdownTransformResult {
   const { article, metadata: extractedMeta } = extractContent(html, url);
+
+  let markdown: string;
+  let title: string | undefined;
 
   if (
     options.extractMainContent &&
@@ -39,97 +95,101 @@ function extractAndConvertToMarkdown(
           }
         : undefined;
 
-    return {
-      markdown: htmlToMarkdown(article.content, metadata),
-      title: article.title,
-    };
+    markdown = htmlToMarkdown(article.content, metadata);
+    title = article.title;
+  } else {
+    const metadata =
+      options.includeMetadata && config.extraction.includeMetadata
+        ? {
+            type: 'metadata' as const,
+            title: extractedMeta.title,
+            description: extractedMeta.description,
+            author: extractedMeta.author,
+            url,
+            fetchedAt: new Date().toISOString(),
+          }
+        : undefined;
+
+    markdown = htmlToMarkdown(html, metadata);
+    title = extractedMeta.title;
   }
 
-  // Fallback: convert full HTML
-  const metadata =
-    options.includeMetadata && config.extraction.includeMetadata
-      ? {
-          type: 'metadata' as const,
-          title: extractedMeta.title,
-          description: extractedMeta.description,
-          author: extractedMeta.author,
-          url,
-          fetchedAt: new Date().toISOString(),
-        }
-      : undefined;
+  // Generate TOC if requested
+  const toc = options.generateToc ? extractToc(markdown) : undefined;
+
+  // Apply max content length truncation
+  let truncated = false;
+  if (options.maxContentLength && markdown.length > options.maxContentLength) {
+    markdown =
+      markdown.substring(0, options.maxContentLength) + '\n\n...[truncated]';
+    truncated = true;
+  }
 
   return {
-    markdown: htmlToMarkdown(html, metadata),
-    title: extractedMeta.title,
+    markdown,
+    title,
+    toc,
+    truncated,
   };
 }
 
 export async function fetchMarkdownToolHandler(input: FetchMarkdownInput) {
   try {
-    // Validate URL input
     if (!input.url) {
       return createToolErrorResponse('URL is required', '', 'VALIDATION_ERROR');
     }
 
-    const url = validateAndNormalizeUrl(input.url);
-    const cacheKey = cache.createCacheKey('markdown', url);
+    const extractMainContent = input.extractMainContent ?? true;
+    const includeMetadata = input.includeMetadata ?? true;
+    const generateToc = input.generateToc ?? false;
+    const maxContentLength = input.maxContentLength;
 
-    // Check cache first
-    if (cacheKey) {
-      const cached = cache.get(cacheKey);
-      if (cached) {
-        const structuredContent = {
-          url,
-          cached: true,
-          fetchedAt: cached.fetchedAt,
-          markdown: cached.content,
-        };
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: JSON.stringify(structuredContent),
-            },
-          ],
-          structuredContent,
-        };
-      }
-    }
-
-    const html = await fetchUrlWithRetry(url);
-
-    // Validate HTML content was received
-    if (!html) {
-      return createToolErrorResponse(
-        'No content received from URL',
-        url,
-        'EMPTY_CONTENT'
-      );
-    }
-
-    const { markdown, title } = extractAndConvertToMarkdown(html, url, {
-      extractMainContent: input.extractMainContent ?? true,
-      includeMetadata: input.includeMetadata ?? true,
+    logDebug('Fetching markdown', {
+      url: input.url,
+      extractMainContent,
+      includeMetadata,
+      generateToc,
+      maxContentLength,
     });
 
-    // Cache the result
-    if (cacheKey) {
-      cache.set(cacheKey, markdown);
-    }
+    const result = await executeFetchPipeline({
+      url: input.url,
+      cacheNamespace: 'markdown',
+      customHeaders: input.customHeaders,
+      retries: input.retries,
+      transform: (html, url) =>
+        transformToMarkdown(html, url, {
+          extractMainContent,
+          includeMetadata,
+          generateToc,
+          maxContentLength,
+        }),
+      serialize: (data) => data.markdown,
+      deserialize: (cached) => ({
+        markdown: cached,
+        title: undefined,
+        toc: undefined,
+        truncated: false,
+      }),
+    });
 
     const structuredContent = {
-      url,
-      title,
-      fetchedAt: new Date().toISOString(),
-      markdown,
-      cached: false,
+      url: result.url,
+      title: result.data.title,
+      fetchedAt: result.fetchedAt,
+      markdown: result.data.markdown,
+      ...(result.data.toc && { toc: result.data.toc }),
+      cached: result.fromCache,
+      ...(result.data.truncated && { truncated: result.data.truncated }),
     };
 
     return {
       content: [
         {
           type: 'text' as const,
-          text: JSON.stringify(structuredContent, null, 2),
+          text: result.fromCache
+            ? JSON.stringify(structuredContent)
+            : JSON.stringify(structuredContent, null, 2),
         },
       ],
       structuredContent,

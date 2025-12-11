@@ -1,15 +1,13 @@
-import { validateAndNormalizeUrl } from '../../utils/url-validator.js';
-import { fetchUrlWithRetry } from '../../services/fetcher.js';
 import { extractContent } from '../../services/extractor.js';
 import { parseHtml } from '../../services/parser.js';
 import { toJsonl } from '../../transformers/jsonl.transformer.js';
-import * as cache from '../../services/cache.js';
 import { config } from '../../config/index.js';
-import { logError } from '../../services/logger.js';
+import { logDebug, logError } from '../../services/logger.js';
 import {
   createToolErrorResponse,
   handleToolError,
 } from '../../utils/tool-error-handler.js';
+import { executeFetchPipeline } from '../utils/fetch-pipeline.js';
 import type {
   FetchUrlInput,
   MetadataBlock,
@@ -18,29 +16,35 @@ import type {
 
 export const FETCH_URL_TOOL_NAME = 'fetch-url';
 export const FETCH_URL_TOOL_DESCRIPTION =
-  'Fetches a webpage and converts it to AI-readable JSONL format with semantic content blocks';
+  'Fetches a webpage and converts it to AI-readable JSONL format with semantic content blocks. Supports custom headers, retries, and content length limits.';
 
-interface ExtractedContentResult {
-  contentBlocks: ContentBlockUnion[];
-  metadata: MetadataBlock | undefined;
+interface JsonlTransformResult {
+  content: string;
+  contentBlocks: number;
   title: string | undefined;
 }
 
-function extractContentFromHtml(
+/**
+ * Transforms HTML to JSONL format with semantic content blocks
+ */
+function transformToJsonl(
   html: string,
   url: string,
   options: { extractMainContent: boolean; includeMetadata: boolean }
-): ExtractedContentResult {
-  // Use the optimized extractContent that parses JSDOM only once
+): JsonlTransformResult {
   const { article, metadata: extractedMeta } = extractContent(html, url);
+
+  let contentBlocks: ContentBlockUnion[];
+  let metadata: MetadataBlock | undefined;
+  let title: string | undefined;
 
   if (
     options.extractMainContent &&
     config.extraction.extractMainContent &&
     article
   ) {
-    const contentBlocks = parseHtml(article.content);
-    const metadata =
+    contentBlocks = parseHtml(article.content);
+    metadata =
       options.includeMetadata && config.extraction.includeMetadata
         ? {
             type: 'metadata' as const,
@@ -50,113 +54,94 @@ function extractContentFromHtml(
             fetchedAt: new Date().toISOString(),
           }
         : undefined;
-
-    return { contentBlocks, metadata, title: article.title };
+    title = article.title;
+  } else {
+    contentBlocks = parseHtml(html);
+    metadata =
+      options.includeMetadata && config.extraction.includeMetadata
+        ? {
+            type: 'metadata' as const,
+            title: extractedMeta.title,
+            description: extractedMeta.description,
+            author: extractedMeta.author,
+            url,
+            fetchedAt: new Date().toISOString(),
+          }
+        : undefined;
+    title = extractedMeta.title;
   }
 
-  // Fallback: use parsed HTML directly
-  const contentBlocks = parseHtml(html);
-
-  const metadata =
-    options.includeMetadata && config.extraction.includeMetadata
-      ? {
-          type: 'metadata' as const,
-          title: extractedMeta.title,
-          description: extractedMeta.description,
-          author: extractedMeta.author,
-          url,
-          fetchedAt: new Date().toISOString(),
-        }
-      : undefined;
-
-  return { contentBlocks, metadata, title: extractedMeta.title };
+  return {
+    content: toJsonl(contentBlocks, metadata),
+    contentBlocks: contentBlocks.length,
+    title,
+  };
 }
 
 export async function fetchUrlToolHandler(input: FetchUrlInput) {
   try {
-    // Validate URL input
     if (!input.url) {
       return createToolErrorResponse('URL is required', '', 'VALIDATION_ERROR');
     }
 
-    const url = validateAndNormalizeUrl(input.url);
-    const cacheKey = cache.createCacheKey('url', url);
+    const extractMainContent = input.extractMainContent ?? true;
+    const includeMetadata = input.includeMetadata ?? true;
 
-    // Check cache first
-    if (cacheKey) {
-      const cached = cache.get(cacheKey);
-      if (cached) {
-        const structuredContent = {
-          url,
-          cached: true,
-          fetchedAt: cached.fetchedAt,
-          content: cached.content,
-          format: 'jsonl' as const,
-          contentBlocks: 0, // Unknown from cache
-        };
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: JSON.stringify(structuredContent),
-            },
-          ],
-          structuredContent,
-        };
-      }
-    }
+    logDebug('Fetching URL', {
+      url: input.url,
+      extractMainContent,
+      includeMetadata,
+      maxContentLength: input.maxContentLength,
+      retries: input.retries,
+    });
 
-    const html = await fetchUrlWithRetry(url, input.customHeaders);
+    const result = await executeFetchPipeline({
+      url: input.url,
+      cacheNamespace: 'url',
+      customHeaders: input.customHeaders,
+      retries: input.retries,
+      transform: (html, url) =>
+        transformToJsonl(html, url, { extractMainContent, includeMetadata }),
+      serialize: (data) => data.content,
+      deserialize: (cached) => ({
+        content: cached,
+        contentBlocks: 0, // Unknown from cache
+        title: undefined,
+      }),
+    });
 
-    // Validate HTML content was received
-    if (!html) {
-      return createToolErrorResponse(
-        'No content received from URL',
-        url,
-        'EMPTY_CONTENT'
-      );
-    }
+    let content = result.data.content;
+    let truncated = false;
 
-    const { contentBlocks, metadata, title } = extractContentFromHtml(
-      html,
-      url,
-      {
-        extractMainContent: input.extractMainContent ?? true,
-        includeMetadata: input.includeMetadata ?? true,
-      }
-    );
-
-    let jsonlContent = toJsonl(contentBlocks, metadata);
-
+    // Apply max content length truncation
     if (
       input.maxContentLength &&
       input.maxContentLength > 0 &&
-      jsonlContent.length > input.maxContentLength
+      content.length > input.maxContentLength
     ) {
-      jsonlContent =
-        jsonlContent.substring(0, input.maxContentLength) + '\n...[truncated]';
-    }
-
-    // Cache the result
-    if (cacheKey) {
-      cache.set(cacheKey, jsonlContent);
+      content =
+        content.substring(0, input.maxContentLength) + '\n...[truncated]';
+      truncated = true;
     }
 
     const structuredContent = {
-      url,
-      title,
-      contentBlocks: contentBlocks.length,
-      fetchedAt: new Date().toISOString(),
+      url: result.url,
+      title: result.data.title,
+      contentBlocks: result.data.contentBlocks,
+      fetchedAt: result.fetchedAt,
       format: 'jsonl' as const,
-      content: jsonlContent,
-      cached: false,
+      content,
+      cached: result.fromCache,
+      ...(truncated && { truncated }),
     };
 
     return {
       content: [
         {
           type: 'text' as const,
-          text: JSON.stringify(structuredContent, null, 2),
+          text: result.fromCache
+            ? JSON.stringify(structuredContent)
+            : JSON.stringify(structuredContent, null, 2),
         },
       ],
       structuredContent,
