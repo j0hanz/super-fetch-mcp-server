@@ -1,18 +1,21 @@
+import type {
+  FetchMarkdownInput,
+  MarkdownTransformResult,
+  TocEntry,
+  TransformOptions,
+} from '../../config/types.js';
+
 import { extractContent } from '../../services/extractor.js';
-import { htmlToMarkdown } from '../../transformers/markdown.transformer.js';
-import { config } from '../../config/index.js';
 import { logDebug, logError } from '../../services/logger.js';
+
 import {
   createToolErrorResponse,
   handleToolError,
 } from '../../utils/tool-error-handler.js';
+import { buildMetadata, shouldUseArticle } from '../utils/common.js';
 import { executeFetchPipeline } from '../utils/fetch-pipeline.js';
-import type {
-  FetchMarkdownInput,
-  TocEntry,
-  MarkdownTransformResult,
-  TransformOptions,
-} from '../../config/types.js';
+
+import { htmlToMarkdown } from '../../transformers/markdown.transformer.js';
 
 export const FETCH_MARKDOWN_TOOL_NAME = 'fetch-markdown';
 export const FETCH_MARKDOWN_TOOL_DESCRIPTION =
@@ -28,21 +31,14 @@ function slugify(text: string): string {
 }
 
 function extractToc(markdown: string): TocEntry[] {
-  const toc: TocEntry[] = [];
   const headingRegex = /^(#{1,6})\s+(.+)$/gm;
+  const toc: TocEntry[] = [];
   let match;
 
   while ((match = headingRegex.exec(markdown)) !== null) {
-    const levelMatch = match[1];
-    const textMatch = match[2];
-    if (!levelMatch || !textMatch) continue;
-    const level = levelMatch.length;
-    const text = textMatch.trim();
-    toc.push({
-      level,
-      text,
-      slug: slugify(text),
-    });
+    if (!match[1] || !match[2]) continue;
+    const text = match[2].trim();
+    toc.push({ level: match[1].length, text, slug: slugify(text) });
   }
 
   return toc;
@@ -53,50 +49,24 @@ function transformToMarkdown(
   url: string,
   options: TransformOptions
 ): MarkdownTransformResult {
-  const { article, metadata: extractedMeta } = extractContent(html, url);
+  // Only invoke JSDOM when extractMainContent is true (lazy loading optimization)
+  const { article, metadata: extractedMeta } = extractContent(html, url, {
+    extractArticle: options.extractMainContent,
+  });
+  const useArticle = shouldUseArticle(options.extractMainContent, article);
+  const metadata = buildMetadata(
+    url,
+    article,
+    extractedMeta,
+    useArticle,
+    options.includeMetadata
+  );
+  const sourceHtml = useArticle ? article.content : html;
+  const title = useArticle ? article.title : extractedMeta.title;
 
-  let markdown: string;
-  let title: string | undefined;
-
-  if (
-    options.extractMainContent &&
-    config.extraction.extractMainContent &&
-    article
-  ) {
-    const metadata =
-      options.includeMetadata && config.extraction.includeMetadata
-        ? {
-            type: 'metadata' as const,
-            title: article.title,
-            author: article.byline,
-            url,
-            fetchedAt: new Date().toISOString(),
-          }
-        : undefined;
-
-    markdown = htmlToMarkdown(article.content, metadata);
-    title = article.title;
-  } else {
-    const metadata =
-      options.includeMetadata && config.extraction.includeMetadata
-        ? {
-            type: 'metadata' as const,
-            title: extractedMeta.title,
-            description: extractedMeta.description,
-            author: extractedMeta.author,
-            url,
-            fetchedAt: new Date().toISOString(),
-          }
-        : undefined;
-
-    markdown = htmlToMarkdown(html, metadata);
-    title = extractedMeta.title;
-  }
-
-  // Generate TOC if requested
+  let markdown = htmlToMarkdown(sourceHtml, metadata);
   const toc = options.generateToc ? extractToc(markdown) : undefined;
 
-  // Apply max content length truncation
   let truncated = false;
   if (options.maxContentLength && markdown.length > options.maxContentLength) {
     markdown =
@@ -104,45 +74,30 @@ function transformToMarkdown(
     truncated = true;
   }
 
-  return {
-    markdown,
-    title,
-    toc,
-    truncated,
-  };
+  return { markdown, title, toc, truncated };
 }
 
 export async function fetchMarkdownToolHandler(input: FetchMarkdownInput) {
+  if (!input.url) {
+    return createToolErrorResponse('URL is required', '', 'VALIDATION_ERROR');
+  }
+
   try {
-    if (!input.url) {
-      return createToolErrorResponse('URL is required', '', 'VALIDATION_ERROR');
-    }
+    const options: TransformOptions = {
+      extractMainContent: input.extractMainContent ?? true,
+      includeMetadata: input.includeMetadata ?? true,
+      generateToc: input.generateToc ?? false,
+      maxContentLength: input.maxContentLength,
+    };
 
-    const extractMainContent = input.extractMainContent ?? true;
-    const includeMetadata = input.includeMetadata ?? true;
-    const generateToc = input.generateToc ?? false;
-    const maxContentLength = input.maxContentLength;
-
-    logDebug('Fetching markdown', {
-      url: input.url,
-      extractMainContent,
-      includeMetadata,
-      generateToc,
-      maxContentLength,
-    });
+    logDebug('Fetching markdown', { url: input.url, ...options });
 
     const result = await executeFetchPipeline<MarkdownTransformResult>({
       url: input.url,
       cacheNamespace: 'markdown',
       customHeaders: input.customHeaders,
       retries: input.retries,
-      transform: (html, url) =>
-        transformToMarkdown(html, url, {
-          extractMainContent,
-          includeMetadata,
-          generateToc,
-          maxContentLength,
-        }),
+      transform: (html, url) => transformToMarkdown(html, url, options),
       serialize: (data) => data.markdown,
       deserialize: (cached) => ({
         markdown: cached,
@@ -166,9 +121,11 @@ export async function fetchMarkdownToolHandler(input: FetchMarkdownInput) {
       content: [
         {
           type: 'text' as const,
-          text: result.fromCache
-            ? JSON.stringify(structuredContent)
-            : JSON.stringify(structuredContent, null, 2),
+          text: JSON.stringify(
+            structuredContent,
+            result.fromCache ? undefined : null,
+            result.fromCache ? undefined : 2
+          ),
         },
       ],
       structuredContent,

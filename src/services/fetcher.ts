@@ -1,10 +1,13 @@
-import axios, { type AxiosRequestConfig, type AxiosError } from 'axios';
+import axios, { type AxiosError, type AxiosRequestConfig } from 'axios';
 import http from 'http';
 import https from 'https';
+
 import { config } from '../config/index.js';
+
 import { FetchError, TimeoutError } from '../errors/app-error.js';
-import { logDebug, logError } from './logger.js';
+
 import { getHtml, setHtml } from './cache.js';
+import { logDebug, logError } from './logger.js';
 
 const BLOCKED_HEADERS = new Set([
   'host',
@@ -130,7 +133,17 @@ async function fetchUrl(
 
   try {
     const response = await client.request<string>(requestConfig);
-    const contentType = response.headers['content-type'] as string | undefined;
+    const headers = response.headers as Record<string, unknown>;
+    const contentTypeHeader = headers['content-type'];
+
+    let contentType: string | undefined;
+    if (Array.isArray(contentTypeHeader)) {
+      const first = contentTypeHeader[0] as unknown;
+      if (typeof first === 'string') contentType = first;
+    } else if (typeof contentTypeHeader === 'string') {
+      contentType = contentTypeHeader;
+    }
+
     if (contentType && !isHtmlContentType(contentType)) {
       throw new FetchError(
         `Unexpected content type: ${contentType}. Expected HTML content.`,
@@ -175,7 +188,7 @@ export async function fetchUrlWithRetry(
   }
 
   const retries = Math.min(Math.max(1, maxRetries), 10);
-  let lastError: Error | undefined;
+  let lastError: Error = new Error(`Failed to fetch ${url}`);
 
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
@@ -185,10 +198,11 @@ export async function fetchUrlWithRetry(
 
       return { html, fromHtmlCache: false };
     } catch (error) {
-      lastError = error instanceof Error ? error : new Error('Unknown error');
+      lastError = error instanceof Error ? error : new Error(String(error));
 
       if (error instanceof FetchError && error.httpStatus) {
         const status = error.httpStatus;
+        // Don't retry client errors (except 429 Too Many Requests)
         if (status >= 400 && status < 500 && status !== 429) {
           throw error;
         }
@@ -202,7 +216,7 @@ export async function fetchUrlWithRetry(
   }
 
   throw new FetchError(
-    `Failed after ${retries} attempts: ${lastError?.message ?? 'Unknown error'}`,
+    `Failed after ${retries} attempts: ${lastError.message}`,
     url
   );
 }

@@ -1,7 +1,10 @@
+import crypto from 'crypto';
 import NodeCache from 'node-cache';
+
 import { config } from '../config/index.js';
+import type { CacheEntry } from '../config/types.js';
+
 import { logDebug, logWarn } from './logger.js';
-import type { CacheEntry } from '../types/index.js';
 
 const contentCache = new NodeCache({
   stdTTL: config.cache.ttl,
@@ -35,7 +38,14 @@ const MAX_KEY_LENGTH = 500;
 export function createCacheKey(namespace: string, url: string): string | null {
   if (!namespace || !url) return null;
   const key = `${namespace}:${url}`;
-  return key.length > MAX_KEY_LENGTH ? key.substring(0, MAX_KEY_LENGTH) : key;
+  if (key.length <= MAX_KEY_LENGTH) return key;
+  // Use hash for long URLs to prevent collisions from truncation
+  const hash = crypto
+    .createHash('sha256')
+    .update(url)
+    .digest('hex')
+    .substring(0, 32);
+  return `${namespace}:hash:${hash}`;
 }
 
 export function get(cacheKey: string | null): CacheEntry | undefined {

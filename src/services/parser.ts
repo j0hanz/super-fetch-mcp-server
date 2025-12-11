@@ -1,19 +1,22 @@
 import * as cheerio from 'cheerio';
 import type { CheerioAPI } from 'cheerio';
 import type { AnyNode, Element } from 'domhandler';
-import { sanitizeText } from '../utils/sanitizer.js';
+
 import { config } from '../config/index.js';
-import { logWarn } from './logger.js';
 import type {
-  HeadingBlock,
-  ParagraphBlock,
-  ListBlock,
   CodeBlock,
-  TableBlock,
-  ImageBlock,
   ContentBlockUnion,
+  HeadingBlock,
+  ImageBlock,
+  ListBlock,
+  ParagraphBlock,
   ParseableTagName,
+  TableBlock,
 } from '../config/types.js';
+
+import { sanitizeText } from '../utils/sanitizer.js';
+
+import { logWarn } from './logger.js';
 
 const MAX_HTML_SIZE = 10 * 1024 * 1024;
 
@@ -39,13 +42,14 @@ function parseParagraph(
 }
 
 function parseList($: CheerioAPI, element: Element): ListBlock | null {
+  const listItems = $(element).find('li').toArray();
   const items: string[] = [];
-  $(element)
-    .find('li')
-    .each((_, li) => {
-      const text = sanitizeText($(li).text());
-      if (text) items.push(text);
-    });
+
+  // Use for...of instead of .each() to avoid callback overhead
+  for (const li of listItems) {
+    const text = sanitizeText($(li).text());
+    if (text) items.push(text);
+  }
 
   if (items.length === 0) return null;
 
@@ -75,31 +79,31 @@ function parseTable($: CheerioAPI, element: Element): TableBlock | null {
   const rows: string[][] = [];
   const $table = $(element);
 
-  $table.find('thead th, thead td').each((_, cell) => {
+  // Use toArray() + for...of instead of .each() callbacks
+  const headerCells = $table.find('thead th, thead td').toArray();
+  for (const cell of headerCells) {
     headers.push(sanitizeText($(cell).text()));
-  });
+  }
 
   if (headers.length === 0) {
-    $table
-      .find('tr')
-      .first()
-      .find('th, td')
-      .each((_, cell) => {
-        headers.push(sanitizeText($(cell).text()));
-      });
+    const firstRowCells = $table.find('tr').first().find('th, td').toArray();
+    for (const cell of firstRowCells) {
+      headers.push(sanitizeText($(cell).text()));
+    }
   }
 
   const rowsSelector =
     headers.length > 0 ? 'tbody tr, tr:not(:first)' : 'tbody tr, tr';
-  $table.find(rowsSelector).each((_, row) => {
+  const tableRows = $table.find(rowsSelector).toArray();
+
+  for (const row of tableRows) {
+    const rowCells = $(row).find('td, th').toArray();
     const cells: string[] = [];
-    $(row)
-      .find('td, th')
-      .each((_, cell) => {
-        cells.push(sanitizeText($(cell).text()));
-      });
+    for (const cell of rowCells) {
+      cells.push(sanitizeText($(cell).text()));
+    }
     if (cells.length > 0) rows.push(cells);
-  });
+  }
 
   if (rows.length === 0) return null;
 
@@ -170,30 +174,36 @@ function filterBlocks(blocks: ContentBlockUnion[]): ContentBlockUnion[] {
 export function parseHtml(html: string): ContentBlockUnion[] {
   if (!html || typeof html !== 'string') return [];
 
+  let processedHtml = html;
   if (html.length > MAX_HTML_SIZE) {
     logWarn('HTML content exceeds maximum size, truncating', {
       size: html.length,
       maxSize: MAX_HTML_SIZE,
     });
-    html = html.substring(0, MAX_HTML_SIZE);
+    processedHtml = html.substring(0, MAX_HTML_SIZE);
   }
 
   try {
-    const $ = cheerio.load(html);
+    const $ = cheerio.load(processedHtml);
     const blocks: ContentBlockUnion[] = [];
 
     $('script, style, noscript, iframe, svg').remove();
 
-    $('body')
-      .find('h1, h2, h3, h4, h5, h6, p, ul, ol, pre, code, table, img')
-      .each((_, element) => {
-        try {
-          const block = parseElement($, element);
-          if (block) blocks.push(block);
-        } catch {
-          // Skip element errors
-        }
-      });
+    // Use toArray() + for...of instead of .each() to avoid callback overhead
+    const elements = $('body')
+      .find(
+        'h1, h2, h3, h4, h5, h6, p, ul, ol, pre, code:not(pre code), table, img'
+      )
+      .toArray();
+
+    for (const element of elements) {
+      try {
+        const block = parseElement($, element);
+        if (block) blocks.push(block);
+      } catch {
+        // Skip element errors
+      }
+    }
 
     return filterBlocks(blocks);
   } catch (error) {

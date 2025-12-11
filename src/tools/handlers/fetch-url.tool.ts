@@ -1,19 +1,24 @@
+import type {
+  FetchUrlInput,
+  JsonlTransformResult,
+} from '../../config/types.js';
+
 import { extractContent } from '../../services/extractor.js';
-import { parseHtml } from '../../services/parser.js';
-import { toJsonl } from '../../transformers/jsonl.transformer.js';
-import { config } from '../../config/index.js';
 import { logDebug, logError } from '../../services/logger.js';
+import { parseHtml } from '../../services/parser.js';
+
 import {
   createToolErrorResponse,
   handleToolError,
 } from '../../utils/tool-error-handler.js';
+import {
+  buildMetadata,
+  shouldUseArticle,
+  truncateContent,
+} from '../utils/common.js';
 import { executeFetchPipeline } from '../utils/fetch-pipeline.js';
-import type {
-  FetchUrlInput,
-  MetadataBlock,
-  ContentBlockUnion,
-  JsonlTransformResult,
-} from '../../config/types.js';
+
+import { toJsonl } from '../../transformers/jsonl.transformer.js';
 
 export const FETCH_URL_TOOL_NAME = 'fetch-url';
 export const FETCH_URL_TOOL_DESCRIPTION =
@@ -24,44 +29,21 @@ function transformToJsonl(
   url: string,
   options: { extractMainContent: boolean; includeMetadata: boolean }
 ): JsonlTransformResult {
-  const { article, metadata: extractedMeta } = extractContent(html, url);
-
-  let contentBlocks: ContentBlockUnion[];
-  let metadata: MetadataBlock | undefined;
-  let title: string | undefined;
-
-  if (
-    options.extractMainContent &&
-    config.extraction.extractMainContent &&
-    article
-  ) {
-    contentBlocks = parseHtml(article.content);
-    metadata =
-      options.includeMetadata && config.extraction.includeMetadata
-        ? {
-            type: 'metadata' as const,
-            title: article.title,
-            author: article.byline,
-            url,
-            fetchedAt: new Date().toISOString(),
-          }
-        : undefined;
-    title = article.title;
-  } else {
-    contentBlocks = parseHtml(html);
-    metadata =
-      options.includeMetadata && config.extraction.includeMetadata
-        ? {
-            type: 'metadata' as const,
-            title: extractedMeta.title,
-            description: extractedMeta.description,
-            author: extractedMeta.author,
-            url,
-            fetchedAt: new Date().toISOString(),
-          }
-        : undefined;
-    title = extractedMeta.title;
-  }
+  // Only invoke JSDOM when extractMainContent is true (lazy loading optimization)
+  const { article, metadata: extractedMeta } = extractContent(html, url, {
+    extractArticle: options.extractMainContent,
+  });
+  const useArticle = shouldUseArticle(options.extractMainContent, article);
+  const sourceHtml = useArticle ? article.content : html;
+  const contentBlocks = parseHtml(sourceHtml);
+  const metadata = buildMetadata(
+    url,
+    article,
+    extractedMeta,
+    useArticle,
+    options.includeMetadata
+  );
+  const title = useArticle ? article.title : extractedMeta.title;
 
   return {
     content: toJsonl(contentBlocks, metadata),
@@ -71,11 +53,11 @@ function transformToJsonl(
 }
 
 export async function fetchUrlToolHandler(input: FetchUrlInput) {
-  try {
-    if (!input.url) {
-      return createToolErrorResponse('URL is required', '', 'VALIDATION_ERROR');
-    }
+  if (!input.url) {
+    return createToolErrorResponse('URL is required', '', 'VALIDATION_ERROR');
+  }
 
+  try {
     const extractMainContent = input.extractMainContent ?? true;
     const includeMetadata = input.includeMetadata ?? true;
 
@@ -83,8 +65,6 @@ export async function fetchUrlToolHandler(input: FetchUrlInput) {
       url: input.url,
       extractMainContent,
       includeMetadata,
-      maxContentLength: input.maxContentLength,
-      retries: input.retries,
     });
 
     const result = await executeFetchPipeline<JsonlTransformResult>({
@@ -97,24 +77,15 @@ export async function fetchUrlToolHandler(input: FetchUrlInput) {
       serialize: (data) => data.content,
       deserialize: (cached) => ({
         content: cached,
-        contentBlocks: 0, // Unknown from cache
+        contentBlocks: 0,
         title: undefined,
       }),
     });
 
-    let content = result.data.content;
-    let truncated = false;
-
-    // Apply max content length truncation
-    if (
-      input.maxContentLength &&
-      input.maxContentLength > 0 &&
-      content.length > input.maxContentLength
-    ) {
-      content =
-        content.substring(0, input.maxContentLength) + '\n...[truncated]';
-      truncated = true;
-    }
+    const { content, truncated } = truncateContent(
+      result.data.content,
+      input.maxContentLength
+    );
 
     const structuredContent = {
       url: result.url,
@@ -131,9 +102,11 @@ export async function fetchUrlToolHandler(input: FetchUrlInput) {
       content: [
         {
           type: 'text' as const,
-          text: result.fromCache
-            ? JSON.stringify(structuredContent)
-            : JSON.stringify(structuredContent, null, 2),
+          text: JSON.stringify(
+            structuredContent,
+            result.fromCache ? undefined : null,
+            result.fromCache ? undefined : 2
+          ),
         },
       ],
       structuredContent,

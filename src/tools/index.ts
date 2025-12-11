@@ -1,24 +1,26 @@
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+
 import {
-  fetchUrlToolHandler,
-  FETCH_URL_TOOL_NAME,
-  FETCH_URL_TOOL_DESCRIPTION,
-} from './handlers/fetch-url.tool.js';
-import {
-  fetchLinksToolHandler,
-  FETCH_LINKS_TOOL_NAME,
   FETCH_LINKS_TOOL_DESCRIPTION,
+  FETCH_LINKS_TOOL_NAME,
+  fetchLinksToolHandler,
 } from './handlers/fetch-links.tool.js';
 import {
-  fetchMarkdownToolHandler,
-  FETCH_MARKDOWN_TOOL_NAME,
   FETCH_MARKDOWN_TOOL_DESCRIPTION,
+  FETCH_MARKDOWN_TOOL_NAME,
+  fetchMarkdownToolHandler,
 } from './handlers/fetch-markdown.tool.js';
 import {
-  fetchUrlsToolHandler,
-  FETCH_URLS_TOOL_NAME,
+  FETCH_URL_TOOL_DESCRIPTION,
+  FETCH_URL_TOOL_NAME,
+  fetchUrlToolHandler,
+} from './handlers/fetch-url.tool.js';
+import {
   FETCH_URLS_TOOL_DESCRIPTION,
+  FETCH_URLS_TOOL_NAME,
+  fetchUrlsToolHandler,
 } from './handlers/fetch-urls.tool.js';
 
 // Zod schemas for runtime validation - single source of truth

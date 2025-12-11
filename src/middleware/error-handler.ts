@@ -1,7 +1,10 @@
-import type { Request, Response, NextFunction } from 'express';
-import { logError } from '../services/logger.js';
-import { AppError, RateLimitError, ValidationError } from '../errors/index.js';
+import type { NextFunction, Request, Response } from 'express';
+
 import type { ErrorResponse } from '../config/types.js';
+
+import { AppError, RateLimitError, ValidationError } from '../errors/index.js';
+
+import { logError } from '../services/logger.js';
 
 export function errorHandler(
   err: Error,

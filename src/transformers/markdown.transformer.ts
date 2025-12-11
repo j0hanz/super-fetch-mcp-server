@@ -1,5 +1,6 @@
 import TurndownService from 'turndown';
-import type { MetadataBlock } from '../types/index.js';
+
+import type { MetadataBlock } from '../config/types.js';
 
 const turndown = new TurndownService({
   headingStyle: 'atx',
@@ -15,12 +16,13 @@ turndown.addRule('removeNoise', {
 });
 
 // Pre-compiled regex patterns
-const YAML_SPECIAL_CHARS = /[:[\]{}"\n\r'|>&*!?,#]/;
+const YAML_SPECIAL_CHARS = /[:[\]{}"\n\r\t'|>&*!?,#]/;
 const YAML_NUMERIC = /^[\d.]+$/;
 const YAML_RESERVED_WORDS = /^(true|false|null|yes|no|on|off)$/i;
 const ESCAPE_BACKSLASH = /\\/g;
 const ESCAPE_QUOTE = /"/g;
 const ESCAPE_NEWLINE = /\n/g;
+const ESCAPE_TAB = /\t/g;
 const MULTIPLE_NEWLINES = /\n{3,}/g;
 
 function escapeYamlValue(value: string): string {
@@ -37,7 +39,8 @@ function escapeYamlValue(value: string): string {
   return `"${value
     .replace(ESCAPE_BACKSLASH, '\\\\')
     .replace(ESCAPE_QUOTE, '\\"')
-    .replace(ESCAPE_NEWLINE, '\\n')}"`;
+    .replace(ESCAPE_NEWLINE, '\\n')
+    .replace(ESCAPE_TAB, '\\t')}"`;
 }
 
 function createFrontmatter(metadata: MetadataBlock): string {

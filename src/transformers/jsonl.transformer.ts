@@ -1,5 +1,6 @@
-import type { ContentBlockUnion, MetadataBlock } from '../types/index.js';
 import { config } from '../config/index.js';
+import type { ContentBlockUnion, MetadataBlock } from '../config/types.js';
+
 import { truncateText } from '../utils/sanitizer.js';
 
 function truncateBlock(block: ContentBlockUnion): ContentBlockUnion {

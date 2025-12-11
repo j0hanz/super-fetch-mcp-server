@@ -1,4 +1,5 @@
-import type { Request, Response, NextFunction } from 'express';
+import type { NextFunction, Request, Response } from 'express';
+
 import type { RateLimitEntry, RateLimiterOptions } from '../config/types.js';
 
 const DEFAULT_OPTIONS: RateLimiterOptions = {
@@ -76,26 +77,20 @@ class RateLimiter {
   }
 
   private getKey(req: Request): string {
-    let ip: string;
-
+    const fallback = req.ip ?? req.socket.remoteAddress ?? 'unknown';
     const realIp = req.headers['x-real-ip'];
+    const forwardedFor = req.headers['x-forwarded-for'];
+
+    let ip: string = fallback;
     if (typeof realIp === 'string' && realIp) {
       ip = realIp;
-    } else {
-      const forwardedFor = req.headers['x-forwarded-for'];
-      if (typeof forwardedFor === 'string') {
-        const firstIp = forwardedFor.split(',')[0]?.trim();
-        if (firstIp) {
-          ip = firstIp;
-        } else {
-          ip = req.ip ?? req.socket.remoteAddress ?? 'unknown';
-        }
-      } else {
-        ip = req.ip ?? req.socket.remoteAddress ?? 'unknown';
-      }
+    } else if (typeof forwardedFor === 'string') {
+      const firstIp = forwardedFor.split(',')[0]?.trim();
+      if (firstIp) ip = firstIp;
     }
 
-    return ip.replace(/[^a-fA-F0-9.:]/g, '').substring(0, 45) || 'unknown';
+    const sanitized = ip.replace(/[^a-fA-F0-9.:]/g, '').substring(0, 45);
+    return sanitized.length > 0 ? sanitized : 'unknown';
   }
 
   private cleanup(): void {

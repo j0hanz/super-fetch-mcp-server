@@ -1,10 +1,11 @@
+import type { ToolErrorResponse } from '../config/types.js';
+
 import {
   AppError,
-  UrlValidationError,
   FetchError,
   TimeoutError,
+  UrlValidationError,
 } from '../errors/index.js';
-import type { ToolErrorResponse } from '../config/types.js';
 
 export function createToolErrorResponse(
   message: string,

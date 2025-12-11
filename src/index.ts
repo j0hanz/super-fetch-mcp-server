@@ -1,17 +1,22 @@
 #!/usr/bin/env node
 import express, {
+  type NextFunction,
   type Request,
   type Response,
-  type NextFunction,
 } from 'express';
+
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
+
 import { config } from './config/index.js';
-import { createMcpServer } from './server.js';
+
+import { destroyAgents } from './services/fetcher.js';
+import { logError, logInfo } from './services/logger.js';
+
 import { errorHandler } from './middleware/error-handler.js';
 import { rateLimiter } from './middleware/rate-limiter.js';
-import { logInfo, logError } from './services/logger.js';
-import { destroyAgents } from './services/fetcher.js';
+
+import { createMcpServer } from './server.js';
 
 process.on('uncaughtException', (error) => {
   logError('Uncaught exception', error);
@@ -28,6 +33,11 @@ process.on('unhandledRejection', (reason) => {
 const isStdioMode = process.argv.includes('--stdio');
 
 const ALLOWED_ORIGINS: string[] = [];
+
+function getSessionId(req: Request): string | undefined {
+  const header = req.headers['mcp-session-id'];
+  return Array.isArray(header) ? header[0] : header;
+}
 
 const asyncHandler = (
   fn: (req: Request, res: Response, next: NextFunction) => Promise<void>
@@ -132,7 +142,7 @@ if (isStdioMode) {
   app.post(
     '/mcp',
     asyncHandler(async (req: Request, res: Response) => {
-      const sessionId = req.headers['mcp-session-id'] as string | undefined;
+      const sessionId = getSessionId(req);
       let transport: StreamableHTTPServerTransport;
 
       const body = req.body as
@@ -191,7 +201,7 @@ if (isStdioMode) {
   app.get(
     '/mcp',
     asyncHandler(async (req: Request, res: Response) => {
-      const sessionId = req.headers['mcp-session-id'] as string | undefined;
+      const sessionId = getSessionId(req);
 
       if (!sessionId) {
         res.status(400).json({ error: 'Missing mcp-session-id header' });
@@ -213,7 +223,7 @@ if (isStdioMode) {
   app.delete(
     '/mcp',
     asyncHandler(async (req: Request, res: Response) => {
-      const sessionId = req.headers['mcp-session-id'] as string | undefined;
+      const sessionId = getSessionId(req);
       const session = sessionId ? sessions.get(sessionId) : undefined;
 
       if (session) {

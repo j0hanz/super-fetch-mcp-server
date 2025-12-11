@@ -1,22 +1,27 @@
-import { validateAndNormalizeUrl } from '../../utils/url-validator.js';
-import { fetchUrlWithRetry } from '../../services/fetcher.js';
+import type {
+  BatchUrlResult,
+  FetchUrlsInput,
+  SingleUrlResult,
+} from '../../config/types.js';
+
+import * as cache from '../../services/cache.js';
 import { extractContent } from '../../services/extractor.js';
+import { fetchUrlWithRetry } from '../../services/fetcher.js';
+import { logDebug, logError, logWarn } from '../../services/logger.js';
 import { parseHtml } from '../../services/parser.js';
+
+import { runWithConcurrency } from '../../utils/concurrency.js';
+import { createToolErrorResponse } from '../../utils/tool-error-handler.js';
+import { validateAndNormalizeUrl } from '../../utils/url-validator.js';
+import {
+  buildMetadata,
+  shouldUseArticle,
+  truncateContent,
+} from '../utils/common.js';
+import { createBatchResponse } from '../utils/response-builder.js';
+
 import { toJsonl } from '../../transformers/jsonl.transformer.js';
 import { htmlToMarkdown } from '../../transformers/markdown.transformer.js';
-import * as cache from '../../services/cache.js';
-import { config } from '../../config/index.js';
-import { logDebug, logError, logWarn } from '../../services/logger.js';
-import { runWithConcurrency } from '../../utils/concurrency.js';
-import { createBatchResponse } from '../utils/response-builder.js';
-import { createToolErrorResponse } from '../../utils/tool-error-handler.js';
-import type {
-  FetchUrlsInput,
-  MetadataBlock,
-  ContentBlockUnion,
-  SingleUrlResult,
-  BatchUrlResult,
-} from '../../config/types.js';
 
 export const FETCH_URLS_TOOL_NAME = 'fetch-urls';
 export const FETCH_URLS_TOOL_DESCRIPTION =
@@ -25,22 +30,22 @@ export const FETCH_URLS_TOOL_DESCRIPTION =
 const MAX_URLS = 10;
 const DEFAULT_CONCURRENCY = 3;
 
+interface ProcessOptions {
+  extractMainContent: boolean;
+  includeMetadata: boolean;
+  maxContentLength?: number | undefined;
+  format: 'jsonl' | 'markdown';
+}
+
 async function processSingleUrl(
   url: string,
-  options: {
-    extractMainContent: boolean;
-    includeMetadata: boolean;
-    maxContentLength?: number | undefined;
-    format: 'jsonl' | 'markdown';
-  }
+  options: ProcessOptions
 ): Promise<SingleUrlResult> {
   try {
-    // Validate URL
     const normalizedUrl = validateAndNormalizeUrl(url);
     const cacheNamespace = options.format === 'markdown' ? 'markdown' : 'url';
     const cacheKey = cache.createCacheKey(cacheNamespace, normalizedUrl);
 
-    // Check cache first
     if (cacheKey) {
       const cached = cache.get(cacheKey);
       if (cached) {
@@ -54,142 +59,62 @@ async function processSingleUrl(
       }
     }
 
-    // Fetch HTML (uses HTML cache internally)
     const fetchResult = await fetchUrlWithRetry(normalizedUrl);
 
-    if (!fetchResult.html) {
-      return {
-        url: normalizedUrl,
-        success: false,
-        cached: false,
-        error: 'No content received from URL',
-        errorCode: 'EMPTY_CONTENT',
-      };
-    }
-
-    const html = fetchResult.html;
-
-    // Extract content
+    // Only invoke JSDOM when extractMainContent is true (lazy loading optimization)
     const { article, metadata: extractedMeta } = extractContent(
-      html,
-      normalizedUrl
+      fetchResult.html,
+      normalizedUrl,
+      {
+        extractArticle: options.extractMainContent,
+      }
     );
+    const useArticle = shouldUseArticle(options.extractMainContent, article);
+    const metadata = buildMetadata(
+      normalizedUrl,
+      article,
+      extractedMeta,
+      useArticle,
+      options.includeMetadata
+    );
+    const sourceHtml = useArticle ? article.content : fetchResult.html;
+    const title = useArticle ? article.title : extractedMeta.title;
 
     let content: string;
-    let title: string | undefined;
-    let contentBlocks = 0;
+    let contentBlocks: number | undefined;
 
     if (options.format === 'markdown') {
-      // Markdown format
-      if (
-        options.extractMainContent &&
-        config.extraction.extractMainContent &&
-        article
-      ) {
-        const metadata =
-          options.includeMetadata && config.extraction.includeMetadata
-            ? {
-                type: 'metadata' as const,
-                title: article.title,
-                author: article.byline,
-                url: normalizedUrl,
-                fetchedAt: new Date().toISOString(),
-              }
-            : undefined;
-
-        content = htmlToMarkdown(article.content, metadata);
-        title = article.title;
-      } else {
-        const metadata =
-          options.includeMetadata && config.extraction.includeMetadata
-            ? {
-                type: 'metadata' as const,
-                title: extractedMeta.title,
-                description: extractedMeta.description,
-                author: extractedMeta.author,
-                url: normalizedUrl,
-                fetchedAt: new Date().toISOString(),
-              }
-            : undefined;
-
-        content = htmlToMarkdown(html, metadata);
-        title = extractedMeta.title;
-      }
+      content = htmlToMarkdown(sourceHtml, metadata);
     } else {
-      // JSONL format
-      let blocks: ContentBlockUnion[];
-      let metadata: MetadataBlock | undefined;
-
-      if (
-        options.extractMainContent &&
-        config.extraction.extractMainContent &&
-        article
-      ) {
-        blocks = parseHtml(article.content);
-        metadata =
-          options.includeMetadata && config.extraction.includeMetadata
-            ? {
-                type: 'metadata' as const,
-                title: article.title,
-                author: article.byline,
-                url: normalizedUrl,
-                fetchedAt: new Date().toISOString(),
-              }
-            : undefined;
-        title = article.title;
-      } else {
-        blocks = parseHtml(html);
-        metadata =
-          options.includeMetadata && config.extraction.includeMetadata
-            ? {
-                type: 'metadata' as const,
-                title: extractedMeta.title,
-                description: extractedMeta.description,
-                author: extractedMeta.author,
-                url: normalizedUrl,
-                fetchedAt: new Date().toISOString(),
-              }
-            : undefined;
-        title = extractedMeta.title;
-      }
-
+      const blocks = parseHtml(sourceHtml);
       contentBlocks = blocks.length;
       content = toJsonl(blocks, metadata);
     }
 
-    // Apply max content length truncation
-    if (
-      options.maxContentLength &&
-      options.maxContentLength > 0 &&
-      content.length > options.maxContentLength
-    ) {
-      content =
-        content.substring(0, options.maxContentLength) + '\n...[truncated]';
-    }
-
-    // Cache the result
-    if (cacheKey) {
-      cache.set(cacheKey, content);
-    }
+    const { content: truncatedContent } = truncateContent(
+      content,
+      options.maxContentLength
+    );
+    content = truncatedContent;
+    if (cacheKey) cache.set(cacheKey, content);
 
     return {
       url: normalizedUrl,
       success: true,
       title,
       content,
-      contentBlocks: options.format === 'jsonl' ? contentBlocks : undefined,
+      contentBlocks,
       cached: false,
     };
   } catch (error) {
     const errorMessage =
       error instanceof Error ? error.message : 'Unknown error';
-    const errorCode =
-      error instanceof Error && 'code' in error
-        ? String((error as { code?: string }).code)
-        : 'FETCH_ERROR';
+    let errorCode = 'FETCH_ERROR';
+    if (error && typeof error === 'object' && 'code' in error) {
+      errorCode = String((error as Record<string, unknown>).code);
+    }
 
     logWarn('Batch URL processing failed', { url, error: errorMessage });
-
     return {
       url,
       success: false,
@@ -266,12 +191,14 @@ export async function fetchUrlsToolHandler(input: FetchUrlsInput) {
         return result.value;
       } else {
         // Promise rejection (shouldn't happen as processSingleUrl catches errors)
-        const reason = result.reason as Error | undefined;
+        const reason: unknown = result.reason;
+        const errorMessage =
+          reason instanceof Error ? reason.message : String(reason);
         return {
           url: validUrls[index] ?? 'unknown',
           success: false as const,
           cached: false as const,
-          error: reason?.message ?? 'Unknown error',
+          error: errorMessage,
           errorCode: 'PROMISE_REJECTED',
         };
       }

@@ -1,21 +1,47 @@
-import { isInternalUrl } from '../../utils/url-validator.js';
 import * as cheerio from 'cheerio';
-import { logError, logDebug } from '../../services/logger.js';
+
+import type {
+  ExtractedLink,
+  ExtractLinksOptions,
+  FetchLinksInput,
+  LinksTransformResult,
+} from '../../config/types.js';
+
+import { logDebug, logError } from '../../services/logger.js';
+
 import {
   createToolErrorResponse,
   handleToolError,
 } from '../../utils/tool-error-handler.js';
+import { isInternalUrl } from '../../utils/url-validator.js';
 import { executeFetchPipeline } from '../utils/fetch-pipeline.js';
-import type {
-  FetchLinksInput,
-  ExtractedLink,
-  LinksTransformResult,
-  ExtractLinksOptions,
-} from '../../config/types.js';
 
 export const FETCH_LINKS_TOOL_NAME = 'fetch-links';
 export const FETCH_LINKS_TOOL_DESCRIPTION =
   'Extracts all hyperlinks from a webpage with anchor text and type classification. Supports filtering, image links, and link limits.';
+
+type LinkType = 'internal' | 'external' | 'image';
+
+function tryResolveUrl(href: string, baseUrl: string): string | null {
+  try {
+    return new URL(href, baseUrl).href;
+  } catch {
+    return null;
+  }
+}
+
+function shouldIncludeLink(
+  type: LinkType,
+  url: string,
+  options: ExtractLinksOptions,
+  seen: Set<string>
+): boolean {
+  if (seen.has(url)) return false;
+  if (options.filterPattern && !options.filterPattern.test(url)) return false;
+  if (type === 'internal' && !options.includeInternal) return false;
+  if (type === 'external' && !options.includeExternal) return false;
+  return true;
+}
 
 function extractLinks(
   html: string,
@@ -24,101 +50,52 @@ function extractLinks(
 ): LinksTransformResult {
   const $ = cheerio.load(html);
   const links: ExtractedLink[] = [];
-  const seenUrls = new Set<string>();
+  const seen = new Set<string>();
   let filtered = 0;
 
-  // Extract anchor links
-  $('a[href]').each((_, element) => {
-    const href = $(element).attr('href');
-    const text = $(element).text().trim();
+  $('a[href]').each((_, el) => {
+    const href = $(el).attr('href');
+    if (!href || href.startsWith('#') || href.startsWith('javascript:')) return;
 
-    // Skip invalid hrefs
-    if (!href || href.startsWith('#') || href.startsWith('javascript:')) {
+    const url = tryResolveUrl(href, baseUrl);
+    if (!url) return;
+
+    const type: LinkType = isInternalUrl(url, baseUrl)
+      ? 'internal'
+      : 'external';
+    if (!shouldIncludeLink(type, url, options, seen)) {
+      if (!seen.has(url)) filtered++;
       return;
     }
 
-    try {
-      const absoluteUrl = new URL(href, baseUrl).href;
-
-      // Skip duplicates
-      if (seenUrls.has(absoluteUrl)) {
-        return;
-      }
-      seenUrls.add(absoluteUrl);
-
-      // Apply filter pattern
-      if (options.filterPattern && !options.filterPattern.test(absoluteUrl)) {
-        filtered++;
-        return;
-      }
-
-      const type = isInternalUrl(absoluteUrl, baseUrl)
-        ? ('internal' as const)
-        : ('external' as const);
-
-      // Filter based on options
-      if (type === 'internal' && !options.includeInternal) {
-        filtered++;
-        return;
-      }
-      if (type === 'external' && !options.includeExternal) {
-        filtered++;
-        return;
-      }
-
-      links.push({
-        href: absoluteUrl,
-        text: text || absoluteUrl,
-        type,
-      });
-    } catch {
-      // Skip invalid URLs silently
-    }
+    seen.add(url);
+    links.push({ href: url, text: $(el).text().trim() || url, type });
   });
 
-  // Extract image links if requested
   if (options.includeImages) {
-    $('img[src]').each((_, element) => {
-      const src = $(element).attr('src');
-      const alt = $(element).attr('alt')?.trim() ?? '';
+    $('img[src]').each((_, el) => {
+      const src = $(el).attr('src');
+      if (!src || src.startsWith('data:')) return;
 
-      if (!src || src.startsWith('data:')) {
+      const url = tryResolveUrl(src, baseUrl);
+      if (!url) return;
+
+      if (!shouldIncludeLink('image', url, options, seen)) {
+        if (!seen.has(url)) filtered++;
         return;
       }
 
-      try {
-        const absoluteUrl = new URL(src, baseUrl).href;
-
-        // Skip duplicates
-        if (seenUrls.has(absoluteUrl)) {
-          return;
-        }
-        seenUrls.add(absoluteUrl);
-
-        // Apply filter pattern
-        if (options.filterPattern && !options.filterPattern.test(absoluteUrl)) {
-          filtered++;
-          return;
-        }
-
-        links.push({
-          href: absoluteUrl,
-          text: alt || absoluteUrl,
-          type: 'image' as const,
-        });
-      } catch {
-        // Skip invalid URLs silently
-      }
+      seen.add(url);
+      links.push({
+        href: url,
+        text: $(el).attr('alt')?.trim() ?? url,
+        type: 'image',
+      });
     });
   }
 
-  // Apply maxLinks truncation
-  let truncated = false;
-  let resultLinks = links;
-  if (options.maxLinks && links.length > options.maxLinks) {
-    resultLinks = links.slice(0, options.maxLinks);
-    truncated = true;
-  }
+  const truncated = options.maxLinks ? links.length > options.maxLinks : false;
+  const resultLinks = truncated ? links.slice(0, options.maxLinks) : links;
 
   return {
     links: resultLinks,
@@ -129,36 +106,35 @@ function extractLinks(
 }
 
 export async function fetchLinksToolHandler(input: FetchLinksInput) {
+  if (!input.url) {
+    return createToolErrorResponse('URL is required', '', 'VALIDATION_ERROR');
+  }
+
+  let filterPattern: RegExp | undefined;
+  if (input.filterPattern) {
+    try {
+      filterPattern = new RegExp(input.filterPattern, 'i');
+    } catch {
+      return createToolErrorResponse(
+        `Invalid filter pattern: ${input.filterPattern}`,
+        input.url,
+        'VALIDATION_ERROR'
+      );
+    }
+  }
+
   try {
-    if (!input.url) {
-      return createToolErrorResponse('URL is required', '', 'VALIDATION_ERROR');
-    }
-
-    const includeInternal = input.includeInternal ?? true;
-    const includeExternal = input.includeExternal ?? true;
-    const includeImages = input.includeImages ?? false;
-    const maxLinks = input.maxLinks;
-
-    // Parse filter pattern if provided
-    let filterPattern: RegExp | undefined;
-    if (input.filterPattern) {
-      try {
-        filterPattern = new RegExp(input.filterPattern, 'i');
-      } catch {
-        return createToolErrorResponse(
-          `Invalid filter pattern: ${input.filterPattern}`,
-          input.url,
-          'VALIDATION_ERROR'
-        );
-      }
-    }
+    const options: ExtractLinksOptions = {
+      includeInternal: input.includeInternal ?? true,
+      includeExternal: input.includeExternal ?? true,
+      includeImages: input.includeImages ?? false,
+      maxLinks: input.maxLinks,
+      filterPattern,
+    };
 
     logDebug('Extracting links', {
       url: input.url,
-      includeInternal,
-      includeExternal,
-      includeImages,
-      maxLinks,
+      ...options,
       filterPattern: input.filterPattern,
     });
 
@@ -167,14 +143,7 @@ export async function fetchLinksToolHandler(input: FetchLinksInput) {
       cacheNamespace: 'links',
       customHeaders: input.customHeaders,
       retries: input.retries,
-      transform: (html, url) =>
-        extractLinks(html, url, {
-          includeInternal,
-          includeExternal,
-          includeImages,
-          maxLinks,
-          filterPattern,
-        }),
+      transform: (html, url) => extractLinks(html, url, options),
     });
 
     const structuredContent = {

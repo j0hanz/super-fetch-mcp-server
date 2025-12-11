@@ -1,11 +1,13 @@
-import { validateAndNormalizeUrl } from '../../utils/url-validator.js';
-import { fetchUrlWithRetry } from '../../services/fetcher.js';
-import * as cache from '../../services/cache.js';
-import { logDebug } from '../../services/logger.js';
 import type {
   FetchPipelineOptions,
   PipelineResult,
 } from '../../config/types.js';
+
+import * as cache from '../../services/cache.js';
+import { fetchUrlWithRetry } from '../../services/fetcher.js';
+import { logDebug } from '../../services/logger.js';
+
+import { validateAndNormalizeUrl } from '../../utils/url-validator.js';
 
 export async function executeFetchPipeline<T>(
   options: FetchPipelineOptions<T>
@@ -17,7 +19,7 @@ export async function executeFetchPipeline<T>(
     retries,
     transform,
     serialize = JSON.stringify,
-    deserialize,
+    deserialize = JSON.parse as unknown as (cached: string) => T,
   } = options;
 
   const normalizedUrl = validateAndNormalizeUrl(url);
@@ -27,9 +29,7 @@ export async function executeFetchPipeline<T>(
     const cached = cache.get(cacheKey);
     if (cached) {
       logDebug('Cache hit', { namespace: cacheNamespace, url: normalizedUrl });
-      const data = deserialize
-        ? deserialize(cached.content)
-        : (cached.content as unknown as T);
+      const data = deserialize(cached.content);
 
       return {
         data,
