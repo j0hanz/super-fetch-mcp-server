@@ -32,7 +32,9 @@ class RateLimiter {
     );
     const cleanupInterval = Math.max(opts.cleanupIntervalMs, MIN_WINDOW_MS);
 
-    this.cleanupInterval = setInterval(() => this.cleanup(), cleanupInterval);
+    this.cleanupInterval = setInterval(() => {
+      this.cleanup();
+    }, cleanupInterval);
     this.cleanupInterval.unref();
   }
 

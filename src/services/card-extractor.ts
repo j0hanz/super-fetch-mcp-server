@@ -10,7 +10,9 @@ const NOISE_SELECTORS = 'style, svg, [class*="icon"], [aria-hidden="true"]';
  */
 function cleanElement(element: Element): Element {
   const clone = element.cloneNode(true) as Element;
-  clone.querySelectorAll(NOISE_SELECTORS).forEach((el) => el.remove());
+  clone.querySelectorAll(NOISE_SELECTORS).forEach((el) => {
+    el.remove();
+  });
   return clone;
 }
 
@@ -128,7 +130,9 @@ function processCustomCards(document: Document): void {
   if (list.children.length > 0) {
     const firstCard = customCards[0];
     firstCard?.parentNode?.insertBefore(list, firstCard);
-    customCards.forEach((card) => card.remove());
+    customCards.forEach((card) => {
+      card.remove();
+    });
   }
 }
 

@@ -49,7 +49,7 @@ export function truncateContent(
     return { content, truncated: false };
   }
   return {
-    content: content.substring(0, maxLength) + '\n...[truncated]',
+    content: `${content.substring(0, maxLength)}\n...[truncated]`,
     truncated: true,
   };
 }

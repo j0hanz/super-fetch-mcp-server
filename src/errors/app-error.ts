@@ -1,7 +1,7 @@
 export class AppError extends Error {
-  public readonly statusCode: number;
-  public readonly isOperational: boolean;
-  public readonly code: string;
+  readonly statusCode: number;
+  readonly isOperational: boolean;
+  readonly code: string;
 
   constructor(
     message: string,
@@ -19,7 +19,7 @@ export class AppError extends Error {
 }
 
 export class ValidationError extends AppError {
-  public readonly details: Record<string, unknown> | undefined;
+  readonly details: Record<string, unknown> | undefined;
 
   constructor(message: string, details?: Record<string, unknown>) {
     super(message, 400, 'VALIDATION_ERROR');
@@ -28,7 +28,7 @@ export class ValidationError extends AppError {
 }
 
 export class UrlValidationError extends AppError {
-  public readonly url: string;
+  readonly url: string;
 
   constructor(message: string, url: string) {
     super(message, 400, 'INVALID_URL');
@@ -37,8 +37,8 @@ export class UrlValidationError extends AppError {
 }
 
 export class FetchError extends AppError {
-  public readonly url: string;
-  public readonly httpStatus: number | undefined;
+  readonly url: string;
+  readonly httpStatus: number | undefined;
 
   constructor(message: string, url: string, httpStatus?: number) {
     super(message, httpStatus ?? 502, 'FETCH_ERROR');
@@ -48,7 +48,7 @@ export class FetchError extends AppError {
 }
 
 export class RateLimitError extends AppError {
-  public readonly retryAfter: number;
+  readonly retryAfter: number;
 
   constructor(retryAfter: number) {
     super('Too many requests', 429, 'RATE_LIMITED');
@@ -57,7 +57,7 @@ export class RateLimitError extends AppError {
 }
 
 export class TimeoutError extends AppError {
-  public readonly timeoutMs: number;
+  readonly timeoutMs: number;
 
   constructor(timeoutMs: number, isGateway = false) {
     super(

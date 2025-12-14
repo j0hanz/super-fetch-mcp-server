@@ -127,7 +127,11 @@ async function processSingleUrl(
   }
 }
 
-export async function fetchUrlsToolHandler(input: FetchUrlsInput) {
+export async function fetchUrlsToolHandler(input: FetchUrlsInput): Promise<{
+  content: { type: 'text'; text: string }[];
+  structuredContent?: Record<string, unknown>;
+  isError?: boolean;
+}> {
   try {
     // Validate input - urls array is guaranteed by Zod schema but check for empty
     if (input.urls.length === 0) {
@@ -187,20 +191,25 @@ export async function fetchUrlsToolHandler(input: FetchUrlsInput) {
     // Execute with concurrency control
     const settledResults = await runWithConcurrency(concurrency, tasks);
 
+    // Helper to safely extract error message from rejected promise
+    const getErrorMessage = ({ reason }: PromiseRejectedResult): string => {
+      const typedReason: unknown = reason;
+      return typedReason instanceof Error
+        ? typedReason.message
+        : String(typedReason);
+    };
+
     // Process results
     const results: BatchUrlResult[] = settledResults.map((result, index) => {
       if (result.status === 'fulfilled') {
         return result.value;
       } else {
         // Promise rejection (shouldn't happen as processSingleUrl catches errors)
-        const reason: unknown = result.reason;
-        const errorMessage =
-          reason instanceof Error ? reason.message : String(reason);
         return {
           url: validUrls[index] ?? 'unknown',
           success: false as const,
           cached: false as const,
-          error: errorMessage,
+          error: getErrorMessage(result),
           errorCode: 'PROMISE_REJECTED',
         };
       }
@@ -209,9 +218,10 @@ export async function fetchUrlsToolHandler(input: FetchUrlsInput) {
     // Check if we should fail fast on errors
     if (!continueOnError) {
       const firstError = results.find((r) => !r.success);
-      if (firstError) {
+      if (firstError && !firstError.success) {
+        const errorMsg = firstError.error ?? 'Unknown error';
         return createToolErrorResponse(
-          `Batch failed: ${firstError.error}`,
+          `Batch failed: ${errorMsg}`,
           firstError.url,
           firstError.errorCode ?? 'BATCH_ERROR'
         );

@@ -52,7 +52,11 @@ function transformToJsonl(
   };
 }
 
-export async function fetchUrlToolHandler(input: FetchUrlInput) {
+export async function fetchUrlToolHandler(input: FetchUrlInput): Promise<{
+  content: { type: 'text'; text: string }[];
+  structuredContent?: Record<string, unknown>;
+  isError?: boolean;
+}> {
   if (!input.url) {
     return createToolErrorResponse('URL is required', '', 'VALIDATION_ERROR');
   }

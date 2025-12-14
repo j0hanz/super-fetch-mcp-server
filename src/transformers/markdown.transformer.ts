@@ -187,7 +187,7 @@ function createFrontmatter(metadata: MetadataBlock): string {
 
 export function htmlToMarkdown(html: string, metadata?: MetadataBlock): string {
   if (!html || typeof html !== 'string') {
-    return metadata ? createFrontmatter(metadata) + '\n\n' : '';
+    return metadata ? `${createFrontmatter(metadata)}\n\n` : '';
   }
 
   let content = '';
@@ -199,11 +199,11 @@ export function htmlToMarkdown(html: string, metadata?: MetadataBlock): string {
     // Final cleanup of multiple newlines after removing noise
     content = content.replace(MULTIPLE_NEWLINES, '\n\n').trim();
   } catch {
-    return metadata ? createFrontmatter(metadata) + '\n\n' : '';
+    return metadata ? `${createFrontmatter(metadata)}\n\n` : '';
   }
 
   if (metadata) {
-    return createFrontmatter(metadata) + '\n\n' + content;
+    return `${createFrontmatter(metadata)}\n\n${content}`;
   }
 
   return content;

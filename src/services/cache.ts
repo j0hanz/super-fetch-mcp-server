@@ -133,7 +133,22 @@ export function setHtml(url: string, html: string): void {
   }
 }
 
-export function getStats() {
+export function getStats(): {
+  size: number;
+  maxKeys: number;
+  ttl: number;
+  hits: number;
+  misses: number;
+  sets: number;
+  errors: number;
+  hitRate: string;
+  htmlCacheSize: number;
+  htmlCacheMaxKeys: number;
+  htmlCacheTtl: number;
+  htmlHits: number;
+  htmlMisses: number;
+  htmlHitRate: string;
+} {
   const total = stats.hits + stats.misses;
   const hitRate = total > 0 ? ((stats.hits / total) * 100).toFixed(2) : '0.00';
 

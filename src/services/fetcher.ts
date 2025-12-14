@@ -96,8 +96,8 @@ client.interceptors.response.use(
     }
 
     if (error.response) {
-      const status = error.response.status;
-      const statusText = error.response.statusText;
+      const { status } = error.response;
+      const { statusText } = error.response;
       logError('HTTP Error Response', { url, status, statusText });
       return Promise.reject(
         new FetchError(`HTTP ${status}: ${statusText}`, url, status)
@@ -128,7 +128,11 @@ async function fetchUrl(
 
   const sanitized = sanitizeHeaders(customHeaders);
   if (sanitized) {
-    requestConfig.headers = { ...requestConfig.headers, ...sanitized };
+    const existingHeaders =
+      requestConfig.headers && typeof requestConfig.headers === 'object'
+        ? (requestConfig.headers as Record<string, string>)
+        : {};
+    requestConfig.headers = { ...existingHeaders, ...sanitized };
   }
 
   try {

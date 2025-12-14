@@ -46,7 +46,7 @@ export async function executeFetchPipeline<T>(
     customHeaders,
     retries
   );
-  const html = fetchResult.html;
+  const { html } = fetchResult;
   const data = transform(html, normalizedUrl);
 
   if (cacheKey) {

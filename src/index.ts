@@ -75,7 +75,7 @@ if (isStdioMode) {
   app.use(rateLimiter.middleware());
 
   app.use((req, res, next) => {
-    const origin = req.headers.origin;
+    const { origin } = req.headers;
 
     if (origin) {
       try {
@@ -158,7 +158,7 @@ if (isStdioMode) {
 
       const existingSession = sessionId ? sessions.get(sessionId) : undefined;
       if (existingSession) {
-        transport = existingSession.transport;
+        ({ transport } = existingSession);
         existingSession.createdAt = Date.now();
       } else if (!sessionId && isInitializeRequest(req.body)) {
         transport = new StreamableHTTPServerTransport({
@@ -261,7 +261,7 @@ if (isStdioMode) {
       process.exit(1);
     });
 
-  const shutdown = (signal: string) => {
+  const shutdown = (signal: string): void => {
     process.stdout.write(`\n${signal} received, shutting down gracefully...\n`);
 
     clearInterval(sessionCleanupInterval);
@@ -286,6 +286,10 @@ if (isStdioMode) {
     }, 10000).unref();
   };
 
-  process.on('SIGINT', () => shutdown('SIGINT'));
-  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => {
+    shutdown('SIGINT');
+  });
+  process.on('SIGTERM', () => {
+    shutdown('SIGTERM');
+  });
 }

@@ -45,6 +45,6 @@ const LANGUAGE_PATTERNS = [
 /**
  * Detect programming language from code content
  */
-export function detectLanguage(code: string) {
+export function detectLanguage(code: string): string | undefined {
   return LANGUAGE_PATTERNS.find(([pattern]) => pattern.test(code))?.[1];
 }

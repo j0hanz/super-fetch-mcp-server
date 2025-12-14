@@ -61,7 +61,7 @@ function extractArticleWithJsdom(
     // virtualConsole suppresses CSS parsing warnings from modern CSS features
     const virtualConsole = new VirtualConsole();
     const dom = new JSDOM(html, { url, virtualConsole });
-    const document = dom.window.document;
+    const { document } = dom.window;
 
     preserveCardLinks(document);
     const reader = new Readability(document);

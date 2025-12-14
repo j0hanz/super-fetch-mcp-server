@@ -83,15 +83,20 @@ function transformToMarkdown(
 
   let truncated = false;
   if (options.maxContentLength && markdown.length > options.maxContentLength) {
-    markdown =
-      markdown.substring(0, options.maxContentLength) + '\n\n...[truncated]';
+    markdown = `${markdown.substring(0, options.maxContentLength)}\n\n...[truncated]`;
     truncated = true;
   }
 
   return { markdown, title, toc, truncated };
 }
 
-export async function fetchMarkdownToolHandler(input: FetchMarkdownInput) {
+export async function fetchMarkdownToolHandler(
+  input: FetchMarkdownInput
+): Promise<{
+  content: { type: 'text'; text: string }[];
+  structuredContent?: Record<string, unknown>;
+  isError?: boolean;
+}> {
   if (!input.url) {
     return createToolErrorResponse('URL is required', '', 'VALIDATION_ERROR');
   }

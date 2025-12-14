@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-
+/* global console, process */
 /**
  * Release automation script for superFetch
  * Usage: npm run release [patch|minor|major|<version>]

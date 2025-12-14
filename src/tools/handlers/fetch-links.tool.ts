@@ -105,7 +105,11 @@ function extractLinks(
   };
 }
 
-export async function fetchLinksToolHandler(input: FetchLinksInput) {
+export async function fetchLinksToolHandler(input: FetchLinksInput): Promise<{
+  content: { type: 'text'; text: string }[];
+  structuredContent?: Record<string, unknown>;
+  isError?: boolean;
+}> {
   if (!input.url) {
     return createToolErrorResponse('URL is required', '', 'VALIDATION_ERROR');
   }

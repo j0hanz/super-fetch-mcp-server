@@ -14,7 +14,7 @@ export function registerResources(server: McpServer): void {
       description: 'Fetch statistics and cache performance metrics',
       mimeType: 'application/json',
     },
-    async (uri) => {
+    (uri) => {
       const stats = {
         server: {
           name: config.server.name,
