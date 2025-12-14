@@ -138,16 +138,17 @@ function processCustomCards(document: Document): void {
 
 /**
  * Process CSS grid card containers
+ * Optimized to use more specific selectors to reduce iteration overhead
  */
 function processCardGrids(document: Document): void {
+  // Use querySelectorAll on all divs but filter early with direct child selector
   for (const div of document.querySelectorAll('div')) {
-    const childLinks = Array.from(div.children).filter(
-      (child) => child.tagName === 'A' && child.hasAttribute('href')
-    );
+    // Use :scope > a[href] for direct child links only (more efficient than Array.from + filter)
+    const childLinks = div.querySelectorAll(':scope > a[href]');
 
     if (childLinks.length < 2) continue;
 
-    const looksLikeCards = childLinks.every((link) => {
+    const looksLikeCards = Array.from(childLinks).every((link) => {
       const hasStructuredContent = link.querySelector('svg, div, p, span');
       const hasReasonableText = link.textContent.trim().length > 3;
       return hasStructuredContent && hasReasonableText;

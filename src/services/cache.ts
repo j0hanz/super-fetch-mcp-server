@@ -47,26 +47,50 @@ const MAX_CONTENT_SIZE = 5242880;
 const MAX_HTML_SIZE = 10485760;
 const MAX_KEY_LENGTH = 500;
 
-// LRU cache for hash results to avoid recomputing hashes
-const hashCache = new Map<string, string>();
-const MAX_HASH_CACHE_SIZE = 100;
+/**
+ * Simple LRU cache using Map's insertion order with manual reordering.
+ * On access, entries are moved to end (most recently used).
+ * On eviction, oldest entries (first in map) are removed.
+ */
+class SimpleLRU<K, V> {
+  private cache = new Map<K, V>();
+  constructor(private readonly maxSize: number) {}
+
+  get(key: K): V | undefined {
+    const value = this.cache.get(key);
+    if (value !== undefined) {
+      // Move to end (most recently used)
+      this.cache.delete(key);
+      this.cache.set(key, value);
+    }
+    return value;
+  }
+
+  set(key: K, value: V): void {
+    if (this.cache.has(key)) {
+      this.cache.delete(key);
+    } else if (this.cache.size >= this.maxSize) {
+      // Delete oldest (first) entry
+      const firstKey = this.cache.keys().next().value;
+      if (firstKey !== undefined) this.cache.delete(firstKey);
+    }
+    this.cache.set(key, value);
+  }
+}
+
+// True LRU cache for hash results to avoid recomputing hashes
+const hashCache = new SimpleLRU<string, string>(100);
 
 export function createCacheKey(namespace: string, url: string): string | null {
   if (!namespace || !url) return null;
   const key = `${namespace}:${url}`;
   if (key.length <= MAX_KEY_LENGTH) return key;
 
-  // Check hash cache first
+  // Check hash cache first (LRU access)
   let hash = hashCache.get(url);
   if (!hash) {
     // Use SHA-1 (faster than SHA-256) with truncation for cache keys
     hash = crypto.createHash('sha1').update(url).digest('hex').substring(0, 40);
-
-    // Maintain LRU behavior
-    if (hashCache.size >= MAX_HASH_CACHE_SIZE) {
-      const firstKey = hashCache.keys().next().value;
-      if (firstKey) hashCache.delete(firstKey);
-    }
     hashCache.set(url, hash);
   }
 

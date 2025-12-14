@@ -131,25 +131,25 @@ function isNoiseText(text: string): boolean {
   return false;
 }
 
+// Pre-compiled placeholder patterns for optimal performance
+const PLACEHOLDER_PATTERNS: readonly RegExp[] = [
+  /^lorem ipsum/i,
+  /^sample text/i,
+  /^placeholder/i,
+  /^example (text|content|data)/i,
+  /^test (text|content|data)/i,
+  /^your (text|content|name|email) here/i,
+  /^enter (your|a) /i,
+  /^type (your|a|something) /i,
+] as const;
+
 /**
  * Check if text looks like placeholder/demo content
  */
 function isPlaceholderContent(text: string): boolean {
   const trimmed = text.trim().toLowerCase();
 
-  // Common placeholder patterns in examples
-  const placeholders = [
-    /^lorem ipsum/i,
-    /^sample text/i,
-    /^placeholder/i,
-    /^example (text|content|data)/i,
-    /^test (text|content|data)/i,
-    /^your (text|content|name|email) here/i,
-    /^enter (your|a) /i,
-    /^type (your|a|something) /i,
-  ];
-
-  for (const pattern of placeholders) {
+  for (const pattern of PLACEHOLDER_PATTERNS) {
     if (pattern.test(trimmed)) {
       return true;
     }

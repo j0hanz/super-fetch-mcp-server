@@ -15,6 +15,15 @@ import { logError, logWarn } from './logger.js';
 
 const MAX_HTML_SIZE = 10 * 1024 * 1024;
 
+// Shared VirtualConsole to suppress JSDOM warnings/errors
+const sharedVirtualConsole = new VirtualConsole();
+sharedVirtualConsole.on('error', () => {
+  /* suppress JSDOM errors */
+});
+sharedVirtualConsole.on('warn', () => {
+  /* suppress JSDOM warnings */
+});
+
 /**
  * Extract metadata using Cheerio (fast, no full DOM)
  * This avoids JSDOM overhead for simple meta tag extraction
@@ -58,9 +67,8 @@ function extractArticleWithJsdom(
   url: string
 ): ExtractedArticle | null {
   try {
-    // virtualConsole suppresses CSS parsing warnings from modern CSS features
-    const virtualConsole = new VirtualConsole();
-    const dom = new JSDOM(html, { url, virtualConsole });
+    // Use shared VirtualConsole to reduce per-parse overhead
+    const dom = new JSDOM(html, { url, virtualConsole: sharedVirtualConsole });
     const { document } = dom.window;
 
     preserveCardLinks(document);

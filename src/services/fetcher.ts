@@ -61,8 +61,21 @@ function calculateBackoff(attempt: number, maxDelay = 10000): number {
   return Math.round(baseDelay + jitter);
 }
 
-const httpAgent = new http.Agent({ keepAlive: true, maxSockets: 25 });
-const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 25 });
+const httpAgent = new http.Agent({
+  keepAlive: true,
+  maxSockets: 25,
+  maxFreeSockets: 10,
+  timeout: 60000,
+  scheduling: 'fifo',
+});
+
+const httpsAgent = new https.Agent({
+  keepAlive: true,
+  maxSockets: 25,
+  maxFreeSockets: 10,
+  timeout: 60000,
+  scheduling: 'fifo',
+});
 
 export function destroyAgents(): void {
   httpAgent.destroy();

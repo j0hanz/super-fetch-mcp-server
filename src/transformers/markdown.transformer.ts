@@ -4,43 +4,19 @@ import type { MetadataBlock } from '../config/types.js';
 
 import { detectLanguage } from '../utils/language-detector.js';
 
-// Patterns for standalone noise lines to remove from markdown
-const NOISE_LINE_PATTERNS: RegExp[] = [
-  // Timestamps - various formats
-  /^\d+\s*(seconds?|minutes?|hours?|days?|weeks?|months?|years?)\s*ago$/i,
-  /^(updated|modified|edited|created|published|posted)\s+\d+\s*(seconds?|minutes?|hours?|days?|weeks?|months?|years?)\s*ago$/i,
-  /^(just now|recently|today|yesterday)$/i,
-  /^(updated|modified|edited|created|published)\s*:?\s*$/i,
-  /^last\s+updated\s*:?$/i,
-  /^(last\s+)?(updated|modified|edited)\s*:?\s*\d/i,
-
-  // Single letters or panel labels (from splitter examples, etc.)
+// Markdown-specific noise patterns (minimal set - content-cleaner.ts handles most filtering)
+// Only patterns that commonly appear as standalone lines in markdown output
+const NOISE_LINE_PATTERNS: readonly RegExp[] = [
+  // Single letters or panel labels (common in code examples)
   /^[A-Z]$/,
   /^Panel\s+[A-Z]$/i,
-  /^[A-Z]\s*$/,
 
-  // Button/action labels
-  /^(share|copy|like|follow|subscribe|download|print|save|bookmark)$/i,
-  /^(copy to clipboard|copied!?|copy code|copy link)$/i,
-  /^(click to copy|expand|collapse|show more|show less|load more)$/i,
-  /^(view more|read more|see more|see all|view all)$/i,
-  /^(try it|run|execute|play|preview|demo|live demo)$/i,
-  /^(edit|delete|remove|add|cancel|confirm|submit|reset|clear)$/i,
-
-  // Navigation
-  /^(next|previous|prev|back|forward|home|menu|close|open)$/i,
-  /^(scroll to top|back to top|top)$/i,
-
-  // Interactive prompts
-  /^(drag|click|tap|swipe|hover)\s+(to|the|here)/i,
-  /^(drag the|move the|resize the)/i,
-
-  // Empty structural elements
+  // Empty structural elements that survive HTML->Markdown conversion
   /^[•·→←↑↓►▼▲◄▶◀■□●○★☆✓✗✔✘×]+$/,
   /^[,;:\-–—]+$/,
   /^\[\d+\]$/,
   /^\(\d+\)$/,
-];
+] as const;
 
 /**
  * Check if a line is noise that should be removed
