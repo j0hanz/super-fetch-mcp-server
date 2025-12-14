@@ -11,7 +11,26 @@ import { logDebug } from '../../services/logger.js';
 import { validateAndNormalizeUrl } from '../../utils/url-validator.js';
 
 // Request deduplication store to prevent concurrent identical requests
-const pendingRequests = new Map<string, Promise<PipelineResult<unknown>>>();
+interface PendingRequest {
+  promise: Promise<PipelineResult<unknown>>;
+  timestamp: number;
+}
+
+const pendingRequests = new Map<string, PendingRequest>();
+const DEDUPLICATION_TIMEOUT = 60000; // 1 minute TTL
+
+// Cleanup stale pending requests every 30 seconds to prevent memory leak
+const cleanupInterval = setInterval(() => {
+  const now = Date.now();
+  for (const [key, value] of pendingRequests.entries()) {
+    if (now - value.timestamp > DEDUPLICATION_TIMEOUT) {
+      pendingRequests.delete(key);
+    }
+  }
+}, 30000);
+
+// Allow Node.js to exit if this is the only active timer
+cleanupInterval.unref();
 
 export async function executeFetchPipeline<T>(
   options: FetchPipelineOptions<T>
@@ -52,7 +71,7 @@ export async function executeFetchPipeline<T>(
   const pending = pendingRequests.get(dedupeKey);
   if (pending) {
     logDebug('Request deduplication hit', { url: normalizedUrl });
-    return pending as Promise<PipelineResult<T>>;
+    return pending.promise as Promise<PipelineResult<T>>;
   }
 
   // Build fetch options
@@ -91,6 +110,9 @@ export async function executeFetchPipeline<T>(
     }
   })();
 
-  pendingRequests.set(dedupeKey, request as Promise<PipelineResult<unknown>>);
+  pendingRequests.set(dedupeKey, {
+    promise: request as Promise<PipelineResult<unknown>>,
+    timestamp: Date.now(),
+  });
   return request;
 }

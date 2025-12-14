@@ -1,6 +1,6 @@
 # 🚀 superFetch MCP Server
 
-<img src="docs/logo.png" alt="PromptTuner MCP Logo" width="200">
+<img src="docs/logo.png" alt="SuperFetch MCP Logo" width="200">
 
 [![npm version](https://img.shields.io/npm/v/@j0hanz/superfetch.svg)](https://www.npmjs.com/package/@j0hanz/superfetch) [![Node.js](https://img.shields.io/badge/Node.js-≥20.0.0-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/) [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 
@@ -11,6 +11,8 @@
 [![Install in Cursor](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/install-mcp?name=superfetch&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIkBqMGhhbnovc3VwZXJmZXRjaEBsYXRlc3QiLCItLXN0ZGlvIl19)
 
 A [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server that fetches, extracts, and transforms web content into AI-optimized formats using Mozilla Readability.
+
+**Version:** 1.0.4
 
 [Quick Start](#quick-start) · [How to Choose a Tool](#-how-to-choose-a-tool) · [Tools](#available-tools) · [Configuration](#configuration) · [Contributing](#contributing)
 
@@ -438,9 +440,11 @@ Fetches multiple URLs in parallel with concurrency control. Ideal for comparing 
 
 ### Resources
 
-| URI                  | Description                         |
-| -------------------- | ----------------------------------- |
-| `superfetch://stats` | Server statistics and cache metrics |
+| URI                   | Description                                         |
+| --------------------- | --------------------------------------------------- |
+| `superfetch://stats`  | Server statistics and cache metrics                 |
+| `superfetch://health` | Real-time server health and dependency status       |
+| Dynamic resources     | Cached content available via resource subscriptions |
 
 ### Prompts
 
@@ -496,19 +500,23 @@ Then add to `.vscode/mcp.json`:
 
 ### Environment Variables
 
-| Variable             | Default              | Description               |
-| -------------------- | -------------------- | ------------------------- |
-| `PORT`               | `3000`               | HTTP server port          |
-| `HOST`               | `127.0.0.1`          | HTTP server host          |
-| `FETCH_TIMEOUT`      | `30000`              | Request timeout (ms)      |
-| `MAX_REDIRECTS`      | `5`                  | Maximum HTTP redirects    |
-| `USER_AGENT`         | `superFetch-MCP/1.0` | HTTP User-Agent           |
-| `MAX_CONTENT_LENGTH` | `10485760`           | Max response size (bytes) |
-| `CACHE_ENABLED`      | `true`               | Enable response caching   |
-| `CACHE_TTL`          | `3600`               | Cache TTL (seconds)       |
-| `CACHE_MAX_KEYS`     | `100`                | Maximum cache entries     |
-| `LOG_LEVEL`          | `info`               | Logging level             |
-| `ENABLE_LOGGING`     | `true`               | Enable/disable logging    |
+| Variable               | Default              | Description                     |
+| ---------------------- | -------------------- | ------------------------------- |
+| `PORT`                 | `3000`               | HTTP server port                |
+| `HOST`                 | `127.0.0.1`          | HTTP server host                |
+| `FETCH_TIMEOUT`        | `30000`              | Request timeout (ms)            |
+| `MAX_REDIRECTS`        | `5`                  | Maximum HTTP redirects          |
+| `USER_AGENT`           | `superFetch-MCP/1.0` | HTTP User-Agent                 |
+| `MAX_CONTENT_LENGTH`   | `10485760`           | Max response size (bytes)       |
+| `CACHE_ENABLED`        | `true`               | Enable response caching         |
+| `CACHE_TTL`            | `3600`               | Cache TTL (seconds)             |
+| `CACHE_MAX_KEYS`       | `100`                | Maximum cache entries           |
+| `LOG_LEVEL`            | `info`               | Logging level                   |
+| `ENABLE_LOGGING`       | `true`               | Enable/disable logging          |
+| `EXTRACT_MAIN_CONTENT` | `true`               | Extract main content by default |
+| `INCLUDE_METADATA`     | `true`               | Include metadata by default     |
+| `MAX_BLOCK_LENGTH`     | `5000`               | Maximum block length            |
+| `MIN_PARAGRAPH_LENGTH` | `10`                 | Minimum paragraph length        |
 
 ---
 
@@ -547,6 +555,19 @@ Blocked headers: `host`, `authorization`, `cookie`, `x-forwarded-for`, `x-real-i
 
 Default: **100 requests/minute** per IP (configurable)
 
+### HTTP Mode Endpoints
+
+When running without `--stdio`, the following endpoints are available:
+
+| Endpoint  | Method | Description                             |
+| --------- | ------ | --------------------------------------- |
+| `/health` | GET    | Health check with uptime and version    |
+| `/mcp`    | POST   | MCP request handling (requires session) |
+| `/mcp`    | GET    | SSE stream for notifications            |
+| `/mcp`    | DELETE | Close session                           |
+
+Sessions are managed via `mcp-session-id` header with 30-minute TTL.
+
 ---
 
 ## Development
@@ -561,22 +582,24 @@ Default: **100 requests/minute** per IP (configurable)
 | `npm run lint`       | Run ESLint                         |
 | `npm run type-check` | TypeScript type checking           |
 | `npm run format`     | Format with Prettier               |
-| `npm test`           | Run tests                          |
+| `npm run release`    | Create new release                 |
+| `npm run knip`       | Find unused exports/dependencies   |
+| `npm run knip:fix`   | Auto-fix unused code               |
 
 ### Tech Stack
 
-| Category           | Technology                       |
-| ------------------ | -------------------------------- |
-| Runtime            | Node.js ≥18                      |
-| Language           | TypeScript 5.9                   |
-| MCP SDK            | @modelcontextprotocol/sdk ^1.0.4 |
-| Content Extraction | @mozilla/readability             |
-| HTML Parsing       | Cheerio, JSDOM                   |
-| Markdown           | Turndown                         |
-| HTTP               | Express, Axios                   |
-| Caching            | node-cache                       |
-| Validation         | Zod                              |
-| Logging            | Winston                          |
+| Category           | Technology                        |
+| ------------------ | --------------------------------- |
+| Runtime            | Node.js ≥20.0.0                   |
+| Language           | TypeScript 5.9                    |
+| MCP SDK            | @modelcontextprotocol/sdk ^1.24.3 |
+| Content Extraction | @mozilla/readability ^0.6.0       |
+| HTML Parsing       | Cheerio ^1.1.2, JSDOM ^27.3.0     |
+| Markdown           | Turndown ^7.2.2                   |
+| HTTP               | Express ^5.2.1, Axios ^1.13.2     |
+| Caching            | node-cache ^5.1.2                 |
+| Validation         | Zod ^3.25.76                      |
+| Logging            | Winston ^3.19.0                   |
 
 ---
 
