@@ -46,35 +46,36 @@
     "knip:fix": "knip --fix"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.4",
+    "@modelcontextprotocol/sdk": "^1.24.3",
     "@mozilla/readability": "^0.6.0",
-    "axios": "^1.7.9",
-    "cheerio": "^1.0.0",
+    "axios": "^1.13.2",
+    "cheerio": "^1.1.2",
     "domhandler": "^5.0.3",
-    "express": "^4.21.2",
-    "jsdom": "^25.0.1",
+    "express": "^5.2.1",
+    "jsdom": "^27.3.0",
     "node-cache": "^5.1.2",
-    "turndown": "^7.2.0",
+    "turndown": "^7.2.2",
     "winston": "^3.19.0",
     "zod": "^3.25.76"
   },
   "devDependencies": {
-    "@eslint/js": "^9.39.1",
+    "@eslint/js": "^9.39.2",
     "@trivago/prettier-plugin-sort-imports": "^6.0.0",
-    "@types/express": "^5.0.0",
-    "@types/jsdom": "^21.1.7",
-    "@types/node": "^24.10.2",
-    "@types/turndown": "^5.0.5",
-    "eslint": "^9.39.1",
+    "@types/express": "^5.0.6",
+    "@types/jsdom": "^27.0.0",
+    "@types/node": "^22.10.0",
+    "@types/turndown": "^5.0.6",
+    "eslint": "^9.23.2",
     "eslint-config-prettier": "^10.1.8",
-    "knip": "^5.72.0",
+    "eslint-plugin-unused-imports": "^4.3.0",
+    "knip": "^5.73.4",
     "prettier": "^3.7.4",
-    "shx": "^0.3.4",
+    "shx": "^0.4.0",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.49.0"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.0.0"
   }
 }

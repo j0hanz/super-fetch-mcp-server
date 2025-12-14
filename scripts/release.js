@@ -3,7 +3,7 @@
 /**
  * Release automation script for superFetch
  * Usage: npm run release [patch|minor|major|<version>]
- * 
+ *
  * This script:
  * 1. Bumps version in package.json
  * 2. Updates server.json to match
@@ -11,12 +11,11 @@
  * 4. Creates git tag
  * 5. Pushes to GitHub (triggers automated publish)
  */
-
 import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import readline from 'readline';
+import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -38,10 +37,10 @@ function log(message, color = 'reset') {
 
 function exec(command, options = {}) {
   try {
-    return execSync(command, { 
+    return execSync(command, {
       cwd: rootDir,
       stdio: 'inherit',
-      ...options 
+      ...options,
     });
   } catch {
     log(`Failed to execute: ${command}`, 'red');
@@ -51,10 +50,10 @@ function exec(command, options = {}) {
 
 function execSilent(command) {
   try {
-    return execSync(command, { 
+    return execSync(command, {
       cwd: rootDir,
       encoding: 'utf8',
-      stdio: 'pipe'
+      stdio: 'pipe',
     }).trim();
   } catch {
     log(`Failed to execute: ${command}`, 'red');
@@ -76,11 +75,11 @@ function writeJson(filePath, data) {
 function prompt(question) {
   const rl = readline.createInterface({
     input: process.stdin,
-    output: process.stdout
+    output: process.stdout,
   });
 
-  return new Promise(resolve => {
-    rl.question(question, answer => {
+  return new Promise((resolve) => {
+    rl.question(question, (answer) => {
       rl.close();
       resolve(answer.trim().toLowerCase());
     });
@@ -90,13 +89,16 @@ function prompt(question) {
 // Main release process
 async function main() {
   const releaseType = process.argv[2] || 'patch';
-  
+
   log('\n🚀 superFetch Release Automation\n', 'cyan');
 
   // Check for uncommitted changes
   const status = execSilent('git status --porcelain');
   if (status) {
-    log('⚠️  You have uncommitted changes. Please commit or stash them first.', 'yellow');
+    log(
+      '⚠️  You have uncommitted changes. Please commit or stash them first.',
+      'yellow'
+    );
     console.log(status);
     process.exit(1);
   }
@@ -112,7 +114,7 @@ async function main() {
   // Read new version from package.json
   const packageJson = readJson('package.json');
   const newVersion = packageJson.version;
-  
+
   log(`✅ Version bumped to: ${newVersion}`, 'green');
 
   // Update server.json
@@ -139,20 +141,26 @@ async function main() {
 
   // Push to remote
   log('\n🌐 Pushing to GitHub...', 'blue');
-  log('This will trigger automated publishing to npm and MCP Registry', 'yellow');
-  
+  log(
+    'This will trigger automated publishing to npm and MCP Registry',
+    'yellow'
+  );
+
   const push = await prompt('Push to GitHub? (y/N): ');
-  
+
   if (push === 'y') {
     exec(`git push origin ${currentBranch}`);
     exec(`git push origin v${newVersion}`);
-    
+
     log('\n✨ Release v' + newVersion + ' completed successfully!', 'green');
     log('\n📋 Next steps:', 'cyan');
     log('  1. GitHub Actions will automatically publish to npm', 'blue');
     log('  2. MCP Registry will be updated', 'blue');
     log('  3. GitHub Release will be created with notes', 'blue');
-    log(`  4. Monitor: https://github.com/j0hanz/super-fetch-mcp-server/actions`, 'blue');
+    log(
+      `  4. Monitor: https://github.com/j0hanz/super-fetch-mcp-server/actions`,
+      'blue'
+    );
   } else {
     log('\n⏸️  Release prepared but not pushed', 'yellow');
     log('To push manually, run:', 'blue');
@@ -161,7 +169,7 @@ async function main() {
   }
 }
 
-main().catch(error => {
+main().catch((error) => {
   log(`\n❌ Release failed: ${error.message}`, 'red');
   process.exit(1);
 });

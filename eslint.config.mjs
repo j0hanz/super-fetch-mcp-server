@@ -1,21 +1,16 @@
 import eslint from '@eslint/js';
 import eslintConfigPrettier from 'eslint-config-prettier';
+import unusedImports from 'eslint-plugin-unused-imports';
 import { defineConfig } from 'eslint/config';
 import tseslint from 'typescript-eslint';
 
 export default defineConfig(
   {
-    ignores: [
-      'dist/**',
-      'node_modules/**',
-      'test-results/**',
-      'reports/**',
-      'coverage/**',
-      '*.d.ts',
-    ],
+    ignores: ['dist', 'node_modules', '*.config.mjs', '*.config.js'],
   },
+
   eslint.configs.recommended,
-  ...tseslint.configs.recommended,
+
   {
     files: ['src/**/*.ts'],
     extends: [
@@ -30,114 +25,166 @@ export default defineConfig(
         tsconfigRootDir: import.meta.dirname,
       },
     },
+    plugins: {
+      'unused-imports': unusedImports,
+    },
     rules: {
-      '@typescript-eslint/no-explicit-any': 'error',
-      '@typescript-eslint/no-unsafe-assignment': 'error',
-      '@typescript-eslint/no-unsafe-member-access': 'error',
-      '@typescript-eslint/no-unsafe-call': 'error',
-      '@typescript-eslint/no-unsafe-return': 'error',
-      '@typescript-eslint/no-unsafe-argument': 'error',
-      '@typescript-eslint/no-non-null-assertion': 'error',
-      '@typescript-eslint/no-unused-vars': [
-        'error',
+      'unused-imports/no-unused-imports': 'error',
+      'unused-imports/no-unused-vars': [
+        'warn',
         {
-          argsIgnorePattern: '^_',
+          vars: 'all',
           varsIgnorePattern: '^_',
-          caughtErrorsIgnorePattern: '^_',
+          args: 'after-used',
+          argsIgnorePattern: '^_',
         },
       ],
-      'no-console': ['warn', { allow: ['warn', 'error'] }],
-      '@typescript-eslint/no-require-imports': 'off',
+
+      '@typescript-eslint/consistent-type-assertions': [
+        'error',
+        {
+          assertionStyle: 'as',
+          objectLiteralTypeAssertions: 'allow-as-parameter',
+        },
+      ],
+
       '@typescript-eslint/consistent-type-imports': [
         'error',
-        { prefer: 'type-imports', fixStyle: 'inline-type-imports' },
+        {
+          prefer: 'type-imports',
+          fixStyle: 'inline-type-imports',
+          disallowTypeAnnotations: true,
+        },
       ],
       '@typescript-eslint/consistent-type-exports': [
         'error',
         { fixMixedExportsWithInlineTypeSpecifier: true },
       ],
-      '@typescript-eslint/no-floating-promises': [
+
+      '@typescript-eslint/explicit-function-return-type': [
         'error',
-        { ignoreVoid: true, ignoreIIFE: true },
+        {
+          allowExpressions: true,
+          allowTypedFunctionExpressions: true,
+          allowHigherOrderFunctions: true,
+          allowDirectConstAssertionInArrowFunctions: true,
+        },
       ],
-      '@typescript-eslint/no-misused-promises': [
+
+      '@typescript-eslint/explicit-member-accessibility': [
         'error',
-        { checksVoidReturn: { arguments: false, attributes: false } },
+        { accessibility: 'no-public' },
       ],
-      '@typescript-eslint/promise-function-async': 'error',
+
+      '@typescript-eslint/naming-convention': [
+        'error',
+        {
+          selector: 'default',
+          format: ['camelCase'],
+          leadingUnderscore: 'allow',
+          trailingUnderscore: 'forbid',
+        },
+        {
+          selector: 'variable',
+          format: ['camelCase', 'UPPER_CASE', 'PascalCase'],
+          leadingUnderscore: 'allow',
+        },
+        {
+          selector: 'typeLike',
+          format: ['PascalCase'],
+        },
+        {
+          selector: 'enumMember',
+          format: ['PascalCase', 'UPPER_CASE'],
+        },
+        {
+          selector: 'property',
+          format: null,
+        },
+        {
+          selector: 'import',
+          format: ['camelCase', 'PascalCase'],
+        },
+      ],
+
+      '@typescript-eslint/no-non-null-assertion': 'warn',
+      '@typescript-eslint/prefer-namespace-keyword': 'error',
+      '@typescript-eslint/prefer-nullish-coalescing': 'error',
+      '@typescript-eslint/prefer-optional-chain': 'error',
+
+      '@typescript-eslint/require-array-sort-compare': [
+        'error',
+        { ignoreStringArrays: true },
+      ],
+
       '@typescript-eslint/restrict-template-expressions': [
         'error',
         {
           allowNumber: true,
-          allowBoolean: true,
-          allowNullish: true,
+          allowBoolean: false,
+          allowAny: false,
+          allowNullish: false,
         },
-      ],
-      '@typescript-eslint/no-deprecated': 'warn',
-      '@typescript-eslint/require-await': 'off',
-      '@typescript-eslint/no-misused-spread': 'off',
-      '@typescript-eslint/no-confusing-void-expression': [
-        'error',
-        { ignoreArrowShorthand: true, ignoreVoidOperator: true },
       ],
 
-      '@typescript-eslint/prefer-nullish-coalescing': 'error',
-      '@typescript-eslint/prefer-optional-chain': 'error',
-      '@typescript-eslint/no-unnecessary-condition': [
+      '@typescript-eslint/no-unnecessary-boolean-literal-compare': 'error',
+      '@typescript-eslint/no-unnecessary-type-arguments': 'error',
+      '@typescript-eslint/no-unnecessary-condition': 'error',
+      '@typescript-eslint/prefer-includes': 'error',
+      '@typescript-eslint/prefer-string-starts-ends-with': 'error',
+      '@typescript-eslint/prefer-for-of': 'error',
+      '@typescript-eslint/require-await': 'error',
+      '@typescript-eslint/no-floating-promises': 'error',
+      '@typescript-eslint/no-for-in-array': 'error',
+      '@typescript-eslint/no-implied-eval': 'error',
+      '@typescript-eslint/no-misused-new': 'error',
+
+      '@typescript-eslint/no-misused-promises': [
         'error',
-        { allowConstantLoopConditions: true },
+        { checksVoidReturn: { arguments: false } },
       ],
-    },
-  },
-  {
-    files: [
-      'tests/**/*.ts',
-      '**/*.config.ts',
-      '**/*.config.mjs',
-      '**/*.config.js',
-    ],
-    rules: {
-      '@typescript-eslint/no-unused-vars': [
-        'error',
+
+      '@typescript-eslint/only-throw-error': 'error',
+
+      'prefer-arrow-callback': 'error',
+      'prefer-const': 'error',
+      'no-var': 'error',
+      'object-shorthand': ['error', 'always'],
+
+      'prefer-destructuring': [
+        'warn',
         {
-          argsIgnorePattern: '^_',
-          varsIgnorePattern: '^_',
-          caughtErrorsIgnorePattern: '^_',
+          array: false,
+          object: true,
         },
       ],
-      'no-console': 'off',
-      '@typescript-eslint/no-explicit-any': 'off',
-      '@typescript-eslint/no-require-imports': 'off',
+
+      'prefer-template': 'error',
+      'no-useless-computed-key': 'error',
+      'no-useless-constructor': 'off',
+      '@typescript-eslint/no-useless-constructor': 'error',
+      'no-duplicate-imports': 'off',
+      'comma-dangle': 'off',
+
+      '@typescript-eslint/no-empty-function': [
+        'error',
+        { allow: ['arrowFunctions'] },
+      ],
+
+      '@typescript-eslint/no-explicit-any': 'error',
+
+      '@typescript-eslint/ban-ts-comment': [
+        'error',
+        {
+          'ts-expect-error': 'allow-with-description',
+          'ts-ignore': 'allow-with-description',
+          'ts-nocheck': true,
+          'ts-check': false,
+          minimumDescriptionLength: 10,
+        },
+      ],
     },
   },
-  {
-    files: ['test-*.mjs', 'tests/**/*.mjs', '**/*.js'],
-    languageOptions: {
-      ecmaVersion: 2022,
-      sourceType: 'module',
-      globals: {
-        console: 'readonly',
-        process: 'readonly',
-        __dirname: 'readonly',
-        __filename: 'readonly',
-        Buffer: 'readonly',
-        setTimeout: 'readonly',
-        clearTimeout: 'readonly',
-        setInterval: 'readonly',
-        clearInterval: 'readonly',
-        setImmediate: 'readonly',
-        clearImmediate: 'readonly',
-        URL: 'readonly',
-        URLSearchParams: 'readonly',
-        fetch: 'readonly',
-        Request: 'readonly',
-        Response: 'readonly',
-        Headers: 'readonly',
-      },
-    },
-    rules: {
-      'no-console': 'off',
-    },
-  },
+
   eslintConfigPrettier
 );
