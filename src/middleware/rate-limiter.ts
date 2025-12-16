@@ -13,6 +13,14 @@ const MAX_MAX_REQUESTS = 10000;
 const MIN_WINDOW_MS = 1000;
 const MAX_WINDOW_MS = 3600000;
 
+// Trusted proxy IPs - only trust proxy headers from these sources
+const TRUSTED_PROXIES = new Set(
+  (process.env.TRUSTED_PROXIES ?? '')
+    .split(',')
+    .map((ip) => ip.trim())
+    .filter(Boolean)
+);
+
 class RateLimiter {
   private readonly store = new Map<string, RateLimitEntry>();
   private readonly maxRequests: number;
@@ -54,17 +62,30 @@ class RateLimiter {
       let entry = this.store.get(key);
 
       if (!entry || now > entry.resetTime) {
+        // New window: start with count=1 (this request)
         entry = {
-          count: 0,
+          count: 1,
           resetTime: now + this.windowMs,
           lastAccessed: now,
         };
         this.store.set(key, entry);
+      } else {
+        // Check limit BEFORE increment to prevent race condition allowing maxRequests+1
+        if (entry.count >= this.maxRequests) {
+          const retryAfter = Math.ceil((entry.resetTime - now) / 1000);
+          res.set('Retry-After', String(retryAfter));
+          res.status(429).json({
+            error: 'Too many requests',
+            retryAfter,
+          });
+          return;
+        }
+        // Existing window: increment after check
+        entry.count++;
+        entry.lastAccessed = now;
       }
 
-      entry.count++;
-      entry.lastAccessed = now;
-
+      // Check should never trigger now, but keep as defensive programming
       if (entry.count > this.maxRequests) {
         const retryAfter = Math.ceil((entry.resetTime - now) / 1000);
         res.set('Retry-After', String(retryAfter));
@@ -85,15 +106,23 @@ class RateLimiter {
 
   private getKey(req: Request): string {
     const fallback = req.ip ?? req.socket.remoteAddress ?? 'unknown';
-    const realIp = req.headers['x-real-ip'];
-    const forwardedFor = req.headers['x-forwarded-for'];
+
+    // Only trust proxy headers if request comes from trusted proxy
+    const sourceIp = req.socket.remoteAddress ?? '';
+    const isTrustedProxy =
+      TRUSTED_PROXIES.size === 0 || TRUSTED_PROXIES.has(sourceIp);
 
     let ip: string = fallback;
-    if (typeof realIp === 'string' && realIp) {
-      ip = realIp;
-    } else if (typeof forwardedFor === 'string') {
-      const firstIp = forwardedFor.split(',')[0]?.trim();
-      if (firstIp) ip = firstIp;
+    if (isTrustedProxy) {
+      const realIp = req.headers['x-real-ip'];
+      const forwardedFor = req.headers['x-forwarded-for'];
+
+      if (typeof realIp === 'string' && realIp) {
+        ip = realIp;
+      } else if (typeof forwardedFor === 'string') {
+        const firstIp = forwardedFor.split(',')[0]?.trim();
+        if (firstIp) ip = firstIp;
+      }
     }
 
     const sanitized = ip.replace(/[^a-fA-F0-9.:]/g, '').substring(0, 45);

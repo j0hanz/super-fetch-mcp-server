@@ -1,3 +1,5 @@
+import { logDebug } from './logger.js';
+
 /**
  * Card link extraction utilities for preserving card-style navigation
  * from documentation sites before Readability strips them.
@@ -212,8 +214,12 @@ function processSemanticCards(document: Document): void {
           container.parentNode?.replaceChild(list, container);
         }
       }
-    } catch {
+    } catch (error) {
       // Selector might be invalid, skip it
+      logDebug('Card selector processing failed (non-critical)', {
+        selector,
+        error: error instanceof Error ? error.message : 'Unknown',
+      });
     }
   }
 }

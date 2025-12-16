@@ -7,9 +7,12 @@ import {
   RateLimitError,
   TimeoutError,
   UrlValidationError,
-} from '../errors/index.js';
+} from '../errors/app-error.js';
 
-const isDevelopment = process.env.NODE_ENV === 'development';
+// Stack traces only exposed when explicitly enabled in development
+const isDevelopment =
+  process.env.NODE_ENV === 'development' &&
+  process.env.EXPOSE_STACK_TRACES === 'true';
 
 export function createToolErrorResponse(
   message: string,

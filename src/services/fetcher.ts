@@ -3,6 +3,7 @@ import axios, {
   type AxiosRequestConfig,
   isCancel,
 } from 'axios';
+import crypto from 'crypto';
 import http from 'http';
 import https from 'https';
 import os from 'os';
@@ -15,6 +16,8 @@ import {
   RateLimitError,
   TimeoutError,
 } from '../errors/app-error.js';
+
+import { validateResolvedIps } from '../utils/url-validator.js';
 
 import { getHtml, setHtml } from './cache.js';
 import { logDebug, logError, logWarn } from './logger.js';
@@ -31,10 +34,12 @@ export interface FetchOptions {
 
 // Use Symbol for request timings (20-30% faster than WeakMap)
 const REQUEST_START_TIME = Symbol('requestStartTime');
+const REQUEST_ID = Symbol('requestId');
 
-// Extend AxiosRequestConfig to include our timing property
+// Extend AxiosRequestConfig to include our timing and tracing properties
 interface TimedAxiosRequestConfig extends AxiosRequestConfig {
   [REQUEST_START_TIME]?: number;
+  [REQUEST_ID]?: string;
 }
 
 const BLOCKED_HEADERS = new Set([
@@ -54,6 +59,10 @@ function sanitizeHeaders(
   const sanitized: Record<string, string> = {};
   for (const [key, value] of Object.entries(headers)) {
     if (!BLOCKED_HEADERS.has(key.toLowerCase())) {
+      // Prevent HTTP header injection via CRLF
+      if (/[\r\n]/.test(key) || /[\r\n]/.test(value)) {
+        continue;
+      }
       sanitized[key] = value;
     }
   }
@@ -61,6 +70,11 @@ function sanitizeHeaders(
   return Object.keys(sanitized).length > 0 ? sanitized : undefined;
 }
 
+/**
+ * Calculate exponential backoff delay with jitter.
+ * Safe for attempt values up to 20 (2^19 = 524288 < Number.MAX_SAFE_INTEGER).
+ * Current max retries is 10, well within safe bounds.
+ */
 function calculateBackoff(attempt: number, maxDelay = 10000): number {
   const baseDelay = Math.min(1000 * Math.pow(2, attempt - 1), maxDelay);
   const jitter = baseDelay * 0.25 * (Math.random() * 2 - 1);
@@ -112,11 +126,13 @@ const client = axios.create({
 
 client.interceptors.request.use(
   (requestConfig) => {
-    // Store timing using Symbol (faster than WeakMap)
-    const config = requestConfig as TimedAxiosRequestConfig;
-    config[REQUEST_START_TIME] = Date.now();
+    // Store timing and request ID using Symbols (faster than WeakMap)
+    const timedConfig = requestConfig as TimedAxiosRequestConfig;
+    timedConfig[REQUEST_START_TIME] = Date.now();
+    timedConfig[REQUEST_ID] = crypto.randomUUID().substring(0, 8);
 
     logDebug('HTTP Request', {
+      requestId: timedConfig[REQUEST_ID],
       method: requestConfig.method?.toUpperCase(),
       url: requestConfig.url,
     });
@@ -130,13 +146,17 @@ client.interceptors.request.use(
 
 client.interceptors.response.use(
   (response) => {
-    const config = response.config as TimedAxiosRequestConfig;
-    const startTime = config[REQUEST_START_TIME];
+    const timedConfig = response.config as TimedAxiosRequestConfig;
+    const startTime = timedConfig[REQUEST_START_TIME];
+    const requestId = timedConfig[REQUEST_ID];
     const duration = startTime ? Date.now() - startTime : 0;
 
-    // Clean up timing data
-    if (config[REQUEST_START_TIME] !== undefined) {
-      config[REQUEST_START_TIME] = undefined;
+    // Clean up timing and tracing data
+    if (timedConfig[REQUEST_START_TIME] !== undefined) {
+      timedConfig[REQUEST_START_TIME] = undefined;
+    }
+    if (timedConfig[REQUEST_ID] !== undefined) {
+      timedConfig[REQUEST_ID] = undefined;
     }
 
     const contentType: unknown = response.headers['content-type'];
@@ -144,6 +164,7 @@ client.interceptors.response.use(
       typeof contentType === 'string' ? contentType : undefined;
 
     logDebug('HTTP Response', {
+      requestId,
       status: response.status,
       url: response.config.url ?? 'unknown',
       contentType: contentTypeStr,
@@ -154,6 +175,7 @@ client.interceptors.response.use(
     // Log slow requests
     if (duration > 5000) {
       logWarn('Slow HTTP request detected', {
+        requestId,
         url: response.config.url ?? 'unknown',
         duration: `${duration}ms`,
       });
@@ -226,6 +248,17 @@ client.interceptors.response.use(
 );
 
 async function fetchUrl(url: string, options?: FetchOptions): Promise<string> {
+  // DNS rebinding protection: validate resolved IPs before fetching
+  try {
+    const urlObj = new URL(url);
+    await validateResolvedIps(urlObj.hostname);
+  } catch (error) {
+    if (error instanceof Error) {
+      throw new FetchError(error.message, url);
+    }
+    throw error;
+  }
+
   const requestConfig: AxiosRequestConfig = {
     method: 'GET',
     url,

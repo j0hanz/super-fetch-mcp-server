@@ -118,7 +118,7 @@ turndown.addRule('fencedCodeBlockWithLanguage', {
       /highlight-(\w+)/.exec(className) ??
       /^(\w+)$/.exec(dataLang);
 
-    // Use detected language from class, or try to detect from content
+    // Use detected language from class, or detect from content using utility
     const language = languageMatch?.[1] ?? detectLanguage(code) ?? '';
 
     return `\n\n\`\`\`${language}\n${code.replace(/\n$/, '')}\n\`\`\`\n\n`;

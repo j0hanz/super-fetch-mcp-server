@@ -6,9 +6,24 @@ import type {
 import * as cache from '../../services/cache.js';
 import type { FetchOptions } from '../../services/fetcher.js';
 import { fetchUrlWithRetry } from '../../services/fetcher.js';
-import { logDebug } from '../../services/logger.js';
+import { logDebug, logWarn } from '../../services/logger.js';
 
 import { validateAndNormalizeUrl } from '../../utils/url-validator.js';
+
+/**
+ * Safe JSON parse with error handling for cache deserialization.
+ * Returns undefined on parse failure, treating it as a cache miss.
+ */
+function safeJsonParse(cached: string, cacheKey: string): unknown {
+  try {
+    return JSON.parse(cached);
+  } catch {
+    logWarn('Cache deserialize failed, treating as miss', {
+      key: cacheKey.substring(0, 100),
+    });
+    return undefined;
+  }
+}
 
 // Request deduplication store to prevent concurrent identical requests
 interface PendingRequest {
@@ -44,7 +59,7 @@ export async function executeFetchPipeline<T>(
     timeout,
     transform,
     serialize = JSON.stringify,
-    deserialize = (cached: string) => JSON.parse(cached) as T,
+    deserialize,
   } = options;
 
   const normalizedUrl = validateAndNormalizeUrl(url);
@@ -55,19 +70,33 @@ export async function executeFetchPipeline<T>(
     const cached = cache.get(cacheKey);
     if (cached) {
       logDebug('Cache hit', { namespace: cacheNamespace, url: normalizedUrl });
-      const data = deserialize(cached.content);
 
-      return {
-        data,
-        fromCache: true,
-        url: normalizedUrl,
-        fetchedAt: cached.fetchedAt,
-      };
+      // Use provided deserializer or safe JSON parse
+      const data = deserialize
+        ? deserialize(cached.content)
+        : (safeJsonParse(cached.content, cacheKey) as T | undefined);
+
+      // If deserialization failed, treat as cache miss
+      if (data === undefined) {
+        logDebug('Cache miss due to deserialize failure', {
+          namespace: cacheNamespace,
+          url: normalizedUrl,
+        });
+      } else {
+        return {
+          data,
+          fromCache: true,
+          url: normalizedUrl,
+          fetchedAt: cached.fetchedAt,
+        };
+      }
     }
   }
 
   // Check for pending request to prevent duplicate fetches
-  const dedupeKey = `${cacheNamespace}:${normalizedUrl}`;
+  // Include custom headers hash to ensure requests with different headers aren't deduplicated
+  const headersKey = customHeaders ? JSON.stringify(customHeaders) : '';
+  const dedupeKey = `${cacheNamespace}:${normalizedUrl}:${headersKey}`;
   const pending = pendingRequests.get(dedupeKey);
   if (pending) {
     logDebug('Request deduplication hit', { url: normalizedUrl });

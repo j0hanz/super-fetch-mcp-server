@@ -4,6 +4,7 @@ import { JSDOM, VirtualConsole } from 'jsdom';
 
 import { Readability } from '@mozilla/readability';
 
+import { config } from '../config/index.js';
 import type {
   ExtractedArticle,
   ExtractedMetadata,
@@ -12,8 +13,6 @@ import type {
 
 import { preserveCardLinks } from './card-extractor.js';
 import { logError, logWarn } from './logger.js';
-
-const MAX_HTML_SIZE = 10 * 1024 * 1024;
 
 // Shared VirtualConsole to suppress JSDOM warnings/errors
 const sharedVirtualConsole = new VirtualConsole();
@@ -114,12 +113,12 @@ export function extractContent(
   }
 
   let processedHtml = html;
-  if (html.length > MAX_HTML_SIZE) {
+  if (html.length > config.constants.maxHtmlSize) {
     logWarn('HTML content exceeds maximum size for extraction, truncating', {
       size: html.length,
-      maxSize: MAX_HTML_SIZE,
+      maxSize: config.constants.maxHtmlSize,
     });
-    processedHtml = html.substring(0, MAX_HTML_SIZE);
+    processedHtml = html.substring(0, config.constants.maxHtmlSize);
   }
 
   try {

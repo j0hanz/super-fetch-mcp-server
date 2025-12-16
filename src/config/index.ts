@@ -48,4 +48,9 @@ export const config = {
     level: process.env.LOG_LEVEL ?? 'info',
     enabled: process.env.ENABLE_LOGGING !== 'false',
   },
+  constants: {
+    maxHtmlSize: 10 * 1024 * 1024, // 10MB
+    maxContentSize: 5 * 1024 * 1024, // 5MB
+    maxUrlLength: 2048,
+  },
 } as const;

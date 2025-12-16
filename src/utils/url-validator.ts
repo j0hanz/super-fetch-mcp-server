@@ -1,6 +1,8 @@
-import { UrlValidationError, ValidationError } from '../errors/app-error.js';
+import dns from 'dns/promises';
 
-const MAX_URL_LENGTH = 2048;
+import { config } from '../config/index.js';
+
+import { UrlValidationError, ValidationError } from '../errors/app-error.js';
 
 const BLOCKED_HOSTS = new Set([
   'localhost',
@@ -29,8 +31,53 @@ const BLOCKED_IP_PATTERNS: readonly RegExp[] = [
   /^::ffff:192\.168\./,
 ];
 
-function isBlockedIp(hostname: string): boolean {
-  return BLOCKED_IP_PATTERNS.some((pattern) => pattern.test(hostname));
+/**
+ * Check if an IP address is in a blocked private range
+ */
+export function isBlockedIp(ip: string): boolean {
+  return BLOCKED_IP_PATTERNS.some((pattern) => pattern.test(ip));
+}
+
+/**
+ * Validate resolved IP addresses to prevent DNS rebinding attacks.
+ * This should be called after DNS resolution to ensure the resolved
+ * IPs are not in blocked private ranges.
+ */
+export async function validateResolvedIps(hostname: string): Promise<void> {
+  // Skip validation for direct IP addresses (already validated in validateAndNormalizeUrl)
+  if (/^[\d.]+$/.test(hostname) || hostname.includes(':')) {
+    return;
+  }
+
+  try {
+    // Resolve IPv4 addresses
+    const ipv4Addresses = await dns.resolve4(hostname).catch(() => []);
+    for (const ip of ipv4Addresses) {
+      if (isBlockedIp(ip) || BLOCKED_HOSTS.has(ip)) {
+        throw new UrlValidationError(
+          `DNS rebinding detected: ${hostname} resolves to blocked IP ${ip}`,
+          hostname
+        );
+      }
+    }
+
+    // Resolve IPv6 addresses
+    const ipv6Addresses = await dns.resolve6(hostname).catch(() => []);
+    for (const ip of ipv6Addresses) {
+      if (isBlockedIp(ip) || BLOCKED_HOSTS.has(ip)) {
+        throw new UrlValidationError(
+          `DNS rebinding detected: ${hostname} resolves to blocked IP ${ip}`,
+          hostname
+        );
+      }
+    }
+  } catch (error) {
+    // Re-throw UrlValidationError, ignore DNS resolution errors
+    if (error instanceof UrlValidationError) {
+      throw error;
+    }
+    // DNS resolution failed - let the actual request handle the error
+  }
 }
 
 export function validateAndNormalizeUrl(urlString: string): string {
@@ -45,10 +92,10 @@ export function validateAndNormalizeUrl(urlString: string): string {
   }
 
   // Check URL length to prevent DoS
-  if (trimmedUrl.length > MAX_URL_LENGTH) {
+  if (trimmedUrl.length > config.constants.maxUrlLength) {
     throw new ValidationError(
-      `URL exceeds maximum length of ${MAX_URL_LENGTH} characters`,
-      { length: trimmedUrl.length, maxLength: MAX_URL_LENGTH }
+      `URL exceeds maximum length of ${config.constants.maxUrlLength} characters`,
+      { length: trimmedUrl.length, maxLength: config.constants.maxUrlLength }
     );
   }
 

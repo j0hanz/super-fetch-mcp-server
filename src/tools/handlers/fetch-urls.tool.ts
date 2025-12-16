@@ -6,6 +6,12 @@ import type {
   MetadataBlock,
   SingleUrlResult,
 } from '../../config/types.js';
+// Inlined from response-builder.ts (single-use utility)
+import type {
+  BatchResponseContent,
+  BatchSummary,
+  ToolResponse,
+} from '../../config/types.js';
 
 import * as cache from '../../services/cache.js';
 import {
@@ -24,10 +30,40 @@ import {
   shouldUseArticle,
   truncateContent,
 } from '../utils/common.js';
-import { createBatchResponse } from '../utils/response-builder.js';
 
 import { toJsonl } from '../../transformers/jsonl.transformer.js';
 import { htmlToMarkdown } from '../../transformers/markdown.transformer.js';
+
+function createBatchResponse(
+  results: BatchUrlResult[]
+): ToolResponse<BatchResponseContent> {
+  const summary: BatchSummary = {
+    total: results.length,
+    successful: results.filter((r) => r.success).length,
+    failed: results.filter((r) => !r.success).length,
+    cached: results.filter((r) => r.cached).length,
+    totalContentBlocks: results.reduce(
+      (sum, r) => sum + (r.contentBlocks ?? 0),
+      0
+    ),
+  };
+
+  const structuredContent: BatchResponseContent = {
+    results,
+    summary,
+    fetchedAt: new Date().toISOString(),
+  };
+
+  return {
+    content: [
+      {
+        type: 'text' as const,
+        text: JSON.stringify(structuredContent, null, 2),
+      },
+    ],
+    structuredContent,
+  };
+}
 
 export const FETCH_URLS_TOOL_NAME = 'fetch-urls';
 export const FETCH_URLS_TOOL_DESCRIPTION =
@@ -78,16 +114,14 @@ async function processSingleUrl(
       const extractedMeta = extractMetadataWithCheerio($);
       ({ title } = extractedMeta);
 
-      if (options.includeMetadata) {
-        metadata = {
-          type: 'metadata' as const,
-          url: normalizedUrl,
-          fetchedAt: new Date().toISOString(),
-          title: extractedMeta.title,
-          description: extractedMeta.description,
-          author: extractedMeta.author,
-        };
-      }
+      // Use buildMetadata helper for consistency
+      metadata = buildMetadata(
+        normalizedUrl,
+        null,
+        extractedMeta,
+        false,
+        options.includeMetadata
+      );
     } else {
       // Slow path: Use JSDOM only when article extraction is needed
       const { article, metadata: extractedMeta } = extractContent(

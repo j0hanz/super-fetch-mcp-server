@@ -3,6 +3,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 
 import { config } from './config/index.js';
 
+import { destroyAgents } from './services/fetcher.js';
 import { logError, logInfo } from './services/logger.js';
 
 import { registerTools } from './tools/index.js';
@@ -23,9 +24,8 @@ export function createMcpServer(): McpServer {
         resources: { listChanged: true, subscribe: true },
         prompts: { listChanged: false },
         logging: {},
-        sampling: {},
       },
-      instructions: `superFetch MCP server v${config.server.version} - AI-optimized web content fetching with JSONL/Markdown output. Provides tools for fetching, parsing, and transforming web content into structured formats suitable for LLM consumption. Supports resource subscriptions for cache updates and LLM sampling for enhanced content processing.`,
+      instructions: `superFetch MCP server v${config.server.version} - AI-optimized web content fetching with JSONL/Markdown output. Provides tools for fetching, parsing, and transforming web content into structured formats suitable for LLM consumption. Supports resource subscriptions for cache updates.`,
     }
   );
 
@@ -49,6 +49,7 @@ export async function startStdioServer(): Promise<void> {
 
   process.on('SIGINT', async () => {
     process.stdout.write('\nShutting down superFetch MCP server...\n');
+    destroyAgents(); // Clean up HTTP connection pools
     await server.close();
     process.exit(0);
   });

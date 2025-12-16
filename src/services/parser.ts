@@ -27,8 +27,6 @@ import { sanitizeText } from '../utils/sanitizer.js';
 
 import { logWarn } from './logger.js';
 
-const MAX_HTML_SIZE = 10 * 1024 * 1024;
-
 // Cache selector for performance
 const CONTENT_SELECTOR =
   'h1, h2, h3, h4, h5, h6, p, ul, ol, pre, code:not(pre code), table, img, blockquote';
@@ -96,7 +94,7 @@ function parseCode($: CheerioAPI, element: Element): CodeBlock | null {
     /highlight-(\w+)/.exec(className) ??
     /^(\w+)$/.exec(dataLang);
 
-  // Use detected language from class, or try to detect from content
+  // Use detected language from class, or detect from content using utility
   const language = languageMatch?.[1] ?? detectLanguage(text);
 
   return {
@@ -222,21 +220,21 @@ export function parseHtml(html: string): ContentBlockUnion[] {
   if (!html || typeof html !== 'string') return [];
 
   let processedHtml = html;
-  if (html.length > MAX_HTML_SIZE) {
+  if (html.length > config.constants.maxHtmlSize) {
     logWarn('HTML content exceeds maximum size, truncating at safe boundary', {
       size: html.length,
-      maxSize: MAX_HTML_SIZE,
+      maxSize: config.constants.maxHtmlSize,
     });
 
     // Use lastIndexOf for O(log n) reverse search (10-100x faster than while loop)
-    const lastTag = html.lastIndexOf('>', MAX_HTML_SIZE);
+    const lastTag = html.lastIndexOf('>', config.constants.maxHtmlSize);
 
     // If we found a tag boundary near the limit (within 10% buffer)
-    if (lastTag !== -1 && lastTag > MAX_HTML_SIZE * 0.9) {
+    if (lastTag !== -1 && lastTag > config.constants.maxHtmlSize * 0.9) {
       processedHtml = html.substring(0, lastTag + 1);
     } else {
       // Fallback: simple truncation if no suitable boundary found
-      processedHtml = html.substring(0, MAX_HTML_SIZE);
+      processedHtml = html.substring(0, config.constants.maxHtmlSize);
     }
   }
 

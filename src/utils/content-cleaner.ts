@@ -100,8 +100,12 @@ const MIN_HEADING_LENGTH = 2;
 const MIN_LIST_ITEM_LENGTH = 3;
 const SHORT_TEXT_THRESHOLD = 25;
 
+// Maximum text length to test against regex patterns (ReDoS protection)
+const MAX_REGEX_INPUT_LENGTH = 500;
+
 /**
  * Check if text matches any noise pattern
+ * Protected against ReDoS by limiting input length
  */
 function isNoiseText(text: string): boolean {
   const trimmed = text.trim();
@@ -109,6 +113,11 @@ function isNoiseText(text: string): boolean {
   // Empty or whitespace-only
   if (!trimmed) {
     return true;
+  }
+
+  // ReDoS protection: skip regex for very long strings
+  if (trimmed.length > MAX_REGEX_INPUT_LENGTH) {
+    return false;
   }
 
   // Check combined noise pattern (single regex test)
@@ -135,34 +144,50 @@ function isNoiseText(text: string): boolean {
 const PLACEHOLDER_PATTERN =
   /^(lorem ipsum|sample text|placeholder|example (text|content|data)|test (text|content|data)|your (text|content|name|email) here|enter (your|a) |type (your|a|something) )/i;
 
-// Cache for placeholder checks to avoid repeated regex tests
-const PLACEHOLDER_CACHE = new Map<string, boolean>();
+// Cache for placeholder checks with TTL to avoid memory leaks
+interface CacheEntry {
+  value: boolean;
+  timestamp: number;
+}
+const PLACEHOLDER_CACHE = new Map<string, CacheEntry>();
 const PLACEHOLDER_CACHE_MAX_SIZE = 1000;
+const PLACEHOLDER_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 /**
  * Check if text looks like placeholder/demo content
- * Uses caching for 3-8x performance improvement on repeated patterns
+ * Uses caching with TTL for performance and memory safety
  */
 function isPlaceholderContent(text: string): boolean {
   const trimmed = text.trim().toLowerCase();
+  const now = Date.now();
 
   // Check cache first
   const cached = PLACEHOLDER_CACHE.get(trimmed);
   if (cached !== undefined) {
-    return cached;
+    // Check if entry is still valid
+    if (now - cached.timestamp < PLACEHOLDER_CACHE_TTL_MS) {
+      return cached.value;
+    }
+    // Expired entry, remove it
+    PLACEHOLDER_CACHE.delete(trimmed);
   }
 
   // Single regex test (faster than array iteration)
   const result = PLACEHOLDER_PATTERN.test(trimmed);
 
-  // Cache result with LRU eviction
+  // Cache result with LRU eviction and timestamp
   if (PLACEHOLDER_CACHE.size >= PLACEHOLDER_CACHE_MAX_SIZE) {
-    const firstKey = PLACEHOLDER_CACHE.keys().next().value;
-    if (firstKey !== undefined) {
-      PLACEHOLDER_CACHE.delete(firstKey);
+    // Remove oldest entries (first 10% of cache)
+    const keysToDelete = Math.ceil(PLACEHOLDER_CACHE_MAX_SIZE * 0.1);
+    const iterator = PLACEHOLDER_CACHE.keys();
+    for (let i = 0; i < keysToDelete; i++) {
+      const key = iterator.next().value;
+      if (key !== undefined) {
+        PLACEHOLDER_CACHE.delete(key);
+      }
     }
   }
-  PLACEHOLDER_CACHE.set(trimmed, result);
+  PLACEHOLDER_CACHE.set(trimmed, { value: result, timestamp: now });
 
   return result;
 }

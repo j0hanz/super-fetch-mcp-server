@@ -1,5 +1,3 @@
-import crypto from 'crypto';
-
 import { ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
@@ -85,37 +83,8 @@ export function registerCachedContentResource(server: McpServer): void {
   );
 }
 
-// Helper function to generate URL hash
-export function generateUrlHash(url: string): string {
-  return crypto.createHash('sha256').update(url).digest('hex');
-}
-
-// Track resource subscriptions
-const subscriptions = new Map<string, Set<string>>();
-
+// Subscription notifications - placeholder until MCP SDK fully supports sendResourceUpdated
 export function setupCacheSubscriptions(): void {
-  // Listen for cache updates and notify subscribers
-  const unsubscribe = cache.onUpdate((key, namespace) => {
-    const parts = key.split(':');
-    const urlHash = parts.slice(1).join(':') || 'unknown';
-    const resourceUri = `superfetch://cache/${namespace}/${urlHash}`;
-    const subscribers = subscriptions.get(resourceUri);
-
-    if (subscribers && subscribers.size > 0) {
-      // Log subscription notification
-      try {
-        // Note: Actual notification would be sent via server.sendResourceUpdated()
-        // when the SDK fully supports it. For now, we track subscriptions.
-        console.log(
-          `[Cache Update] Resource: ${resourceUri}, Subscribers: ${subscribers.size}`
-        );
-      } catch {
-        // Silently ignore notification errors
-      }
-    }
-  });
-
-  // Store unsubscribe function for cleanup
-  process.on('SIGTERM', unsubscribe);
-  process.on('SIGINT', unsubscribe);
+  // No-op: SDK doesn't support resource update notifications yet
+  // When it does, listen to cache.onUpdate() and call server.sendResourceUpdated()
 }

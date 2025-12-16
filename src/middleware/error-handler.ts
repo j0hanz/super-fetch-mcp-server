@@ -2,7 +2,11 @@ import type { NextFunction, Request, Response } from 'express';
 
 import type { ErrorResponse } from '../config/types.js';
 
-import { AppError, RateLimitError, ValidationError } from '../errors/index.js';
+import {
+  AppError,
+  RateLimitError,
+  ValidationError,
+} from '../errors/app-error.js';
 
 import { logError } from '../services/logger.js';
 

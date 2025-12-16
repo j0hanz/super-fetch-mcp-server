@@ -116,6 +116,14 @@ export async function fetchLinksToolHandler(input: FetchLinksInput): Promise<{
 
   let filterPattern: RegExp | undefined;
   if (input.filterPattern) {
+    // ReDoS protection: limit filter pattern length
+    if (input.filterPattern.length > 200) {
+      return createToolErrorResponse(
+        'Filter pattern too long (max 200 characters)',
+        input.url,
+        'VALIDATION_ERROR'
+      );
+    }
     try {
       filterPattern = new RegExp(input.filterPattern, 'i');
     } catch {

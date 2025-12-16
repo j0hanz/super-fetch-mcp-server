@@ -48,7 +48,7 @@
     "knip:fix": "knip --fix"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.24.3",
+    "@modelcontextprotocol/sdk": "^1.25.1",
     "@mozilla/readability": "^0.6.0",
     "axios": "^1.13.2",
     "cheerio": "^1.1.2",
@@ -70,12 +70,12 @@
     "eslint": "^9.23.2",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-unused-imports": "^4.3.0",
-    "knip": "^5.73.4",
+    "knip": "^5.74.0",
     "prettier": "^3.7.4",
     "shx": "^0.4.0",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.49.0"
+    "typescript-eslint": "^8.50.0"
   },
   "engines": {
     "node": ">=20.0.0"

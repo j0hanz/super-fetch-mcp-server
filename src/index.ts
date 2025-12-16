@@ -56,6 +56,30 @@ function getSessionId(req: Request): string | undefined {
   return Array.isArray(header) ? header[0] : header;
 }
 
+/** Type-safe MCP request body structure */
+interface McpRequestBody {
+  method?: string;
+  id?: string | number;
+  jsonrpc?: '2.0';
+  params?: unknown;
+}
+
+/** Validate MCP request body structure */
+function isMcpRequestBody(body: unknown): body is McpRequestBody {
+  if (!body || typeof body !== 'object') return false;
+  const obj = body as Record<string, unknown>;
+  // Allow any object with optional method, id, jsonrpc, params
+  return (
+    ((obj.method === undefined || typeof obj.method === 'string') &&
+      (obj.id === undefined ||
+        typeof obj.id === 'string' ||
+        typeof obj.id === 'number') &&
+      (obj.jsonrpc === undefined || obj.jsonrpc === '2.0') &&
+      obj.params === undefined) ||
+    typeof obj.params === 'object'
+  );
+}
+
 const asyncHandler = (
   fn: (req: Request, res: Response, next: NextFunction) => Promise<void>
 ) => {
@@ -171,7 +195,7 @@ if (isStdioMode) {
           if (sessions.size > 0) scheduleCleanup();
         });
       },
-      5 * 60 * 1000
+      2 * 60 * 1000 // Run every 2 minutes for more aggressive cleanup
     );
 
     cleanupTimeout.unref();
@@ -183,12 +207,26 @@ if (isStdioMode) {
       const sessionId = getSessionId(req);
       let transport: StreamableHTTPServerTransport;
 
-      const body = req.body as
-        | { method?: string; id?: string | number }
-        | undefined;
+      // Validate request body structure
+      if (!isMcpRequestBody(req.body)) {
+        res.status(400).json({
+          jsonrpc: '2.0',
+          error: {
+            code: -32600,
+            message: 'Invalid Request: Malformed request body',
+          },
+          id: null,
+        });
+        return;
+      }
+
+      // Body is validated above as McpRequestBody via type guard.
+      // Express types req.body as 'any', so explicit annotation satisfies ESLint.
+      // eslint-disable-next-line prefer-destructuring -- Direct assignment needed for type safety
+      const body: McpRequestBody = req.body;
       logInfo('[MCP POST]', {
-        method: body?.method,
-        id: body?.id,
+        method: body.method,
+        id: body.id,
         sessionId: sessionId ?? 'none',
         isInitialize: isInitializeRequest(req.body),
         sessionCount: sessions.size,

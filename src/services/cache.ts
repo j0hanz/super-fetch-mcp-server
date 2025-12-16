@@ -52,12 +52,12 @@ export function createCacheKey(namespace: string, url: string): string | null {
   const key = `${namespace}:${url}`;
   if (key.length <= MAX_KEY_LENGTH) return key;
 
-  // Direct SHA-1 hash for long URLs (fast enough without caching: ~1μs)
+  // SHA-256 hash for long URLs (consistent with cached-content.ts)
   const hash = crypto
-    .createHash('sha1')
+    .createHash('sha256')
     .update(url)
     .digest('hex')
-    .substring(0, 40);
+    .substring(0, 64);
   return `${namespace}:hash:${hash}`;
 }
 
@@ -141,7 +141,11 @@ export function getHtml(url: string): string | undefined {
     }
     stats.htmlMisses++;
     return undefined;
-  } catch {
+  } catch (error) {
+    logDebug('HTML cache get error (non-critical)', {
+      url: url.substring(0, 100),
+      error: error instanceof Error ? error.message : 'Unknown',
+    });
     return undefined;
   }
 }
@@ -153,8 +157,11 @@ export function setHtml(url: string, html: string): void {
   try {
     htmlCache.set(url, html);
     logDebug('HTML cached', { url: url.substring(0, 100), size: html.length });
-  } catch {
-    // Ignore HTML cache errors
+  } catch (error) {
+    logDebug('HTML cache set error (non-critical)', {
+      url: url.substring(0, 100),
+      error: error instanceof Error ? error.message : 'Unknown',
+    });
   }
 }
 
