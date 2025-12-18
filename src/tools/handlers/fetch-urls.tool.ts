@@ -9,7 +9,7 @@ import type {
 } from '../../config/types.js';
 
 import * as cache from '../../services/cache.js';
-import { extractContent, extractMetadata } from '../../services/extractor.js';
+import { extractContent } from '../../services/extractor.js';
 import { fetchUrlWithRetry } from '../../services/fetcher.js';
 import { logDebug, logError, logWarn } from '../../services/logger.js';
 import { parseHtml } from '../../services/parser.js';
@@ -133,7 +133,9 @@ function processContentExtraction(
   metadata: MetadataBlock | undefined;
 } {
   if (!options.extractMainContent) {
-    const extractedMeta = extractMetadata(html);
+    const { metadata: extractedMeta } = extractContent(html, normalizedUrl, {
+      extractArticle: false,
+    });
     return {
       sourceHtml: html,
       title: extractedMeta.title,
@@ -241,7 +243,22 @@ async function processSingleUrl(
 }
 
 function extractRejectionMessage({ reason }: PromiseRejectedResult): string {
-  return reason instanceof Error ? reason.message : String(reason);
+  if (reason instanceof Error) {
+    return reason.message;
+  }
+  if (typeof reason === 'string') {
+    return reason;
+  }
+  if (
+    reason &&
+    typeof reason === 'object' &&
+    'message' in reason &&
+    typeof (reason as Record<string, unknown>).message === 'string'
+  ) {
+    const msg = (reason as Record<string, unknown>).message;
+    return msg as string;
+  }
+  return 'Unknown error';
 }
 
 function validateBatchInput(
