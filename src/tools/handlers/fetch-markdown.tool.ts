@@ -25,7 +25,6 @@ export const FETCH_MARKDOWN_TOOL_NAME = 'fetch-markdown';
 export const FETCH_MARKDOWN_TOOL_DESCRIPTION =
   'Fetches a webpage and converts it to clean Markdown format with optional frontmatter, table of contents, and content length limits';
 
-/** Response type for fetch markdown tool */
 interface FetchMarkdownToolResponse {
   [x: string]: unknown;
   content: { type: 'text'; text: string }[];
@@ -33,10 +32,6 @@ interface FetchMarkdownToolResponse {
   isError?: boolean;
 }
 
-/**
- * Generate URL-friendly slug from text.
- * Strips markdown link syntax before slugifying.
- */
 function slugify(text: string): string {
   const cleanText = stripMarkdownLinks(text);
 
@@ -48,10 +43,6 @@ function slugify(text: string): string {
     .trim();
 }
 
-/**
- * Extracts table of contents from markdown headings.
- * Returns entries with clean text (markdown links stripped).
- */
 function extractToc(markdown: string): TocEntry[] {
   const headingRegex = /^(#{1,6})\s+(.+)$/gm;
   const toc: TocEntry[] = [];
@@ -74,9 +65,6 @@ function extractToc(markdown: string): TocEntry[] {
   return toc;
 }
 
-/**
- * Transforms HTML content into Markdown format with optional TOC.
- */
 function transformToMarkdown(
   html: string,
   url: string,
@@ -114,10 +102,6 @@ function transformToMarkdown(
   return { markdown, title, toc, truncated };
 }
 
-/**
- * Handles the fetch-markdown tool invocation.
- * Fetches a URL and transforms content to Markdown format.
- */
 export async function fetchMarkdownToolHandler(
   input: FetchMarkdownInput
 ): Promise<FetchMarkdownToolResponse> {

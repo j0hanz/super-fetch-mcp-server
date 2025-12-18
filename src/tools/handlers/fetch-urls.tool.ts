@@ -27,20 +27,14 @@ import {
 import { toJsonl } from '../../transformers/jsonl.transformer.js';
 import { htmlToMarkdown } from '../../transformers/markdown.transformer.js';
 
-/** Maximum URLs allowed per batch request */
 const MAX_URLS_PER_BATCH = 10;
-
-/** Default concurrent request limit */
 const DEFAULT_CONCURRENCY = 3;
-
-/** Maximum concurrent request limit */
 const MAX_CONCURRENCY = 5;
 
 export const FETCH_URLS_TOOL_NAME = 'fetch-urls';
 export const FETCH_URLS_TOOL_DESCRIPTION =
   'Fetches multiple URLs in parallel and converts them to AI-readable format (JSONL or Markdown). Supports concurrency control and continues on individual failures.';
 
-/** Response type for fetch URLs tool */
 interface FetchUrlsToolResponse {
   [x: string]: unknown;
   content: { type: 'text'; text: string }[];
@@ -48,9 +42,6 @@ interface FetchUrlsToolResponse {
   isError?: boolean;
 }
 
-/**
- * Creates a standardized batch response with summary statistics.
- */
 function createBatchResponse(
   results: BatchUrlResult[]
 ): ToolResponse<BatchResponseContent> {
@@ -82,7 +73,6 @@ function createBatchResponse(
   };
 }
 
-/** Options for processing a single URL in the batch */
 interface SingleUrlProcessOptions {
   readonly extractMainContent: boolean;
   readonly includeMetadata: boolean;
@@ -90,7 +80,6 @@ interface SingleUrlProcessOptions {
   readonly format: 'jsonl' | 'markdown';
 }
 
-/** Result from processing a single URL */
 interface SingleUrlResult {
   url: string;
   success: boolean;
@@ -102,10 +91,6 @@ interface SingleUrlResult {
   errorCode?: string;
 }
 
-/**
- * Attempts to retrieve content from cache for a URL.
- * Returns null if no cache entry exists.
- */
 function attemptCacheRetrievalForUrl(
   normalizedUrl: string,
   format: 'jsonl' | 'markdown'
@@ -127,10 +112,6 @@ function attemptCacheRetrievalForUrl(
   };
 }
 
-/**
- * Transforms HTML content based on format option.
- * Returns content string and optional content block count.
- */
 function transformContentForFormat(
   html: string,
   normalizedUrl: string,
@@ -150,9 +131,6 @@ function transformContentForFormat(
   };
 }
 
-/**
- * Processes content extraction with or without article extraction.
- */
 function processContentExtraction(
   html: string,
   normalizedUrl: string,
@@ -162,7 +140,6 @@ function processContentExtraction(
   title: string | undefined;
   metadata: MetadataBlock | undefined;
 } {
-  // Fast path: Skip JSDOM when extractMainContent is false
   if (!options.extractMainContent) {
     const extractedMeta = extractMetadata(html);
     return {
@@ -178,7 +155,6 @@ function processContentExtraction(
     };
   }
 
-  // Slow path: Use JSDOM for article extraction
   const { article, metadata: extractedMeta } = extractContent(
     html,
     normalizedUrl,
@@ -203,9 +179,6 @@ function processContentExtraction(
   };
 }
 
-/**
- * Processes a single URL: fetch, transform, and cache.
- */
 async function processSingleUrl(
   url: string,
   options: SingleUrlProcessOptions
@@ -213,14 +186,12 @@ async function processSingleUrl(
   try {
     const normalizedUrl = validateAndNormalizeUrl(url);
 
-    // Check cache first
     const cachedResult = attemptCacheRetrievalForUrl(
       normalizedUrl,
       options.format
     );
     if (cachedResult) return cachedResult;
 
-    // Fetch and process content
     const html = await fetchUrlWithRetry(normalizedUrl);
 
     const { sourceHtml, title, metadata } = processContentExtraction(
@@ -241,7 +212,6 @@ async function processSingleUrl(
       options.maxContentLength
     );
 
-    // Cache the result
     const cacheNamespace = options.format === 'markdown' ? 'markdown' : 'url';
     const cacheKey = cache.createCacheKey(cacheNamespace, normalizedUrl);
     if (cacheKey) {
@@ -278,19 +248,10 @@ async function processSingleUrl(
   }
 }
 
-/**
- * Extracts error message from a rejected promise result.
- */
-function extractRejectionMessage(result: PromiseRejectedResult): string {
-  // eslint-disable-next-line prefer-destructuring -- explicit type needed for type safety
-  const reason: unknown = result.reason;
+function extractRejectionMessage({ reason }: PromiseRejectedResult): string {
   return reason instanceof Error ? reason.message : String(reason);
 }
 
-/**
- * Validates batch input and returns filtered valid URLs.
- * Returns error response if validation fails.
- */
 function validateBatchInput(
   input: FetchUrlsInput
 ): string[] | FetchUrlsToolResponse {
@@ -325,10 +286,6 @@ function validateBatchInput(
   return validUrls;
 }
 
-/**
- * Handles the fetch-urls tool invocation.
- * Fetches multiple URLs in parallel with concurrency control.
- */
 export async function fetchUrlsToolHandler(
   input: FetchUrlsInput
 ): Promise<FetchUrlsToolResponse> {
@@ -387,7 +344,6 @@ export async function fetchUrlsToolHandler(
       };
     });
 
-    // Fail fast if continueOnError is false
     if (!continueOnError) {
       const firstError = results.find((result) => !result.success);
       if (firstError && !firstError.success) {

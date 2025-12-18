@@ -12,16 +12,10 @@ import { truncateHtml } from '../utils/html-truncator.js';
 
 import { logError, logWarn } from './logger.js';
 
-// Shared VirtualConsole to suppress JSDOM warnings/errors
 const sharedVirtualConsole = new VirtualConsole();
-sharedVirtualConsole.on('error', () => {
-  /* suppress JSDOM errors */
-});
-sharedVirtualConsole.on('warn', () => {
-  /* suppress JSDOM warnings */
-});
+sharedVirtualConsole.on('error', () => {});
+sharedVirtualConsole.on('warn', () => {});
 
-/** Extract Open Graph meta tags (og:*) */
 function extractOpenGraph(document: Document): {
   title?: string;
   description?: string;
@@ -43,7 +37,6 @@ function extractOpenGraph(document: Document): {
   return data;
 }
 
-/** Extract Twitter Card meta tags (twitter:*) */
 function extractTwitterCard(document: Document): {
   title?: string;
   description?: string;
@@ -64,7 +57,6 @@ function extractTwitterCard(document: Document): {
   return data;
 }
 
-/** Extract standard HTML meta tags */
 function extractStandardMeta(document: Document): {
   title?: string;
   description?: string;
@@ -72,7 +64,6 @@ function extractStandardMeta(document: Document): {
 } {
   const data: { title?: string; description?: string; author?: string } = {};
 
-  // Extract standard meta tags
   const metaTags = document.querySelectorAll('meta[name][content]');
   for (const tag of metaTags) {
     const name = tag.getAttribute('name');
@@ -83,7 +74,6 @@ function extractStandardMeta(document: Document): {
     else if (name === 'author') data.author = content;
   }
 
-  // Extract title from <title> tag if not found
   if (!data.title) {
     const titleEl = document.querySelector('title');
     if (titleEl?.textContent) data.title = titleEl.textContent.trim();
@@ -92,9 +82,6 @@ function extractStandardMeta(document: Document): {
   return data;
 }
 
-/**
- * Extract metadata using JSDOM and inline parsers
- */
 export function extractMetadata(html: string): ExtractedMetadata {
   try {
     const dom = new JSDOM(html);
@@ -104,7 +91,6 @@ export function extractMetadata(html: string): ExtractedMetadata {
     const twitterData = extractTwitterCard(document);
     const standardData = extractStandardMeta(document);
 
-    // Merge with precedence: Open Graph > Twitter > Standard
     return {
       title: ogData.title ?? twitterData.title ?? standardData.title,
       description:
@@ -121,16 +107,11 @@ export function extractMetadata(html: string): ExtractedMetadata {
   }
 }
 
-/**
- * Extract article content using JSDOM + Readability
- * Only called when extractMainContent is true (lazy loading)
- */
 function extractArticleWithJsdom(
   html: string,
   url: string
 ): ExtractedArticle | null {
   try {
-    // Use shared VirtualConsole to reduce per-parse overhead
     const dom = new JSDOM(html, { url, virtualConsole: sharedVirtualConsole });
     const { document } = dom.window;
 
@@ -156,10 +137,6 @@ function extractArticleWithJsdom(
   }
 }
 
-/**
- * Main extraction function - uses Cheerio for metadata (fast)
- * and lazy-loads JSDOM only when article extraction is needed
- */
 export function extractContent(
   html: string,
   url: string,
@@ -176,10 +153,8 @@ export function extractContent(
   }
 
   try {
-    // Fast path: Extract metadata with specialized parsers
     const metadata = extractMetadata(truncateHtml(html));
 
-    // Lazy path: Only use JSDOM when article extraction is requested
     const article = options.extractArticle
       ? extractArticleWithJsdom(truncateHtml(html), url)
       : null;

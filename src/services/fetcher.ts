@@ -16,21 +16,15 @@ import { validateResolvedIps } from '../utils/url-validator.js';
 
 import { logDebug, logError, logWarn } from './logger.js';
 
-/** Options for fetch operations */
 export interface FetchOptions {
-  /** Custom HTTP headers to include in the request */
   customHeaders?: Record<string, string>;
-  /** AbortSignal for request cancellation */
   signal?: AbortSignal;
-  /** Per-request timeout override in milliseconds */
   timeout?: number;
 }
 
-// Use Symbol for request timings (20-30% faster than WeakMap)
 const REQUEST_START_TIME = Symbol('requestStartTime');
 const REQUEST_ID = Symbol('requestId');
 
-// Extend AxiosRequestConfig to include our timing and tracing properties
 interface TimedAxiosRequestConfig extends AxiosRequestConfig {
   [REQUEST_START_TIME]?: number;
   [REQUEST_ID]?: string;
@@ -64,9 +58,8 @@ function sanitizeHeaders(
   return Object.keys(sanitized).length > 0 ? sanitized : undefined;
 }
 
-// Dynamic connection pool sizing based on CPU cores (2-4x throughput on multi-core)
 const CPU_COUNT = os.cpus().length;
-const MAX_SOCKETS = Math.max(CPU_COUNT * 2, 25); // Scale with cores, minimum 25
+const MAX_SOCKETS = Math.max(CPU_COUNT * 2, 25);
 const MAX_FREE_SOCKETS = Math.max(Math.floor(CPU_COUNT * 0.5), 10);
 
 const httpAgent = new http.Agent({
@@ -109,7 +102,6 @@ const client = axios.create({
 
 client.interceptors.request.use(
   (requestConfig) => {
-    // Store timing and request ID using Symbols (faster than WeakMap)
     const timedConfig = requestConfig as TimedAxiosRequestConfig;
     timedConfig[REQUEST_START_TIME] = Date.now();
     timedConfig[REQUEST_ID] = crypto.randomUUID().substring(0, 8);
@@ -134,7 +126,6 @@ client.interceptors.response.use(
     const requestId = timedConfig[REQUEST_ID];
     const duration = startTime ? Date.now() - startTime : 0;
 
-    // Clean up timing and tracing data
     if (timedConfig[REQUEST_START_TIME] !== undefined) {
       timedConfig[REQUEST_START_TIME] = undefined;
     }
@@ -155,7 +146,6 @@ client.interceptors.response.use(
       size: response.headers['content-length'],
     });
 
-    // Log slow requests
     if (duration > 5000) {
       logWarn('Slow HTTP request detected', {
         requestId,
@@ -169,7 +159,6 @@ client.interceptors.response.use(
   (error: AxiosError) => {
     const url = error.config?.url ?? 'unknown';
 
-    // Handle request cancellation (AbortController)
     if (
       isCancel(error) ||
       error.name === 'AbortError' ||
@@ -194,7 +183,6 @@ client.interceptors.response.use(
     if (error.response) {
       const { status, statusText, headers } = error.response;
 
-      // Handle 429 Too Many Requests with Retry-After header
       if (status === 429) {
         const retryAfterHeader = headers['retry-after'] as string | undefined;
         let retryAfterSeconds = 60;
@@ -230,7 +218,6 @@ client.interceptors.response.use(
 );
 
 async function fetchUrl(url: string, options?: FetchOptions): Promise<string> {
-  // DNS rebinding protection: validate resolved IPs before fetching
   try {
     const urlObj = new URL(url);
     await validateResolvedIps(urlObj.hostname);
@@ -247,12 +234,9 @@ async function fetchUrl(url: string, options?: FetchOptions): Promise<string> {
     responseType: 'text',
   };
 
-  // Apply per-request timeout via AbortSignal.timeout() if provided
-  // This is cleaner than axios timeout as it properly cancels the request
   if (options?.signal) {
     requestConfig.signal = options.signal;
   } else if (options?.timeout) {
-    // Use AbortSignal.timeout() for per-request timeout (Node 17.3+)
     requestConfig.signal = AbortSignal.timeout(options.timeout);
   }
 
@@ -280,7 +264,6 @@ async function fetchUrl(url: string, options?: FetchOptions): Promise<string> {
   }
 }
 
-/** Calculate exponential backoff delay with jitter */
 function calculateRetryDelay(attempt: number): number {
   const baseDelayMs = 1000;
   const maxDelayMs = 10000;
@@ -294,7 +277,6 @@ function calculateRetryDelay(attempt: number): number {
   return Math.round(exponentialDelay + jitter);
 }
 
-/** Determine if error should trigger retry */
 function shouldRetryError(
   attempt: number,
   maxRetries: number,
@@ -324,7 +306,6 @@ export async function fetchUrlWithRetry(
   let lastError: Error = new Error(`Failed to fetch ${url}`);
 
   for (let attempt = 1; attempt <= retries; attempt++) {
-    // Check if aborted before attempting (early exit for batch operations)
     if (options?.signal?.aborted) {
       throw new FetchError('Request was aborted before execution', url);
     }

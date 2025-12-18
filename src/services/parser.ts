@@ -28,7 +28,6 @@ import { sanitizeText } from '../utils/sanitizer.js';
 
 import { logWarn } from './logger.js';
 
-// Cache selector for performance
 const CONTENT_SELECTOR =
   'h1, h2, h3, h4, h5, h6, p, ul, ol, pre, code:not(pre code), table, img, blockquote';
 
@@ -60,7 +59,6 @@ function parseParagraph(
 function parseList($: CheerioAPI, element: Element): ListBlock | null {
   const rawItems: string[] = [];
 
-  // Direct .each() iteration - no array allocation overhead
   $(element)
     .find('li')
     .each((_, li) => {
@@ -88,14 +86,12 @@ function parseCode($: CheerioAPI, element: Element): CodeBlock | null {
   const className = $(element).attr('class') ?? '';
   const dataLang = $(element).attr('data-language') ?? '';
 
-  // Check multiple possible class patterns for language
   const languageMatch =
     /language-(\w+)/.exec(className) ??
     /lang-(\w+)/.exec(className) ??
     /highlight-(\w+)/.exec(className) ??
     /^(\w+)$/.exec(dataLang);
 
-  // Use detected language from class, or detect from content using utility
   const language = languageMatch?.[1] ?? detectLanguage(text);
 
   return {
@@ -110,7 +106,6 @@ function parseTable($: CheerioAPI, element: Element): TableBlock | null {
   const rows: string[][] = [];
   const $table = $(element);
 
-  // Direct .each() iteration - no array allocation
   $table.find('thead th, thead td').each((_, cell) => {
     headers.push(sanitizeText($(cell).text()));
   });
@@ -228,7 +223,6 @@ export function parseHtml(html: string): ContentBlockUnion[] {
 
     $('script, style, noscript, iframe, svg').remove();
 
-    // Direct .each() iteration - no array allocation overhead
     $('body')
       .find(CONTENT_SELECTOR)
       .each((_, element) => {
@@ -236,7 +230,7 @@ export function parseHtml(html: string): ContentBlockUnion[] {
           const block = parseElement($, element);
           if (block) blocks.push(block);
         } catch {
-          // Ignore individual element parsing errors
+          /* skip */
         }
       });
 

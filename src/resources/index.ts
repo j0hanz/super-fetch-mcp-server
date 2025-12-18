@@ -7,10 +7,8 @@ import * as cache from '../services/cache.js';
 import { registerCachedContentResource } from './cached-content.js';
 
 export function registerResources(server: McpServer): void {
-  // Register dynamic cached content resources
   registerCachedContentResource(server);
 
-  // Register health check resource
   server.registerResource(
     'health',
     'superfetch://health',
@@ -33,7 +31,7 @@ export function registerResources(server: McpServer): void {
             heapUsed: heapUsedMB,
             heapTotal: heapTotalMB,
             percentage: Math.round((heapUsedMB / heapTotalMB) * 100),
-            healthy: heapUsedMB < 400, // Flag if using > 400MB
+            healthy: heapUsedMB < 400,
           },
         },
         timestamp: new Date().toISOString(),
@@ -51,7 +49,6 @@ export function registerResources(server: McpServer): void {
     }
   );
 
-  // Register server statistics resource
   server.registerResource(
     'stats',
     'superfetch://stats',

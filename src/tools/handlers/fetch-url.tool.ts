@@ -25,9 +25,6 @@ export const FETCH_URL_TOOL_NAME = 'fetch-url';
 export const FETCH_URL_TOOL_DESCRIPTION =
   'Fetches a webpage and converts it to AI-readable JSONL format with semantic content blocks. Supports custom headers, retries, and content length limits.';
 
-/**
- * Transforms HTML content into JSONL format with optional article extraction.
- */
 function transformToJsonl(
   html: string,
   url: string,
@@ -62,7 +59,6 @@ function transformToJsonl(
   };
 }
 
-/** Response type for fetch URL tool */
 interface FetchUrlToolResponse {
   [x: string]: unknown;
   content: { type: 'text'; text: string }[];
@@ -70,10 +66,6 @@ interface FetchUrlToolResponse {
   isError?: boolean;
 }
 
-/**
- * Handles the fetch-url tool invocation.
- * Fetches a URL and transforms content to JSONL format.
- */
 export async function fetchUrlToolHandler(
   input: FetchUrlInput
 ): Promise<FetchUrlToolResponse> {

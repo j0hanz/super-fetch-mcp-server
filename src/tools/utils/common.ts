@@ -4,11 +4,8 @@ import type {
   MetadataBlock,
 } from '../../config/types.js';
 
-/** Shared options for content transformation across all fetch tools */
 export interface ContentTransformOptions {
-  /** Whether to extract main article content using Readability */
   readonly extractMainContent: boolean;
-  /** Whether to include metadata in output */
   readonly includeMetadata: boolean;
 }
 
@@ -46,18 +43,11 @@ export function createContentMetadataBlock(
       };
 }
 
-/** Result of content truncation operation */
 export interface TruncationResult {
-  /** The possibly truncated content */
   readonly content: string;
-  /** Whether the content was truncated */
   readonly truncated: boolean;
 }
 
-/**
- * Enforces maximum content length by truncating if necessary.
- * Returns original content unchanged if within limits.
- */
 export function enforceContentLengthLimit(
   content: string,
   maxLength?: number

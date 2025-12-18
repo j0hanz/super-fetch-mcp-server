@@ -10,10 +10,6 @@ import { logDebug, logWarn } from '../../services/logger.js';
 
 import { validateAndNormalizeUrl } from '../../utils/url-validator.js';
 
-/**
- * Safely parses JSON from cached content.
- * Returns undefined on parse failure to trigger cache miss behavior.
- */
 function safeJsonParse(cached: string, cacheKey: string): unknown {
   try {
     return JSON.parse(cached);
@@ -25,10 +21,6 @@ function safeJsonParse(cached: string, cacheKey: string): unknown {
   }
 }
 
-/**
- * Attempts to retrieve and deserialize cached data.
- * Returns null if no valid cache entry exists.
- */
 function attemptCacheRetrieval<T>(
   cacheKey: string | null,
   deserialize: ((cached: string) => T) | undefined,
@@ -88,7 +80,6 @@ export async function executeFetchPipeline<T>(
   const normalizedUrl = validateAndNormalizeUrl(url);
   const cacheKey = cache.createCacheKey(cacheNamespace, normalizedUrl);
 
-  // Attempt cache retrieval first
   const cachedResult = attemptCacheRetrieval<T>(
     cacheKey,
     deserialize,
@@ -100,7 +91,6 @@ export async function executeFetchPipeline<T>(
     return cachedResult;
   }
 
-  // Cache miss - fetch from source
   const fetchOptions: FetchOptions = {
     customHeaders,
     signal,
@@ -112,7 +102,6 @@ export async function executeFetchPipeline<T>(
   const html = await fetchUrlWithRetry(normalizedUrl, fetchOptions, retries);
   const data = transform(html, normalizedUrl);
 
-  // Store in cache for future requests
   if (cacheKey) {
     const serialized = serialize(data);
     cache.set(cacheKey, serialized);

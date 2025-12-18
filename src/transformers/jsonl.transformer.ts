@@ -3,10 +3,6 @@ import type { ContentBlockUnion, MetadataBlock } from '../config/types.js';
 
 import { truncateText } from '../utils/sanitizer.js';
 
-/**
- * Truncates text content within a content block to configured maximum length.
- * Returns original block unchanged if no truncation needed.
- */
 function truncateBlock(block: ContentBlockUnion): ContentBlockUnion {
   const maxLength = config.extraction.maxBlockLength;
 
@@ -34,9 +30,6 @@ function truncateBlock(block: ContentBlockUnion): ContentBlockUnion {
   }
 }
 
-/**
- * Serializes a single block to JSON, returning null on serialization failure.
- */
 function serializeBlock(block: ContentBlockUnion): string | null {
   try {
     return JSON.stringify(truncateBlock(block));
@@ -45,21 +38,12 @@ function serializeBlock(block: ContentBlockUnion): string | null {
   }
 }
 
-/**
- * Transforms content blocks into JSONL (JSON Lines) format.
- * Each line contains a single JSON object representing a content block.
- *
- * @param blocks - Array of parsed content blocks
- * @param metadata - Optional metadata block to prepend
- * @returns JSONL string with one block per line
- */
 export function toJsonl(
   blocks: readonly ContentBlockUnion[],
   metadata?: MetadataBlock
 ): string {
   const lines: string[] = [];
 
-  // Add minimal metadata (title and URL for context)
   if (metadata) {
     try {
       const minimalMetadata = {
@@ -69,11 +53,10 @@ export function toJsonl(
       };
       lines.push(JSON.stringify(minimalMetadata));
     } catch {
-      // Skip invalid metadata
+      /* skip */
     }
   }
 
-  // Serialize each content block
   for (const block of blocks) {
     const serialized = serializeBlock(block);
     if (serialized) {

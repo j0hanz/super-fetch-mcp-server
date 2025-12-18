@@ -23,9 +23,6 @@ import {
   fetchUrlsToolHandler,
 } from './handlers/fetch-urls.tool.js';
 
-// Zod schemas for runtime validation - single source of truth
-
-// Common request options shared across tools
 const RequestOptionsSchema = {
   customHeaders: z
     .record(z.string())
@@ -45,7 +42,6 @@ const RequestOptionsSchema = {
     .describe('Number of retry attempts (1-10)'),
 };
 
-// Input schemas
 const FetchUrlInputSchema = {
   url: z.string().min(1).describe('The URL to fetch'),
   extractMainContent: z
@@ -167,7 +163,6 @@ const FetchUrlsInputSchema = {
   ...RequestOptionsSchema,
 };
 
-// Output schemas for structured content validation
 const FetchUrlOutputSchema = {
   url: z.string().describe('The fetched URL'),
   title: z.string().optional().describe('Page title'),

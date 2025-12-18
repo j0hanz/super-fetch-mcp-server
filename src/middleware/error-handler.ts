@@ -17,7 +17,6 @@ export function errorHandler(err: Error, req: Request, res: Response): void {
     err
   );
 
-  // Handle Retry-After for rate limiting
   if (isFetchError && err.code === 'RATE_LIMITED' && err.details.retryAfter) {
     const retryAfter = err.details.retryAfter as number;
     res.set('Retry-After', String(retryAfter));
@@ -38,5 +37,4 @@ export function errorHandler(err: Error, req: Request, res: Response): void {
   }
 
   res.status(statusCode).json(response);
-  // Response sent - do NOT call next() as it causes "headers already sent" errors
 }

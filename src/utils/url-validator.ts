@@ -36,19 +36,12 @@ function isBlockedIp(ip: string): boolean {
   return BLOCKED_IP_PATTERNS.some((pattern) => pattern.test(ip));
 }
 
-/**
- * Validate resolved IP addresses to prevent DNS rebinding attacks.
- * This should be called after DNS resolution to ensure the resolved
- * IPs are not in blocked private ranges.
- */
 export async function validateResolvedIps(hostname: string): Promise<void> {
-  // Skip validation for direct IP addresses (already validated in validateAndNormalizeUrl)
   if (/^[\d.]+$/.test(hostname) || hostname.includes(':')) {
     return;
   }
 
   try {
-    // Resolve IPv4 addresses
     const ipv4Addresses = await dns.resolve4(hostname).catch(() => []);
     for (const ip of ipv4Addresses) {
       if (isBlockedIp(ip) || BLOCKED_HOSTS.has(ip)) {
@@ -58,7 +51,6 @@ export async function validateResolvedIps(hostname: string): Promise<void> {
       }
     }
 
-    // Resolve IPv6 addresses
     const ipv6Addresses = await dns.resolve6(hostname).catch(() => []);
     for (const ip of ipv6Addresses) {
       if (isBlockedIp(ip) || BLOCKED_HOSTS.has(ip)) {
@@ -68,16 +60,13 @@ export async function validateResolvedIps(hostname: string): Promise<void> {
       }
     }
   } catch (error) {
-    // Re-throw Error, ignore DNS resolution errors
     if (error instanceof Error && error.message.includes('DNS rebinding')) {
       throw error;
     }
-    // DNS resolution failed - let the actual request handle the error
   }
 }
 
 export function validateAndNormalizeUrl(urlString: string): string {
-  // Check for empty or whitespace-only input
   if (!urlString || typeof urlString !== 'string') {
     throw new Error('URL is required');
   }
@@ -87,7 +76,6 @@ export function validateAndNormalizeUrl(urlString: string): string {
     throw new Error('URL cannot be empty');
   }
 
-  // Check URL length to prevent DoS
   if (trimmedUrl.length > config.constants.maxUrlLength) {
     throw new Error(
       `URL exceeds maximum length of ${config.constants.maxUrlLength} characters`
@@ -102,40 +90,34 @@ export function validateAndNormalizeUrl(urlString: string): string {
     throw new Error('Invalid URL format');
   }
 
-  // Only allow HTTP(S) protocols
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
     throw new Error(
       `Invalid protocol: ${url.protocol}. Only http: and https: are allowed`
     );
   }
 
-  // Block URLs with credentials (user:pass@host)
   if (url.username || url.password) {
     throw new Error('URLs with embedded credentials are not allowed');
   }
 
   const hostname = url.hostname.toLowerCase();
 
-  // Block empty hostname
   if (!hostname) {
     throw new Error('URL must have a valid hostname');
   }
 
-  // Block known internal/metadata hosts
   if (BLOCKED_HOSTS.has(hostname)) {
     throw new Error(
       `Blocked host: ${hostname}. Internal hosts are not allowed`
     );
   }
 
-  // Block private IP ranges
   if (isBlockedIp(hostname)) {
     throw new Error(
       `Blocked IP range: ${hostname}. Private IPs are not allowed`
     );
   }
 
-  // Block hostnames that look like they might resolve to internal addresses
   if (hostname.endsWith('.local') || hostname.endsWith('.internal')) {
     throw new Error(
       `Blocked hostname pattern: ${hostname}. Internal domain suffixes are not allowed`

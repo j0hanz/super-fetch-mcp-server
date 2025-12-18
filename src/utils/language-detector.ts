@@ -1,21 +1,13 @@
-/**
- * Language detection patterns for code blocks
- * Shared between parser and markdown transformer
- */
 const LANGUAGE_PATTERNS = [
-  // JSX/TSX patterns
   [
     /^\s*import\s+.*\s+from\s+['"]react['"]|<[A-Z][a-zA-Z]*[\s/>]|jsx\s*:|className=/m,
     'jsx',
   ],
-  // TypeScript patterns
   [
     /:\s*(string|number|boolean|void|any|unknown|never)\b|interface\s+\w+|type\s+\w+\s*=/m,
     'typescript',
   ],
-  // Rust patterns
   [/^\s*(fn|let\s+mut|impl|struct|enum|use\s+\w+::)/m, 'rust'],
-  // JavaScript patterns (generic)
   [
     /^\s*(export|const|let|var|function|class|async|await)\b|^\s*import\s+.*['"]/m,
     'javascript',
@@ -42,9 +34,6 @@ const LANGUAGE_PATTERNS = [
   [/^\s*(func|package|import\s+")/m, 'go'],
 ] as const;
 
-/**
- * Detect programming language from code content
- */
 export function detectLanguage(code: string): string | undefined {
   return LANGUAGE_PATTERNS.find(([pattern]) => pattern.test(code))?.[1];
 }

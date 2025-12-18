@@ -26,26 +26,23 @@ export function createMcpServer(): McpServer {
     }
   );
 
-  // Register all features using the modern API
   registerTools(server);
   registerResources(server);
 
   return server;
 }
 
-// Export function to start server with stdio transport
 export async function startStdioServer(): Promise<void> {
   const server = createMcpServer();
   const transport = new StdioServerTransport();
 
-  // Error handlers
   server.server.onerror = (error) => {
     logError('[MCP Error]', error instanceof Error ? error : { error });
   };
 
   process.on('SIGINT', async () => {
     process.stdout.write('\nShutting down superFetch MCP server...\n');
-    destroyAgents(); // Clean up HTTP connection pools
+    destroyAgents();
     await server.close();
     process.exit(0);
   });

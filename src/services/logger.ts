@@ -1,9 +1,6 @@
 import { config } from '../config/index.js';
 
-/** Log level hierarchy for filtering */
 type LogLevel = 'debug' | 'info' | 'warn' | 'error';
-
-/** Metadata that can be attached to log entries */
 type LogMetadata = Record<string, unknown>;
 
 function formatMetadata(meta?: LogMetadata): string {

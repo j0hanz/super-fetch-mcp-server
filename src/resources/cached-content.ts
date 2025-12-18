@@ -44,7 +44,6 @@ export function registerCachedContentResource(server: McpServer): void {
     }
   );
 
-  // Helper resource to list cached URLs
   server.registerResource(
     'cached-urls',
     'superfetch://cache/list',

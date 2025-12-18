@@ -21,7 +21,6 @@ import { createMcpServer } from './server.js';
 
 let isShuttingDown = false;
 
-// Ref for shutdown handler to be assigned later
 const shutdownHandlerRef: { current?: (signal: string) => Promise<void> } = {};
 
 process.on('uncaughtException', (error) => {
@@ -57,7 +56,6 @@ function getSessionId(req: Request): string | undefined {
   return Array.isArray(header) ? header[0] : header;
 }
 
-/** Type-safe MCP request body structure */
 interface McpRequestBody {
   method?: string;
   id?: string | number;
@@ -65,7 +63,6 @@ interface McpRequestBody {
   params?: unknown;
 }
 
-/** Validate MCP request body structure */
 function isMcpRequestBody(body: unknown): body is McpRequestBody {
   if (!body || typeof body !== 'object') return false;
   const obj = body as Record<string, unknown>;
@@ -319,7 +316,6 @@ if (isStdioMode) {
     }, 10000).unref();
   };
 
-  // Assign shutdown function for signal handlers and uncaughtException handler
   shutdownHandlerRef.current = shutdownFn;
 
   process.on('SIGINT', () => {
