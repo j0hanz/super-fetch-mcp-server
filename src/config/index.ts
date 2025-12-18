@@ -1,30 +1,67 @@
+function parseInteger(
+  envValue: string | undefined,
+  defaultValue: number,
+  min?: number,
+  max?: number
+): number {
+  if (!envValue) return defaultValue;
+  const parsed = parseInt(envValue, 10);
+  if (isNaN(parsed)) return defaultValue;
+  if (min !== undefined && parsed < min) return defaultValue;
+  if (max !== undefined && parsed > max) return defaultValue;
+  return parsed;
+}
+
+function parseBoolean(
+  envValue: string | undefined,
+  defaultValue: boolean
+): boolean {
+  if (!envValue) return defaultValue;
+  return envValue !== 'false';
+}
+
+function parseLogLevel(
+  envValue: string | undefined
+): 'debug' | 'info' | 'warn' | 'error' {
+  const level = envValue?.toLowerCase();
+  if (
+    level === 'debug' ||
+    level === 'info' ||
+    level === 'warn' ||
+    level === 'error'
+  ) {
+    return level;
+  }
+  return 'info';
+}
+
 export const config = {
   server: {
     name: 'superFetch',
     version: '1.0.0',
-    port: process.env.PORT ? parseInt(process.env.PORT, 10) || 3000 : 3000,
+    port: parseInteger(process.env.PORT, 3000, 1024, 65535),
     host: process.env.HOST ?? '127.0.0.1',
   },
   fetcher: {
-    timeout: 30000,
+    timeout: parseInteger(process.env.FETCH_TIMEOUT, 30000, 5000, 120000),
     maxRedirects: 5,
-    userAgent: 'superFetch-MCP/1.0',
+    userAgent: process.env.USER_AGENT ?? 'superFetch-MCP/1.0',
     maxContentLength: 10485760,
   },
   cache: {
-    enabled: process.env.CACHE_ENABLED !== 'false',
-    ttl: 3600,
-    maxKeys: 100,
+    enabled: parseBoolean(process.env.CACHE_ENABLED, true),
+    ttl: parseInteger(process.env.CACHE_TTL, 3600, 60, 86400),
+    maxKeys: parseInteger(process.env.CACHE_MAX_KEYS, 100, 10, 1000),
   },
   extraction: {
-    extractMainContent: true,
-    includeMetadata: true,
+    extractMainContent: parseBoolean(process.env.EXTRACT_MAIN_CONTENT, true),
+    includeMetadata: parseBoolean(process.env.INCLUDE_METADATA, true),
     maxBlockLength: 5000,
     minParagraphLength: 10,
   },
   logging: {
-    level: process.env.LOG_LEVEL ?? 'info',
-    enabled: process.env.ENABLE_LOGGING !== 'false',
+    level: parseLogLevel(process.env.LOG_LEVEL),
+    enabled: parseBoolean(process.env.ENABLE_LOGGING, true),
   },
   constants: {
     maxHtmlSize: 10 * 1024 * 1024,

@@ -12,8 +12,6 @@
 
 A [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server that fetches, extracts, and transforms web content into AI-optimized formats using Mozilla Readability.
 
-**Version:** 1.0.5
-
 [Quick Start](#quick-start) · [How to Choose a Tool](#-how-to-choose-a-tool) · [Tools](#available-tools) · [Configuration](#configuration) · [Contributing](#contributing)
 
 > 📦 **Published to [MCP Registry](https://registry.modelcontextprotocol.io/)** — Search for `io.github.j0hanz/superfetch`
@@ -108,7 +106,9 @@ Add to `.vscode/mcp.json` in your workspace:
 }
 ```
 
-### With Environment Variables
+### With Custom Configuration
+
+Configure SuperFetch behavior by adding environment variables to the `env` property:
 
 ```json
 {
@@ -118,12 +118,15 @@ Add to `.vscode/mcp.json` in your workspace:
       "args": ["-y", "@j0hanz/superfetch@latest", "--stdio"],
       "env": {
         "CACHE_TTL": "7200",
-        "LOG_LEVEL": "debug"
+        "LOG_LEVEL": "debug",
+        "FETCH_TIMEOUT": "60000"
       }
     }
   }
 }
 ```
+
+See [Configuration](#configuration) section below for all available options and presets.
 
 ### Cursor
 
@@ -456,18 +459,198 @@ Fetches multiple URLs in parallel with concurrency control. Ideal for comparing 
 
 ## Configuration
 
-### Alternative MCP Client Setups
+### Configuration Presets
+
+<details open>
+<summary><strong>Default (Recommended)</strong> — No configuration needed</summary>
+
+```json
+{
+  "servers": {
+    "superFetch": {
+      "command": "npx",
+      "args": ["-y", "@j0hanz/superfetch@latest", "--stdio"]
+    }
+  }
+}
+```
+
+</details>
 
 <details>
-<summary><strong>VS Code (HTTP mode)</strong> — requires running server separately</summary>
+<summary><strong>Debug Mode</strong> — Verbose logging and no cache</summary>
 
-First, start the HTTP server:
+**VS Code** (`.vscode/mcp.json`):
+
+```json
+{
+  "servers": {
+    "superFetch": {
+      "command": "npx",
+      "args": ["-y", "@j0hanz/superfetch@latest", "--stdio"],
+      "env": {
+        "LOG_LEVEL": "debug",
+        "CACHE_ENABLED": "false"
+      }
+    }
+  }
+}
+```
+
+**Claude Desktop** (`claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "superFetch": {
+      "command": "npx",
+      "args": ["-y", "@j0hanz/superfetch@latest", "--stdio"],
+      "env": {
+        "LOG_LEVEL": "debug",
+        "CACHE_ENABLED": "false"
+      }
+    }
+  }
+}
+```
+
+**Cursor** (MCP settings):
+
+```json
+{
+  "mcpServers": {
+    "superFetch": {
+      "command": "npx",
+      "args": ["-y", "@j0hanz/superfetch@latest", "--stdio"],
+      "env": {
+        "LOG_LEVEL": "debug",
+        "CACHE_ENABLED": "false"
+      }
+    }
+  }
+}
+```
+
+</details>
+
+<details>
+<summary><strong>Performance Mode</strong> — Aggressive caching for speed</summary>
+
+```json
+{
+  "servers": {
+    "superFetch": {
+      "command": "npx",
+      "args": ["-y", "@j0hanz/superfetch@latest", "--stdio"],
+      "env": {
+        "CACHE_TTL": "7200",
+        "CACHE_MAX_KEYS": "500",
+        "LOG_LEVEL": "warn"
+      }
+    }
+  }
+}
+```
+
+</details>
+
+<details>
+<summary><strong>Custom User Agent</strong> — For sites that block bots</summary>
+
+```json
+{
+  "servers": {
+    "superFetch": {
+      "command": "npx",
+      "args": ["-y", "@j0hanz/superfetch@latest", "--stdio"],
+      "env": {
+        "USER_AGENT": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+      }
+    }
+  }
+}
+```
+
+</details>
+
+<details>
+<summary><strong>Slow Networks / CI/CD</strong> — Extended timeouts</summary>
+
+```json
+{
+  "servers": {
+    "superFetch": {
+      "command": "npx",
+      "args": ["-y", "@j0hanz/superfetch@latest", "--stdio"],
+      "env": {
+        "FETCH_TIMEOUT": "60000",
+        "CACHE_ENABLED": "false",
+        "LOG_LEVEL": "warn"
+      }
+    }
+  }
+}
+```
+
+</details>
+
+### Available Environment Variables
+
+Configure SuperFetch behavior by adding environment variables to your MCP client configuration's `env` property.
+
+#### 🌐 Fetcher Settings
+
+| Variable        | Default              | Valid Values         | Description                                                     |
+| --------------- | -------------------- | -------------------- | --------------------------------------------------------------- |
+| `FETCH_TIMEOUT` | `30000`              | `5000`-`120000`      | Request timeout in milliseconds (5s-2min)                       |
+| `USER_AGENT`    | `superFetch-MCP/1.0` | Any valid user agent | Custom user agent for requests (useful for sites blocking bots) |
+
+#### 💾 Cache Settings
+
+| Variable         | Default | Valid Values     | Description                            |
+| ---------------- | ------- | ---------------- | -------------------------------------- |
+| `CACHE_ENABLED`  | `true`  | `true` / `false` | Enable response caching                |
+| `CACHE_TTL`      | `3600`  | `60`-`86400`     | Cache lifetime in seconds (1min-24hrs) |
+| `CACHE_MAX_KEYS` | `100`   | `10`-`1000`      | Maximum number of cached entries       |
+
+#### 📝 Logging Settings
+
+| Variable         | Default | Valid Values                        | Description                |
+| ---------------- | ------- | ----------------------------------- | -------------------------- |
+| `LOG_LEVEL`      | `info`  | `debug` / `info` / `warn` / `error` | Logging verbosity level    |
+| `ENABLE_LOGGING` | `true`  | `true` / `false`                    | Enable/disable all logging |
+
+#### 🔍 Extraction Settings
+
+| Variable               | Default | Valid Values     | Description                                        |
+| ---------------------- | ------- | ---------------- | -------------------------------------------------- |
+| `EXTRACT_MAIN_CONTENT` | `true`  | `true` / `false` | Use Mozilla Readability to extract main content    |
+| `INCLUDE_METADATA`     | `true`  | `true` / `false` | Include page metadata (title, description, author) |
+
+### HTTP Mode Configuration
+
+<details>
+<summary><strong>HTTP Mode</strong> (Advanced) — For running as a standalone HTTP server</summary>
+
+SuperFetch can run as an HTTP server for custom integrations. HTTP mode requires additional configuration:
+
+#### Start HTTP Server
 
 ```bash
 npx -y @j0hanz/superfetch@latest
+# Server runs at http://127.0.0.1:3000
 ```
 
-Then add to `.vscode/mcp.json`:
+#### HTTP-Specific Environment Variables
+
+| Variable          | Default     | Description                                      |
+| ----------------- | ----------- | ------------------------------------------------ |
+| `PORT`            | `3000`      | HTTP server port                                 |
+| `HOST`            | `127.0.0.1` | HTTP server host (`0.0.0.0` for Docker/K8s)      |
+| `ALLOWED_ORIGINS` | `[]`        | Comma-separated CORS origins                     |
+| `CORS_ALLOW_ALL`  | `false`     | Allow all CORS origins (dev only, security risk) |
+
+#### VS Code HTTP Mode Setup
 
 ```json
 {
@@ -480,43 +663,24 @@ Then add to `.vscode/mcp.json`:
 }
 ```
 
-</details>
+#### Docker/Kubernetes Example
 
-<details>
-<summary><strong>Claude Desktop (local path)</strong> — for development</summary>
-
-```json
-{
-  "mcpServers": {
-    "superFetch": {
-      "command": "node",
-      "args": ["/path/to/super-fetch-mcp-server/dist/index.js", "--stdio"]
-    }
-  }
-}
+```bash
+PORT=8080 HOST=0.0.0.0 ALLOWED_ORIGINS=https://myapp.com npx @j0hanz/superfetch@latest
 ```
 
 </details>
 
-### Environment Variables
+### Configuration Cookbook
 
-| Variable               | Default              | Description                     |
-| ---------------------- | -------------------- | ------------------------------- |
-| `PORT`                 | `3000`               | HTTP server port                |
-| `HOST`                 | `127.0.0.1`          | HTTP server host                |
-| `FETCH_TIMEOUT`        | `30000`              | Request timeout (ms)            |
-| `MAX_REDIRECTS`        | `5`                  | Maximum HTTP redirects          |
-| `USER_AGENT`           | `superFetch-MCP/1.0` | HTTP User-Agent                 |
-| `MAX_CONTENT_LENGTH`   | `10485760`           | Max response size (bytes)       |
-| `CACHE_ENABLED`        | `true`               | Enable response caching         |
-| `CACHE_TTL`            | `3600`               | Cache TTL (seconds)             |
-| `CACHE_MAX_KEYS`       | `100`                | Maximum cache entries           |
-| `LOG_LEVEL`            | `info`               | Logging level                   |
-| `ENABLE_LOGGING`       | `true`               | Enable/disable logging          |
-| `EXTRACT_MAIN_CONTENT` | `true`               | Extract main content by default |
-| `INCLUDE_METADATA`     | `true`               | Include metadata by default     |
-| `MAX_BLOCK_LENGTH`     | `5000`               | Maximum block length            |
-| `MIN_PARAGRAPH_LENGTH` | `10`                 | Minimum paragraph length        |
+| Use Case                     | Configuration                                                  |
+| ---------------------------- | -------------------------------------------------------------- |
+| 🐛 **Debugging issues**      | `LOG_LEVEL=debug`, `CACHE_ENABLED=false`                       |
+| 🚀 **Maximum performance**   | `CACHE_TTL=7200`, `CACHE_MAX_KEYS=500`, `LOG_LEVEL=error`      |
+| 🌐 **Slow target sites**     | `FETCH_TIMEOUT=60000`                                          |
+| 🤖 **Bypass bot detection**  | `USER_AGENT="Mozilla/5.0 (compatible; MyBot/1.0)"`             |
+| 🔄 **CI/CD (always fresh)**  | `CACHE_ENABLED=false`, `FETCH_TIMEOUT=60000`, `LOG_LEVEL=warn` |
+| 📊 **Production monitoring** | `LOG_LEVEL=warn` or `error`                                    |
 
 ---
 
@@ -592,7 +756,7 @@ Sessions are managed via `mcp-session-id` header with 30-minute TTL.
 | ------------------ | --------------------------------- |
 | Runtime            | Node.js ≥20.0.0                   |
 | Language           | TypeScript 5.9                    |
-| MCP SDK            | @modelcontextprotocol/sdk ^1.24.3 |
+| MCP SDK            | @modelcontextprotocol/sdk ^1.25.1 |
 | Content Extraction | @mozilla/readability ^0.6.0       |
 | HTML Parsing       | Cheerio ^1.1.2, JSDOM ^27.3.0     |
 | Markdown           | Turndown ^7.2.2                   |
