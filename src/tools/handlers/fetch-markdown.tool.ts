@@ -25,12 +25,19 @@ export const FETCH_MARKDOWN_TOOL_NAME = 'fetch-markdown';
 export const FETCH_MARKDOWN_TOOL_DESCRIPTION =
   'Fetches a webpage and converts it to clean Markdown format with optional frontmatter, table of contents, and content length limits';
 
+/** Response type for fetch markdown tool */
+interface FetchMarkdownToolResponse {
+  [x: string]: unknown;
+  content: { type: 'text'; text: string }[];
+  structuredContent?: Record<string, unknown>;
+  isError?: boolean;
+}
+
 /**
- * Generate URL-friendly slug from text
- * Strips markdown link syntax before slugifying
+ * Generate URL-friendly slug from text.
+ * Strips markdown link syntax before slugifying.
  */
 function slugify(text: string): string {
-  // First strip markdown links: [Text](#anchor) -> Text
   const cleanText = stripMarkdownLinks(text);
 
   return cleanText
@@ -42,8 +49,8 @@ function slugify(text: string): string {
 }
 
 /**
- * Extract table of contents from markdown headings
- * Returns clean text without markdown link syntax
+ * Extracts table of contents from markdown headings.
+ * Returns entries with clean text (markdown links stripped).
  */
 function extractToc(markdown: string): TocEntry[] {
   const headingRegex = /^(#{1,6})\s+(.+)$/gm;
@@ -51,29 +58,39 @@ function extractToc(markdown: string): TocEntry[] {
   let match;
 
   while ((match = headingRegex.exec(markdown)) !== null) {
-    if (!match[1] || !match[2]) continue;
-    const rawText = match[2].trim();
-    // Clean markdown links from TOC text: [Usage](#usage) -> Usage
-    const text = stripMarkdownLinks(rawText);
-    toc.push({ level: match[1].length, text, slug: slugify(rawText) });
+    const hashMarks = match[1];
+    const rawText = match[2];
+
+    if (!hashMarks || !rawText) continue;
+
+    const text = stripMarkdownLinks(rawText.trim());
+    toc.push({
+      level: hashMarks.length,
+      text,
+      slug: slugify(rawText),
+    });
   }
 
   return toc;
 }
 
+/**
+ * Transforms HTML content into Markdown format with optional TOC.
+ */
 function transformToMarkdown(
   html: string,
   url: string,
   options: TransformOptions
 ): MarkdownTransformResult {
-  // Only invoke JSDOM when extractMainContent is true (lazy loading optimization)
   const { article, metadata: extractedMeta } = extractContent(html, url, {
     extractArticle: options.extractMainContent,
   });
+
   const shouldExtractFromArticle = determineContentExtractionSource(
     options.extractMainContent,
     article
   );
+
   const metadata = createContentMetadataBlock(
     url,
     article,
@@ -81,6 +98,7 @@ function transformToMarkdown(
     shouldExtractFromArticle,
     options.includeMetadata
   );
+
   const sourceHtml = shouldExtractFromArticle ? article.content : html;
   const title = shouldExtractFromArticle ? article.title : extractedMeta.title;
 
@@ -96,27 +114,27 @@ function transformToMarkdown(
   return { markdown, title, toc, truncated };
 }
 
+/**
+ * Handles the fetch-markdown tool invocation.
+ * Fetches a URL and transforms content to Markdown format.
+ */
 export async function fetchMarkdownToolHandler(
   input: FetchMarkdownInput
-): Promise<{
-  content: { type: 'text'; text: string }[];
-  structuredContent?: Record<string, unknown>;
-  isError?: boolean;
-}> {
+): Promise<FetchMarkdownToolResponse> {
   if (!input.url) {
     return createToolErrorResponse('URL is required', '', 'VALIDATION_ERROR');
   }
 
+  const options: TransformOptions = {
+    extractMainContent: input.extractMainContent ?? true,
+    includeMetadata: input.includeMetadata ?? true,
+    generateToc: input.generateToc ?? false,
+    maxContentLength: input.maxContentLength,
+  };
+
+  logDebug('Fetching markdown', { url: input.url, ...options });
+
   try {
-    const options: TransformOptions = {
-      extractMainContent: input.extractMainContent ?? true,
-      includeMetadata: input.includeMetadata ?? true,
-      generateToc: input.generateToc ?? false,
-      maxContentLength: input.maxContentLength,
-    };
-
-    logDebug('Fetching markdown', { url: input.url, ...options });
-
     const result = await executeFetchPipeline<MarkdownTransformResult>({
       url: input.url,
       cacheNamespace: 'markdown',
@@ -142,17 +160,14 @@ export async function fetchMarkdownToolHandler(
       ...(result.data.truncated && { truncated: result.data.truncated }),
     };
 
+    const jsonOutput = JSON.stringify(
+      structuredContent,
+      result.fromCache ? undefined : null,
+      result.fromCache ? undefined : 2
+    );
+
     return {
-      content: [
-        {
-          type: 'text' as const,
-          text: JSON.stringify(
-            structuredContent,
-            result.fromCache ? undefined : null,
-            result.fromCache ? undefined : 2
-          ),
-        },
-      ],
+      content: [{ type: 'text' as const, text: jsonOutput }],
       structuredContent,
     };
   } catch (error) {

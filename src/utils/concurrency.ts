@@ -1,48 +1,76 @@
-type LimiterFn = <T>(fn: () => Promise<T>) => Promise<T>;
+/** Maximum allowed concurrency to prevent resource exhaustion */
+const MAX_CONCURRENCY_LIMIT = 10;
 
-interface ConcurrencyOptions {
-  onProgress?: (completed: number, total: number) => void;
+/** Minimum concurrency (sequential execution) */
+const MIN_CONCURRENCY = 1;
+
+/** Function that executes a task with concurrency control */
+type ConcurrencyLimitedExecutor = <T>(task: () => Promise<T>) => Promise<T>;
+
+/** Progress callback for monitoring batch execution */
+type ProgressCallback = (completed: number, total: number) => void;
+
+/** Options for concurrent task execution */
+interface ConcurrencyExecutionOptions {
+  /** Optional callback invoked after each task completion */
+  readonly onProgress?: ProgressCallback;
 }
 
-function createConcurrencyLimiter(limit: number): LimiterFn {
-  const maxConcurrency = Math.min(Math.max(1, limit), 10);
-  let active = 0;
-  const queue: (() => void)[] = [];
+/**
+ * Creates a concurrency limiter that controls parallel execution.
+ * Uses a semaphore pattern to limit concurrent operations.
+ */
+function createConcurrencyLimiter(limit: number): ConcurrencyLimitedExecutor {
+  const maxConcurrency = Math.min(
+    Math.max(MIN_CONCURRENCY, limit),
+    MAX_CONCURRENCY_LIMIT
+  );
 
-  return async <T>(fn: () => Promise<T>): Promise<T> => {
-    while (active >= maxConcurrency) {
-      await new Promise<void>((resolve) => queue.push(resolve));
+  let activeCount = 0;
+  const waitingQueue: (() => void)[] = [];
+
+  return async <T>(task: () => Promise<T>): Promise<T> => {
+    while (activeCount >= maxConcurrency) {
+      await new Promise<void>((resolve) => waitingQueue.push(resolve));
     }
 
-    active++;
+    activeCount++;
     try {
-      return await fn();
+      return await task();
     } finally {
-      active--;
-      const next = queue.shift();
-      if (next) next();
+      activeCount--;
+      const nextWaiting = waitingQueue.shift();
+      if (nextWaiting) nextWaiting();
     }
   };
 }
+
+/**
+ * Executes an array of async tasks with controlled concurrency.
+ * All tasks are executed, with results returned as PromiseSettledResult.
+ *
+ * @param limit - Maximum concurrent executions (1-10)
+ * @param tasks - Array of async task functions
+ * @param options - Optional configuration including progress callback
+ * @returns Array of settled results for each task
+ */
 export async function runWithConcurrency<T>(
   limit: number,
-  tasks: (() => Promise<T>)[],
-  options?: ConcurrencyOptions
+  tasks: readonly (() => Promise<T>)[],
+  options?: ConcurrencyExecutionOptions
 ): Promise<PromiseSettledResult<T>[]> {
   const limiter = createConcurrencyLimiter(limit);
-  const total = tasks.length;
-  let completed = 0;
+  const totalTasks = tasks.length;
+  let completedCount = 0;
 
-  const wrappedTasks = tasks.map((task) => async () => {
+  const wrappedTasks = tasks.map((task) => async (): Promise<T> => {
     try {
       return await limiter(task);
     } finally {
-      completed++;
-      if (options?.onProgress) {
-        options.onProgress(completed, total);
-      }
+      completedCount++;
+      options?.onProgress?.(completedCount, totalTasks);
     }
   });
 
-  return Promise.allSettled(wrappedTasks.map(async (task) => task()));
+  return Promise.allSettled(wrappedTasks.map((task) => task()));
 }

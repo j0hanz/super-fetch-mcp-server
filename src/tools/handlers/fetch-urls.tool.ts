@@ -2,9 +2,7 @@ import type {
   BatchUrlResult,
   FetchUrlsInput,
   MetadataBlock,
-  SingleUrlResult,
 } from '../../config/types.js';
-// Inlined from response-builder.ts (single-use utility)
 import type {
   BatchResponseContent,
   BatchSummary,
@@ -29,16 +27,40 @@ import {
 import { toJsonl } from '../../transformers/jsonl.transformer.js';
 import { htmlToMarkdown } from '../../transformers/markdown.transformer.js';
 
+/** Maximum URLs allowed per batch request */
+const MAX_URLS_PER_BATCH = 10;
+
+/** Default concurrent request limit */
+const DEFAULT_CONCURRENCY = 3;
+
+/** Maximum concurrent request limit */
+const MAX_CONCURRENCY = 5;
+
+export const FETCH_URLS_TOOL_NAME = 'fetch-urls';
+export const FETCH_URLS_TOOL_DESCRIPTION =
+  'Fetches multiple URLs in parallel and converts them to AI-readable format (JSONL or Markdown). Supports concurrency control and continues on individual failures.';
+
+/** Response type for fetch URLs tool */
+interface FetchUrlsToolResponse {
+  [x: string]: unknown;
+  content: { type: 'text'; text: string }[];
+  structuredContent?: Record<string, unknown>;
+  isError?: boolean;
+}
+
+/**
+ * Creates a standardized batch response with summary statistics.
+ */
 function createBatchResponse(
   results: BatchUrlResult[]
 ): ToolResponse<BatchResponseContent> {
   const summary: BatchSummary = {
     total: results.length,
-    successful: results.filter((r) => r.success).length,
-    failed: results.filter((r) => !r.success).length,
-    cached: results.filter((r) => r.cached).length,
+    successful: results.filter((result) => result.success).length,
+    failed: results.filter((result) => !result.success).length,
+    cached: results.filter((result) => result.cached).length,
     totalContentBlocks: results.reduce(
-      (sum, r) => sum + (r.contentBlocks ?? 0),
+      (sum, result) => sum + (result.contentBlocks ?? 0),
       0
     ),
   };
@@ -60,109 +82,177 @@ function createBatchResponse(
   };
 }
 
-export const FETCH_URLS_TOOL_NAME = 'fetch-urls';
-export const FETCH_URLS_TOOL_DESCRIPTION =
-  'Fetches multiple URLs in parallel and converts them to AI-readable format (JSONL or Markdown). Supports concurrency control and continues on individual failures.';
-
-const MAX_URLS = 10;
-const DEFAULT_CONCURRENCY = 3;
-
-interface ProcessOptions {
-  extractMainContent: boolean;
-  includeMetadata: boolean;
-  maxContentLength?: number | undefined;
-  format: 'jsonl' | 'markdown';
+/** Options for processing a single URL in the batch */
+interface SingleUrlProcessOptions {
+  readonly extractMainContent: boolean;
+  readonly includeMetadata: boolean;
+  readonly maxContentLength?: number;
+  readonly format: 'jsonl' | 'markdown';
 }
 
-async function processSingleUrl(
-  url: string,
-  options: ProcessOptions
-): Promise<SingleUrlResult> {
-  try {
-    const normalizedUrl = validateAndNormalizeUrl(url);
-    const cacheNamespace = options.format === 'markdown' ? 'markdown' : 'url';
-    const cacheKey = cache.createCacheKey(cacheNamespace, normalizedUrl);
+/** Result from processing a single URL */
+interface SingleUrlResult {
+  url: string;
+  success: boolean;
+  title?: string;
+  content?: string;
+  contentBlocks?: number;
+  cached: boolean;
+  error?: string;
+  errorCode?: string;
+}
 
-    if (cacheKey) {
-      const cached = cache.get(cacheKey);
-      if (cached) {
-        logDebug('Batch cache hit', { url: normalizedUrl });
-        return {
-          url: normalizedUrl,
-          success: true,
-          content: cached.content,
-          cached: true,
-        };
-      }
-    }
+/**
+ * Attempts to retrieve content from cache for a URL.
+ * Returns null if no cache entry exists.
+ */
+function attemptCacheRetrievalForUrl(
+  normalizedUrl: string,
+  format: 'jsonl' | 'markdown'
+): SingleUrlResult | null {
+  const cacheNamespace = format === 'markdown' ? 'markdown' : 'url';
+  const cacheKey = cache.createCacheKey(cacheNamespace, normalizedUrl);
 
-    const html = await fetchUrlWithRetry(normalizedUrl);
+  if (!cacheKey) return null;
 
-    let sourceHtml: string;
-    let title: string | undefined;
-    let metadata: MetadataBlock | undefined;
+  const cached = cache.get(cacheKey);
+  if (!cached) return null;
 
-    // Fast path: Skip JSDOM entirely when extractMainContent is false
-    if (!options.extractMainContent) {
-      sourceHtml = html;
-      const extractedMeta = extractMetadata(html);
-      ({ title } = extractedMeta);
+  logDebug('Batch cache hit', { url: normalizedUrl });
+  return {
+    url: normalizedUrl,
+    success: true,
+    content: cached.content,
+    cached: true,
+  };
+}
 
-      // Use createContentMetadataBlock helper for consistency
-      metadata = createContentMetadataBlock(
+/**
+ * Transforms HTML content based on format option.
+ * Returns content string and optional content block count.
+ */
+function transformContentForFormat(
+  html: string,
+  normalizedUrl: string,
+  metadata: MetadataBlock | undefined,
+  format: 'jsonl' | 'markdown'
+): { content: string; contentBlocks?: number } {
+  if (format === 'markdown') {
+    return {
+      content: htmlToMarkdown(html, metadata),
+    };
+  }
+
+  const blocks = parseHtml(html);
+  return {
+    content: toJsonl(blocks, metadata),
+    contentBlocks: blocks.length,
+  };
+}
+
+/**
+ * Processes content extraction with or without article extraction.
+ */
+function processContentExtraction(
+  html: string,
+  normalizedUrl: string,
+  options: SingleUrlProcessOptions
+): {
+  sourceHtml: string;
+  title: string | undefined;
+  metadata: MetadataBlock | undefined;
+} {
+  // Fast path: Skip JSDOM when extractMainContent is false
+  if (!options.extractMainContent) {
+    const extractedMeta = extractMetadata(html);
+    return {
+      sourceHtml: html,
+      title: extractedMeta.title,
+      metadata: createContentMetadataBlock(
         normalizedUrl,
         null,
         extractedMeta,
         false,
         options.includeMetadata
-      );
-    } else {
-      // Slow path: Use JSDOM only when article extraction is needed
-      const { article, metadata: extractedMeta } = extractContent(
-        html,
-        normalizedUrl,
-        {
-          extractArticle: true,
-        }
-      );
-      const shouldExtractFromArticle = determineContentExtractionSource(
-        true,
-        article
-      );
-      metadata = createContentMetadataBlock(
-        normalizedUrl,
-        article,
-        extractedMeta,
-        shouldExtractFromArticle,
-        options.includeMetadata
-      );
-      sourceHtml = shouldExtractFromArticle ? article.content : html;
-      title = shouldExtractFromArticle ? article.title : extractedMeta.title;
-    }
+      ),
+    };
+  }
 
-    let content: string;
-    let contentBlocks: number | undefined;
+  // Slow path: Use JSDOM for article extraction
+  const { article, metadata: extractedMeta } = extractContent(
+    html,
+    normalizedUrl,
+    { extractArticle: true }
+  );
 
-    if (options.format === 'markdown') {
-      content = htmlToMarkdown(sourceHtml, metadata);
-    } else {
-      const blocks = parseHtml(sourceHtml);
-      contentBlocks = blocks.length;
-      content = toJsonl(blocks, metadata);
-    }
+  const shouldExtractFromArticle = determineContentExtractionSource(
+    true,
+    article
+  );
 
-    const { content: truncatedContent } = enforceContentLengthLimit(
+  return {
+    sourceHtml: shouldExtractFromArticle ? article.content : html,
+    title: shouldExtractFromArticle ? article.title : extractedMeta.title,
+    metadata: createContentMetadataBlock(
+      normalizedUrl,
+      article,
+      extractedMeta,
+      shouldExtractFromArticle,
+      options.includeMetadata
+    ),
+  };
+}
+
+/**
+ * Processes a single URL: fetch, transform, and cache.
+ */
+async function processSingleUrl(
+  url: string,
+  options: SingleUrlProcessOptions
+): Promise<SingleUrlResult> {
+  try {
+    const normalizedUrl = validateAndNormalizeUrl(url);
+
+    // Check cache first
+    const cachedResult = attemptCacheRetrievalForUrl(
+      normalizedUrl,
+      options.format
+    );
+    if (cachedResult) return cachedResult;
+
+    // Fetch and process content
+    const html = await fetchUrlWithRetry(normalizedUrl);
+
+    const { sourceHtml, title, metadata } = processContentExtraction(
+      html,
+      normalizedUrl,
+      options
+    );
+
+    const { content, contentBlocks } = transformContentForFormat(
+      sourceHtml,
+      normalizedUrl,
+      metadata,
+      options.format
+    );
+
+    const { content: finalContent } = enforceContentLengthLimit(
       content,
       options.maxContentLength
     );
-    content = truncatedContent;
-    if (cacheKey) cache.set(cacheKey, content);
+
+    // Cache the result
+    const cacheNamespace = options.format === 'markdown' ? 'markdown' : 'url';
+    const cacheKey = cache.createCacheKey(cacheNamespace, normalizedUrl);
+    if (cacheKey) {
+      cache.set(cacheKey, finalContent);
+    }
 
     return {
       url: normalizedUrl,
       success: true,
       title,
-      content,
+      content: finalContent,
       contentBlocks,
       cached: false,
     };
@@ -177,6 +267,7 @@ async function processSingleUrl(
         : 'FETCH_ERROR';
 
     logWarn('Batch URL processing failed', { url, error: errorMessage });
+
     return {
       url,
       success: false,
@@ -187,46 +278,70 @@ async function processSingleUrl(
   }
 }
 
-export async function fetchUrlsToolHandler(input: FetchUrlsInput): Promise<{
-  content: { type: 'text'; text: string }[];
-  structuredContent?: Record<string, unknown>;
-  isError?: boolean;
-}> {
-  try {
-    // Validate input - urls array is guaranteed by Zod schema but check for empty
-    if (input.urls.length === 0) {
-      return createToolErrorResponse(
-        'At least one URL is required',
-        '',
-        'VALIDATION_ERROR'
-      );
-    }
+/**
+ * Extracts error message from a rejected promise result.
+ */
+function extractRejectionMessage(result: PromiseRejectedResult): string {
+  // eslint-disable-next-line prefer-destructuring -- explicit type needed for type safety
+  const reason: unknown = result.reason;
+  return reason instanceof Error ? reason.message : String(reason);
+}
 
-    // Enforce max URLs limit
-    if (input.urls.length > MAX_URLS) {
-      return createToolErrorResponse(
-        `Maximum ${MAX_URLS} URLs allowed per batch`,
-        '',
-        'VALIDATION_ERROR'
-      );
-    }
-
-    // Filter out empty URLs
-    const validUrls = input.urls.filter(
-      (url) => typeof url === 'string' && url.trim().length > 0
+/**
+ * Validates batch input and returns filtered valid URLs.
+ * Returns error response if validation fails.
+ */
+function validateBatchInput(
+  input: FetchUrlsInput
+): string[] | FetchUrlsToolResponse {
+  if (input.urls.length === 0) {
+    return createToolErrorResponse(
+      'At least one URL is required',
+      '',
+      'VALIDATION_ERROR'
     );
+  }
 
-    if (validUrls.length === 0) {
-      return createToolErrorResponse(
-        'No valid URLs provided',
-        '',
-        'VALIDATION_ERROR'
-      );
+  if (input.urls.length > MAX_URLS_PER_BATCH) {
+    return createToolErrorResponse(
+      `Maximum ${MAX_URLS_PER_BATCH} URLs allowed per batch`,
+      '',
+      'VALIDATION_ERROR'
+    );
+  }
+
+  const validUrls = input.urls.filter(
+    (url) => typeof url === 'string' && url.trim().length > 0
+  );
+
+  if (validUrls.length === 0) {
+    return createToolErrorResponse(
+      'No valid URLs provided',
+      '',
+      'VALIDATION_ERROR'
+    );
+  }
+
+  return validUrls;
+}
+
+/**
+ * Handles the fetch-urls tool invocation.
+ * Fetches multiple URLs in parallel with concurrency control.
+ */
+export async function fetchUrlsToolHandler(
+  input: FetchUrlsInput
+): Promise<FetchUrlsToolResponse> {
+  try {
+    const validationResult = validateBatchInput(input);
+    if (!Array.isArray(validationResult)) {
+      return validationResult;
     }
 
+    const validUrls = validationResult;
     const concurrency = Math.min(
       Math.max(1, input.concurrency ?? DEFAULT_CONCURRENCY),
-      5
+      MAX_CONCURRENCY
     );
     const continueOnError = input.continueOnError ?? true;
     const format = input.format ?? 'jsonl';
@@ -237,18 +352,17 @@ export async function fetchUrlsToolHandler(input: FetchUrlsInput): Promise<{
       format,
     });
 
-    // Create tasks for each URL
+    const processOptions: SingleUrlProcessOptions = {
+      extractMainContent: input.extractMainContent ?? true,
+      includeMetadata: input.includeMetadata ?? true,
+      maxContentLength: input.maxContentLength,
+      format,
+    };
+
     const tasks = validUrls.map(
-      (url) => async () =>
-        processSingleUrl(url, {
-          extractMainContent: input.extractMainContent ?? true,
-          includeMetadata: input.includeMetadata ?? true,
-          maxContentLength: input.maxContentLength,
-          format,
-        })
+      (url) => () => processSingleUrl(url, processOptions)
     );
 
-    // Execute with concurrency control
     const settledResults = await runWithConcurrency(concurrency, tasks, {
       onProgress: (completed, total) => {
         logDebug('Batch progress', {
@@ -259,33 +373,23 @@ export async function fetchUrlsToolHandler(input: FetchUrlsInput): Promise<{
       },
     });
 
-    // Helper to safely extract error message from rejected promise
-    const getErrorMessage = ({ reason }: PromiseRejectedResult): string => {
-      const typedReason: unknown = reason;
-      return typedReason instanceof Error
-        ? typedReason.message
-        : String(typedReason);
-    };
-
-    // Process results
     const results: BatchUrlResult[] = settledResults.map((result, index) => {
       if (result.status === 'fulfilled') {
         return result.value;
-      } else {
-        // Promise rejection (shouldn't happen as processSingleUrl catches errors)
-        return {
-          url: validUrls[index] ?? 'unknown',
-          success: false as const,
-          cached: false as const,
-          error: getErrorMessage(result),
-          errorCode: 'PROMISE_REJECTED',
-        };
       }
+
+      return {
+        url: validUrls[index] ?? 'unknown',
+        success: false as const,
+        cached: false as const,
+        error: extractRejectionMessage(result),
+        errorCode: 'PROMISE_REJECTED',
+      };
     });
 
-    // Check if we should fail fast on errors
+    // Fail fast if continueOnError is false
     if (!continueOnError) {
-      const firstError = results.find((r) => !r.success);
+      const firstError = results.find((result) => !result.success);
       if (firstError && !firstError.success) {
         const errorMsg = firstError.error ?? 'Unknown error';
         return createToolErrorResponse(

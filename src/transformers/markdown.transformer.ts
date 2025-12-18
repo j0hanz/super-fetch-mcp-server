@@ -4,8 +4,10 @@ import type { MetadataBlock } from '../config/types.js';
 
 import { detectLanguage } from '../utils/language-detector.js';
 
-// Markdown-specific noise patterns (minimal set - content-cleaner.ts handles most filtering)
-// Only patterns that commonly appear as standalone lines in markdown output
+/**
+ * Noise line patterns that should be removed from markdown output.
+ * These patterns commonly appear as standalone lines from HTML conversion.
+ */
 const NOISE_LINE_PATTERNS: readonly RegExp[] = [
   // Single letters or panel labels (common in code examples)
   /^[A-Z]$/,
@@ -18,56 +20,51 @@ const NOISE_LINE_PATTERNS: readonly RegExp[] = [
   /^\(\d+\)$/,
 ] as const;
 
+/** Pattern to match triple or more consecutive newlines */
+const MULTIPLE_NEWLINES = /\n{3,}/g;
+
 /**
- * Check if a line is noise that should be removed
+ * Determines if a line is noise that should be removed from markdown.
+ * Preserves lines starting with markdown syntax (headings, lists, code, etc.)
  */
 function isNoiseLine(line: string): boolean {
   const trimmed = line.trim();
 
-  // Empty lines are fine
+  // Empty lines are preserved
   if (!trimmed) return false;
 
-  // Don't filter lines inside code blocks, headings, or lists
-  if (
-    trimmed.startsWith('#') ||
-    trimmed.startsWith('-') ||
-    trimmed.startsWith('*') ||
-    trimmed.startsWith('`') ||
-    trimmed.startsWith('>') ||
-    trimmed.startsWith('|')
-  ) {
+  // Preserve lines with markdown syntax
+  const markdownPrefixes = ['#', '-', '*', '`', '>', '|'];
+  if (markdownPrefixes.some((prefix) => trimmed.startsWith(prefix))) {
     return false;
   }
 
   // Check against noise patterns
-  for (const pattern of NOISE_LINE_PATTERNS) {
-    if (pattern.test(trimmed)) {
-      return true;
-    }
-  }
-
-  return false;
+  return NOISE_LINE_PATTERNS.some((pattern) => pattern.test(trimmed));
 }
 
+/** Fence marker for code blocks */
+const CODE_FENCE = '```';
+
 /**
- * Post-process markdown to remove noise lines
+ * Post-processes markdown content to remove noise lines.
+ * Preserves content inside code blocks.
  */
 function cleanMarkdownContent(markdown: string): string {
-  // Split by lines but preserve code blocks
   const lines = markdown.split('\n');
   const cleanedLines: string[] = [];
-  let inCodeBlock = false;
+  let insideCodeBlock = false;
 
   for (const line of lines) {
     // Track code block boundaries
-    if (line.trim().startsWith('```')) {
-      inCodeBlock = !inCodeBlock;
+    if (line.trim().startsWith(CODE_FENCE)) {
+      insideCodeBlock = !insideCodeBlock;
       cleanedLines.push(line);
       continue;
     }
 
-    // Don't filter inside code blocks
-    if (inCodeBlock) {
+    // Preserve all content inside code blocks
+    if (insideCodeBlock) {
       cleanedLines.push(line);
       continue;
     }
@@ -125,18 +122,25 @@ turndown.addRule('fencedCodeBlockWithLanguage', {
   },
 });
 
-// Pre-compiled regex patterns
+// Pre-compiled regex patterns for YAML value escaping
 const YAML_SPECIAL_CHARS = /[:[\]{}"\n\r\t'|>&*!?,#]/;
 const YAML_NUMERIC = /^[\d.]+$/;
 const YAML_RESERVED_WORDS = /^(true|false|null|yes|no|on|off)$/i;
-const ESCAPE_BACKSLASH = /\\/g;
-const ESCAPE_QUOTE = /"/g;
-const ESCAPE_NEWLINE = /\n/g;
-const ESCAPE_TAB = /\t/g;
-const MULTIPLE_NEWLINES = /\n{3,}/g;
 
+// Escape sequence replacements
+const ESCAPE_PATTERNS = {
+  backslash: /\\/g,
+  quote: /"/g,
+  newline: /\n/g,
+  tab: /\t/g,
+} as const;
+
+/**
+ * Escapes a string value for safe YAML serialization.
+ * Wraps in quotes when the value contains special characters.
+ */
 function escapeYamlValue(value: string): string {
-  const needsQuoting =
+  const requiresQuoting =
     YAML_SPECIAL_CHARS.test(value) ||
     value.startsWith(' ') ||
     value.endsWith(' ') ||
@@ -144,43 +148,59 @@ function escapeYamlValue(value: string): string {
     YAML_NUMERIC.test(value) ||
     YAML_RESERVED_WORDS.test(value);
 
-  if (!needsQuoting) return value;
+  if (!requiresQuoting) {
+    return value;
+  }
 
-  return `"${value
-    .replace(ESCAPE_BACKSLASH, '\\\\')
-    .replace(ESCAPE_QUOTE, '\\"')
-    .replace(ESCAPE_NEWLINE, '\\n')
-    .replace(ESCAPE_TAB, '\\t')}"`;
+  const escaped = value
+    .replace(ESCAPE_PATTERNS.backslash, '\\\\')
+    .replace(ESCAPE_PATTERNS.quote, '\\"')
+    .replace(ESCAPE_PATTERNS.newline, '\\n')
+    .replace(ESCAPE_PATTERNS.tab, '\\t');
+
+  return `"${escaped}"`;
 }
 
+/**
+ * Creates YAML frontmatter from metadata block.
+ */
 function createFrontmatter(metadata: MetadataBlock): string {
   const lines = ['---'];
-  if (metadata.title) lines.push(`title: ${escapeYamlValue(metadata.title)}`);
-  if (metadata.url) lines.push(`source: ${escapeYamlValue(metadata.url)}`);
+
+  if (metadata.title) {
+    lines.push(`title: ${escapeYamlValue(metadata.title)}`);
+  }
+  if (metadata.url) {
+    lines.push(`source: ${escapeYamlValue(metadata.url)}`);
+  }
+
   lines.push('---');
   return lines.join('\n');
 }
 
+/**
+ * Converts HTML content to clean Markdown format.
+ * Optionally prepends YAML frontmatter with metadata.
+ *
+ * @param html - Raw HTML content to convert
+ * @param metadata - Optional metadata for YAML frontmatter
+ * @returns Markdown string, optionally with frontmatter
+ */
 export function htmlToMarkdown(html: string, metadata?: MetadataBlock): string {
+  const frontmatter = metadata ? createFrontmatter(metadata) : '';
+
   if (!html || typeof html !== 'string') {
-    return metadata ? `${createFrontmatter(metadata)}\n\n` : '';
+    return frontmatter ? `${frontmatter}\n\n` : '';
   }
 
-  let content = '';
   try {
-    content = turndown.turndown(html);
+    let content = turndown.turndown(html);
     content = content.replace(MULTIPLE_NEWLINES, '\n\n').trim();
-    // Clean up noise lines from the markdown
     content = cleanMarkdownContent(content);
-    // Final cleanup of multiple newlines after removing noise
     content = content.replace(MULTIPLE_NEWLINES, '\n\n').trim();
+
+    return frontmatter ? `${frontmatter}\n\n${content}` : content;
   } catch {
-    return metadata ? `${createFrontmatter(metadata)}\n\n` : '';
+    return frontmatter ? `${frontmatter}\n\n` : '';
   }
-
-  if (metadata) {
-    return `${createFrontmatter(metadata)}\n\n${content}`;
-  }
-
-  return content;
 }

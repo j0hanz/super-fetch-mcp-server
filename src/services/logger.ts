@@ -1,45 +1,58 @@
 import { config } from '../config/index.js';
 
-function formatMeta(meta?: Record<string, unknown>): string {
-  return meta ? ` ${JSON.stringify(meta)}` : '';
+/** Log level hierarchy for filtering */
+type LogLevel = 'debug' | 'info' | 'warn' | 'error';
+
+/** Metadata that can be attached to log entries */
+type LogMetadata = Record<string, unknown>;
+
+function formatMetadata(meta?: LogMetadata): string {
+  return meta && Object.keys(meta).length > 0 ? ` ${JSON.stringify(meta)}` : '';
 }
 
-function getTimestamp(): string {
+function createTimestamp(): string {
   return new Date().toISOString();
 }
 
-export function logInfo(message: string, meta?: Record<string, unknown>): void {
-  if (config.logging.enabled) {
-    console.log(`[${getTimestamp()}] INFO: ${message}${formatMeta(meta)}`);
-  }
-}
-
-export function logDebug(
+function formatLogEntry(
+  level: LogLevel,
   message: string,
-  meta?: Record<string, unknown>
-): void {
-  if (config.logging.enabled && config.logging.level === 'debug') {
-    console.debug(`[${getTimestamp()}] DEBUG: ${message}${formatMeta(meta)}`);
+  meta?: LogMetadata
+): string {
+  return `[${createTimestamp()}] ${level.toUpperCase()}: ${message}${formatMetadata(meta)}`;
+}
+
+function shouldLog(level: LogLevel): boolean {
+  if (!config.logging.enabled) return false;
+  if (level === 'debug') return config.logging.level === 'debug';
+  return true;
+}
+
+export function logInfo(message: string, meta?: LogMetadata): void {
+  if (shouldLog('info')) {
+    console.log(formatLogEntry('info', message, meta));
   }
 }
 
-export function logWarn(message: string, meta?: Record<string, unknown>): void {
-  if (config.logging.enabled) {
-    console.warn(`[${getTimestamp()}] WARN: ${message}${formatMeta(meta)}`);
+export function logDebug(message: string, meta?: LogMetadata): void {
+  if (shouldLog('debug')) {
+    console.debug(formatLogEntry('debug', message, meta));
   }
 }
 
-export function logError(
-  message: string,
-  error?: Error | Record<string, unknown>
-): void {
-  if (!config.logging.enabled) return;
+export function logWarn(message: string, meta?: LogMetadata): void {
+  if (shouldLog('warn')) {
+    console.warn(formatLogEntry('warn', message, meta));
+  }
+}
 
-  const errorMeta =
+export function logError(message: string, error?: Error | LogMetadata): void {
+  if (!shouldLog('error')) return;
+
+  const errorMeta: LogMetadata =
     error instanceof Error
       ? { error: error.message, stack: error.stack }
-      : error;
-  console.error(
-    `[${getTimestamp()}] ERROR: ${message}${formatMeta(errorMeta)}`
-  );
+      : (error ?? {});
+
+  console.error(formatLogEntry('error', message, errorMeta));
 }

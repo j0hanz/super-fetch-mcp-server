@@ -11,6 +11,7 @@ import {
   createToolErrorResponse,
   handleToolError,
 } from '../../utils/tool-error-handler.js';
+import type { ContentTransformOptions } from '../utils/common.js';
 import {
   createContentMetadataBlock,
   determineContentExtractionSource,
@@ -24,21 +25,26 @@ export const FETCH_URL_TOOL_NAME = 'fetch-url';
 export const FETCH_URL_TOOL_DESCRIPTION =
   'Fetches a webpage and converts it to AI-readable JSONL format with semantic content blocks. Supports custom headers, retries, and content length limits.';
 
+/**
+ * Transforms HTML content into JSONL format with optional article extraction.
+ */
 function transformToJsonl(
   html: string,
   url: string,
-  options: { extractMainContent: boolean; includeMetadata: boolean }
+  options: ContentTransformOptions
 ): JsonlTransformResult {
-  // Only invoke JSDOM when extractMainContent is true (lazy loading optimization)
   const { article, metadata: extractedMeta } = extractContent(html, url, {
     extractArticle: options.extractMainContent,
   });
+
   const shouldExtractFromArticle = determineContentExtractionSource(
     options.extractMainContent,
     article
   );
+
   const sourceHtml = shouldExtractFromArticle ? article.content : html;
   const contentBlocks = parseHtml(sourceHtml);
+
   const metadata = createContentMetadataBlock(
     url,
     article,
@@ -46,6 +52,7 @@ function transformToJsonl(
     shouldExtractFromArticle,
     options.includeMetadata
   );
+
   const title = shouldExtractFromArticle ? article.title : extractedMeta.title;
 
   return {
@@ -55,25 +62,35 @@ function transformToJsonl(
   };
 }
 
-export async function fetchUrlToolHandler(input: FetchUrlInput): Promise<{
+/** Response type for fetch URL tool */
+interface FetchUrlToolResponse {
+  [x: string]: unknown;
   content: { type: 'text'; text: string }[];
   structuredContent?: Record<string, unknown>;
   isError?: boolean;
-}> {
+}
+
+/**
+ * Handles the fetch-url tool invocation.
+ * Fetches a URL and transforms content to JSONL format.
+ */
+export async function fetchUrlToolHandler(
+  input: FetchUrlInput
+): Promise<FetchUrlToolResponse> {
   if (!input.url) {
     return createToolErrorResponse('URL is required', '', 'VALIDATION_ERROR');
   }
 
+  const extractMainContent = input.extractMainContent ?? true;
+  const includeMetadata = input.includeMetadata ?? true;
+
+  logDebug('Fetching URL', {
+    url: input.url,
+    extractMainContent,
+    includeMetadata,
+  });
+
   try {
-    const extractMainContent = input.extractMainContent ?? true;
-    const includeMetadata = input.includeMetadata ?? true;
-
-    logDebug('Fetching URL', {
-      url: input.url,
-      extractMainContent,
-      includeMetadata,
-    });
-
     const result = await executeFetchPipeline<JsonlTransformResult>({
       url: input.url,
       cacheNamespace: 'url',
@@ -105,17 +122,14 @@ export async function fetchUrlToolHandler(input: FetchUrlInput): Promise<{
       ...(truncated && { truncated }),
     };
 
+    const jsonOutput = JSON.stringify(
+      structuredContent,
+      result.fromCache ? undefined : null,
+      result.fromCache ? undefined : 2
+    );
+
     return {
-      content: [
-        {
-          type: 'text' as const,
-          text: JSON.stringify(
-            structuredContent,
-            result.fromCache ? undefined : null,
-            result.fromCache ? undefined : 2
-          ),
-        },
-      ],
+      content: [{ type: 'text' as const, text: jsonOutput }],
       structuredContent,
     };
   } catch (error) {

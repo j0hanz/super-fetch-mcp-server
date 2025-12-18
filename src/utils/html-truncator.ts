@@ -2,28 +2,35 @@ import { config } from '../config/index.js';
 
 import { logWarn } from '../services/logger.js';
 
+/** Minimum acceptable truncation ratio (90% of max size) */
+const SAFE_BOUNDARY_THRESHOLD = 0.9;
+
 /**
- * Truncate HTML to maximum size while preserving tag boundaries
- * Prevents incomplete HTML by finding the last complete tag within limits
+ * Truncates HTML content to maximum size while preserving tag boundaries.
+ * Attempts to find the last complete tag within size limits to prevent
+ * broken HTML structure.
+ *
+ * @param html - Raw HTML content to truncate
+ * @returns HTML content truncated at a safe boundary
  */
 export function truncateHtml(html: string): string {
-  if (html.length <= config.constants.maxHtmlSize) {
+  const maxSize = config.constants.maxHtmlSize;
+
+  if (html.length <= maxSize) {
     return html;
   }
 
   logWarn('HTML content exceeds maximum size, truncating at safe boundary', {
     size: html.length,
-    maxSize: config.constants.maxHtmlSize,
+    maxSize,
   });
 
-  // Find last complete tag boundary to avoid breaking HTML structure
-  const lastTag = html.lastIndexOf('>', config.constants.maxHtmlSize);
+  const lastTagEnd = html.lastIndexOf('>', maxSize);
+  const minimumAcceptablePosition = maxSize * SAFE_BOUNDARY_THRESHOLD;
 
-  // If we found a tag boundary near the limit (within 10% buffer), use it
-  if (lastTag !== -1 && lastTag > config.constants.maxHtmlSize * 0.9) {
-    return html.substring(0, lastTag + 1);
+  if (lastTagEnd !== -1 && lastTagEnd > minimumAcceptablePosition) {
+    return html.substring(0, lastTagEnd + 1);
   }
 
-  // Fallback: simple truncation if no suitable boundary found
-  return html.substring(0, config.constants.maxHtmlSize);
+  return html.substring(0, maxSize);
 }

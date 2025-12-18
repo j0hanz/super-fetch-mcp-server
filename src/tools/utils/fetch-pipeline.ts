@@ -11,7 +11,8 @@ import { logDebug, logWarn } from '../../services/logger.js';
 import { validateAndNormalizeUrl } from '../../utils/url-validator.js';
 
 /**
- * Safe JSON parse with error handling for cache deserialization.
+ * Safely parses JSON from cached content.
+ * Returns undefined on parse failure to trigger cache miss behavior.
  */
 function safeJsonParse(cached: string, cacheKey: string): unknown {
   try {
@@ -24,6 +25,51 @@ function safeJsonParse(cached: string, cacheKey: string): unknown {
   }
 }
 
+/**
+ * Attempts to retrieve and deserialize cached data.
+ * Returns null if no valid cache entry exists.
+ */
+function attemptCacheRetrieval<T>(
+  cacheKey: string | null,
+  deserialize: ((cached: string) => T) | undefined,
+  cacheNamespace: string,
+  normalizedUrl: string
+): PipelineResult<T> | null {
+  if (!cacheKey) return null;
+
+  const cached = cache.get(cacheKey);
+  if (!cached) return null;
+
+  logDebug('Cache hit', { namespace: cacheNamespace, url: normalizedUrl });
+
+  const data = deserialize
+    ? deserialize(cached.content)
+    : (safeJsonParse(cached.content, cacheKey) as T | undefined);
+
+  if (data === undefined) {
+    logDebug('Cache miss due to deserialize failure', {
+      namespace: cacheNamespace,
+      url: normalizedUrl,
+    });
+    return null;
+  }
+
+  return {
+    data,
+    fromCache: true,
+    url: normalizedUrl,
+    fetchedAt: cached.fetchedAt,
+  };
+}
+
+/**
+ * Unified fetch pipeline that handles caching, fetching, and transformation.
+ * Implements cache-first strategy with automatic serialization.
+ *
+ * @template T - Type of the transformed result
+ * @param options - Pipeline configuration options
+ * @returns Promise resolving to the pipeline result
+ */
 export async function executeFetchPipeline<T>(
   options: FetchPipelineOptions<T>
 ): Promise<PipelineResult<T>> {
@@ -42,32 +88,19 @@ export async function executeFetchPipeline<T>(
   const normalizedUrl = validateAndNormalizeUrl(url);
   const cacheKey = cache.createCacheKey(cacheNamespace, normalizedUrl);
 
-  // Check cache first
-  if (cacheKey) {
-    const cached = cache.get(cacheKey);
-    if (cached) {
-      logDebug('Cache hit', { namespace: cacheNamespace, url: normalizedUrl });
+  // Attempt cache retrieval first
+  const cachedResult = attemptCacheRetrieval<T>(
+    cacheKey,
+    deserialize,
+    cacheNamespace,
+    normalizedUrl
+  );
 
-      const data = deserialize
-        ? deserialize(cached.content)
-        : (safeJsonParse(cached.content, cacheKey) as T | undefined);
-
-      if (data !== undefined) {
-        return {
-          data,
-          fromCache: true,
-          url: normalizedUrl,
-          fetchedAt: cached.fetchedAt,
-        };
-      }
-      logDebug('Cache miss due to deserialize failure', {
-        namespace: cacheNamespace,
-        url: normalizedUrl,
-      });
-    }
+  if (cachedResult) {
+    return cachedResult;
   }
 
-  // Build fetch options
+  // Cache miss - fetch from source
   const fetchOptions: FetchOptions = {
     customHeaders,
     signal,
@@ -75,9 +108,11 @@ export async function executeFetchPipeline<T>(
   };
 
   logDebug('Fetching URL', { url: normalizedUrl, retries });
+
   const html = await fetchUrlWithRetry(normalizedUrl, fetchOptions, retries);
   const data = transform(html, normalizedUrl);
 
+  // Store in cache for future requests
   if (cacheKey) {
     const serialized = serialize(data);
     cache.set(cacheKey, serialized);
