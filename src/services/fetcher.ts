@@ -164,14 +164,6 @@ client.interceptors.response.use(
       });
     }
 
-    // Early content-type validation before processing
-    if (contentTypeStr && !isHtmlContentType(contentTypeStr)) {
-      throw new FetchError(
-        `Unexpected content type: ${contentTypeStr}. Expected HTML content.`,
-        response.config.url ?? 'unknown'
-      );
-    }
-
     return response;
   },
   (error: AxiosError) => {
@@ -286,15 +278,6 @@ async function fetchUrl(url: string, options?: FetchOptions): Promise<string> {
       url
     );
   }
-}
-
-function isHtmlContentType(contentType: string): boolean {
-  const normalized = contentType.toLowerCase();
-  return (
-    normalized.includes('text/html') ||
-    normalized.includes('application/xhtml') ||
-    normalized.includes('text/plain')
-  );
 }
 
 /** Calculate exponential backoff delay with jitter */

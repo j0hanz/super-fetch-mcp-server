@@ -1,14 +1,8 @@
-function parseIntEnv(value: string | undefined, defaultValue: number): number {
-  if (!value) return defaultValue;
-  const parsed = parseInt(value, 10);
-  return isNaN(parsed) ? defaultValue : parsed;
-}
-
 export const config = {
   server: {
     name: 'superFetch',
     version: '1.0.0',
-    port: parseIntEnv(process.env.PORT, 3000),
+    port: process.env.PORT ? parseInt(process.env.PORT, 10) || 3000 : 3000,
     host: process.env.HOST ?? '127.0.0.1',
   },
   fetcher: {

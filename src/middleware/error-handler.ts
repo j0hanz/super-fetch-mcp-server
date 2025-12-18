@@ -2,7 +2,7 @@ import type { NextFunction, Request, Response } from 'express';
 
 import type { ErrorResponse } from '../config/types.js';
 
-import { AppError } from '../errors/app-error.js';
+import { FetchError } from '../errors/app-error.js';
 
 import { logError } from '../services/logger.js';
 
@@ -12,10 +12,10 @@ export function errorHandler(
   res: Response,
   next: NextFunction
 ): void {
-  const isAppError = err instanceof AppError;
-  const statusCode = isAppError ? err.statusCode : 500;
-  const code = isAppError ? err.code : 'INTERNAL_ERROR';
-  const message = isAppError ? err.message : 'Internal Server Error';
+  const isFetchError = err instanceof FetchError;
+  const statusCode = isFetchError ? err.statusCode : 500;
+  const code = isFetchError ? err.code : 'INTERNAL_ERROR';
+  const message = isFetchError ? err.message : 'Internal Server Error';
 
   logError(
     `HTTP ${statusCode}: ${err.message} - ${req.method} ${req.path}`,
@@ -23,7 +23,7 @@ export function errorHandler(
   );
 
   // Handle Retry-After for rate limiting
-  if (isAppError && err.code === 'RATE_LIMITED' && err.details.retryAfter) {
+  if (isFetchError && err.code === 'RATE_LIMITED' && err.details.retryAfter) {
     const retryAfter = err.details.retryAfter as number;
     res.set('Retry-After', String(retryAfter));
   }
@@ -33,7 +33,7 @@ export function errorHandler(
       message,
       code,
       statusCode,
-      ...(isAppError &&
+      ...(isFetchError &&
         Object.keys(err.details).length > 0 && { details: err.details }),
     },
   };

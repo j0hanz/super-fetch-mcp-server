@@ -1,6 +1,6 @@
 import type { ToolErrorResponse } from '../config/types.js';
 
-import { AppError } from '../errors/app-error.js';
+import { FetchError } from '../errors/app-error.js';
 
 // Stack traces only exposed when explicitly enabled in development
 const isDevelopment =
@@ -25,7 +25,7 @@ export function handleToolError(
   url: string,
   fallbackMessage = 'Operation failed'
 ): ToolErrorResponse {
-  if (error instanceof AppError) {
+  if (error instanceof FetchError) {
     const message = isDevelopment
       ? `${error.message}\n${error.stack ?? ''}`
       : error.message;

@@ -2,8 +2,6 @@ import dns from 'dns/promises';
 
 import { config } from '../config/index.js';
 
-import { ValidationError } from '../errors/app-error.js';
-
 const BLOCKED_HOSTS = new Set([
   'localhost',
   '127.0.0.1',
@@ -54,9 +52,8 @@ export async function validateResolvedIps(hostname: string): Promise<void> {
     const ipv4Addresses = await dns.resolve4(hostname).catch(() => []);
     for (const ip of ipv4Addresses) {
       if (isBlockedIp(ip) || BLOCKED_HOSTS.has(ip)) {
-        throw new ValidationError(
-          `DNS rebinding detected: ${hostname} resolves to blocked IP ${ip}`,
-          { hostname, ip }
+        throw new Error(
+          `DNS rebinding detected: ${hostname} resolves to blocked IP ${ip}`
         );
       }
     }
@@ -65,15 +62,14 @@ export async function validateResolvedIps(hostname: string): Promise<void> {
     const ipv6Addresses = await dns.resolve6(hostname).catch(() => []);
     for (const ip of ipv6Addresses) {
       if (isBlockedIp(ip) || BLOCKED_HOSTS.has(ip)) {
-        throw new ValidationError(
-          `DNS rebinding detected: ${hostname} resolves to blocked IP ${ip}`,
-          { hostname, ip }
+        throw new Error(
+          `DNS rebinding detected: ${hostname} resolves to blocked IP ${ip}`
         );
       }
     }
   } catch (error) {
-    // Re-throw ValidationError, ignore DNS resolution errors
-    if (error instanceof ValidationError) {
+    // Re-throw Error, ignore DNS resolution errors
+    if (error instanceof Error && error.message.includes('DNS rebinding')) {
       throw error;
     }
     // DNS resolution failed - let the actual request handle the error
@@ -83,19 +79,18 @@ export async function validateResolvedIps(hostname: string): Promise<void> {
 export function validateAndNormalizeUrl(urlString: string): string {
   // Check for empty or whitespace-only input
   if (!urlString || typeof urlString !== 'string') {
-    throw new ValidationError('URL is required');
+    throw new Error('URL is required');
   }
 
   const trimmedUrl = urlString.trim();
   if (!trimmedUrl) {
-    throw new ValidationError('URL cannot be empty');
+    throw new Error('URL cannot be empty');
   }
 
   // Check URL length to prevent DoS
   if (trimmedUrl.length > config.constants.maxUrlLength) {
-    throw new ValidationError(
-      `URL exceeds maximum length of ${config.constants.maxUrlLength} characters`,
-      { length: trimmedUrl.length, maxLength: config.constants.maxUrlLength }
+    throw new Error(
+      `URL exceeds maximum length of ${config.constants.maxUrlLength} characters`
     );
   }
 
@@ -104,55 +99,46 @@ export function validateAndNormalizeUrl(urlString: string): string {
   try {
     url = new URL(trimmedUrl);
   } catch {
-    throw new ValidationError('Invalid URL format', { url: trimmedUrl });
+    throw new Error('Invalid URL format');
   }
 
   // Only allow HTTP(S) protocols
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-    throw new ValidationError(
-      `Invalid protocol: ${url.protocol}. Only http: and https: are allowed`,
-      { url: trimmedUrl, protocol: url.protocol }
+    throw new Error(
+      `Invalid protocol: ${url.protocol}. Only http: and https: are allowed`
     );
   }
 
   // Block URLs with credentials (user:pass@host)
   if (url.username || url.password) {
-    throw new ValidationError(
-      'URLs with embedded credentials are not allowed',
-      { url: trimmedUrl }
-    );
+    throw new Error('URLs with embedded credentials are not allowed');
   }
 
   const hostname = url.hostname.toLowerCase();
 
   // Block empty hostname
   if (!hostname) {
-    throw new ValidationError('URL must have a valid hostname', {
-      url: trimmedUrl,
-    });
+    throw new Error('URL must have a valid hostname');
   }
 
   // Block known internal/metadata hosts
   if (BLOCKED_HOSTS.has(hostname)) {
-    throw new ValidationError(
-      `Blocked host: ${hostname}. Internal hosts are not allowed`,
-      { url: trimmedUrl, hostname }
+    throw new Error(
+      `Blocked host: ${hostname}. Internal hosts are not allowed`
     );
   }
 
   // Block private IP ranges
   if (isBlockedIp(hostname)) {
-    throw new ValidationError(
-      `Blocked IP range: ${hostname}. Private IPs are not allowed`,
-      { url: trimmedUrl, hostname }
+    throw new Error(
+      `Blocked IP range: ${hostname}. Private IPs are not allowed`
     );
   }
 
   // Block hostnames that look like they might resolve to internal addresses
   if (hostname.endsWith('.local') || hostname.endsWith('.internal')) {
-    throw new ValidationError(
-      `Blocked hostname pattern: ${hostname}. Internal domain suffixes are not allowed`,
-      { url: trimmedUrl, hostname }
+    throw new Error(
+      `Blocked hostname pattern: ${hostname}. Internal domain suffixes are not allowed`
     );
   }
 
