@@ -12,10 +12,7 @@ import type {
 } from '../../config/types.js';
 
 import * as cache from '../../services/cache.js';
-import {
-  extractContent,
-  extractMetadataWithCheerio,
-} from '../../services/extractor.js';
+import { extractContent, extractMetadata } from '../../services/extractor.js';
 import { fetchUrlWithRetry } from '../../services/fetcher.js';
 import { logDebug, logError, logWarn } from '../../services/logger.js';
 import { parseHtml } from '../../services/parser.js';
@@ -108,7 +105,7 @@ async function processSingleUrl(
     // Fast path: Skip JSDOM entirely when extractMainContent is false
     if (!options.extractMainContent) {
       sourceHtml = html;
-      const extractedMeta = extractMetadataWithCheerio(html);
+      const extractedMeta = extractMetadata(html);
       ({ title } = extractedMeta);
 
       // Use createContentMetadataBlock helper for consistency

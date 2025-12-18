@@ -93,9 +93,9 @@ function extractStandardMeta(document: Document): {
 }
 
 /**
- * Extract metadata using inline parsers (no class hierarchy needed)
+ * Extract metadata using JSDOM and inline parsers
  */
-export function extractMetadataWithCheerio(html: string): ExtractedMetadata {
+export function extractMetadata(html: string): ExtractedMetadata {
   try {
     const dom = new JSDOM(html);
     const { document } = dom.window;
@@ -177,7 +177,7 @@ export function extractContent(
 
   try {
     // Fast path: Extract metadata with specialized parsers
-    const metadata = extractMetadataWithCheerio(truncateHtml(html));
+    const metadata = extractMetadata(truncateHtml(html));
 
     // Lazy path: Only use JSDOM when article extraction is requested
     const article = options.extractArticle

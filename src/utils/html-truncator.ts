@@ -16,7 +16,7 @@ export function truncateHtml(html: string): string {
     maxSize: config.constants.maxHtmlSize,
   });
 
-  // Use lastIndexOf for O(log n) reverse search - find last complete tag
+  // Find last complete tag boundary to avoid breaking HTML structure
   const lastTag = html.lastIndexOf('>', config.constants.maxHtmlSize);
 
   // If we found a tag boundary near the limit (within 10% buffer), use it

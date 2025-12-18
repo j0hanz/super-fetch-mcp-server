@@ -69,15 +69,13 @@ interface McpRequestBody {
 function isMcpRequestBody(body: unknown): body is McpRequestBody {
   if (!body || typeof body !== 'object') return false;
   const obj = body as Record<string, unknown>;
-  // Allow any object with optional method, id, jsonrpc, params
   return (
-    ((obj.method === undefined || typeof obj.method === 'string') &&
-      (obj.id === undefined ||
-        typeof obj.id === 'string' ||
-        typeof obj.id === 'number') &&
-      (obj.jsonrpc === undefined || obj.jsonrpc === '2.0') &&
-      obj.params === undefined) ||
-    typeof obj.params === 'object'
+    (obj.method === undefined || typeof obj.method === 'string') &&
+    (obj.id === undefined ||
+      typeof obj.id === 'string' ||
+      typeof obj.id === 'number') &&
+    (obj.jsonrpc === undefined || obj.jsonrpc === '2.0') &&
+    (obj.params === undefined || typeof obj.params === 'object')
   );
 }
 

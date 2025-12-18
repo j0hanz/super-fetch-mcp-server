@@ -1,4 +1,4 @@
-import type { NextFunction, Request, Response } from 'express';
+import type { Request, Response } from 'express';
 
 import type { ErrorResponse } from '../config/types.js';
 
@@ -6,12 +6,7 @@ import { FetchError } from '../errors/app-error.js';
 
 import { logError } from '../services/logger.js';
 
-export function errorHandler(
-  err: Error,
-  req: Request,
-  res: Response,
-  next: NextFunction
-): void {
+export function errorHandler(err: Error, req: Request, res: Response): void {
   const isFetchError = err instanceof FetchError;
   const statusCode = isFetchError ? err.statusCode : 500;
   const code = isFetchError ? err.code : 'INTERNAL_ERROR';
@@ -43,7 +38,5 @@ export function errorHandler(
   }
 
   res.status(statusCode).json(response);
-
-  // Ensure middleware chain ends here
-  next();
+  // Response sent - do NOT call next() as it causes "headers already sent" errors
 }

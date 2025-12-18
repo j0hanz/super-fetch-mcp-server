@@ -86,7 +86,7 @@ export class SessionManager {
 
   destroy(): void {
     if (this.cleanupTimeout) {
-      clearInterval(this.cleanupTimeout);
+      clearTimeout(this.cleanupTimeout);
       this.cleanupTimeout = null;
     }
   }
