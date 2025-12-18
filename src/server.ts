@@ -40,11 +40,17 @@ export async function startStdioServer(): Promise<void> {
     logError('[MCP Error]', error instanceof Error ? error : { error });
   };
 
-  process.on('SIGINT', async () => {
+  process.on('SIGINT', () => {
     process.stdout.write('\nShutting down superFetch MCP server...\n');
     destroyAgents();
-    await server.close();
-    process.exit(0);
+    server
+      .close()
+      .catch((err: unknown) => {
+        logError('Error during shutdown', err instanceof Error ? err : undefined);
+      })
+      .finally(() => {
+        process.exit(0);
+      });
   });
 
   await server.connect(transport);
