@@ -10,7 +10,6 @@ import type {
 
 import { truncateHtml } from '../utils/html-truncator.js';
 
-import { preserveCardLinks } from './card-extractor.js';
 import { logError, logWarn } from './logger.js';
 
 // Shared VirtualConsole to suppress JSDOM warnings/errors
@@ -135,7 +134,6 @@ function extractArticleWithJsdom(
     const dom = new JSDOM(html, { url, virtualConsole: sharedVirtualConsole });
     const { document } = dom.window;
 
-    preserveCardLinks(document);
     const reader = new Readability(document);
     const article = reader.parse();
 

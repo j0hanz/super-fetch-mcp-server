@@ -99,7 +99,7 @@ async function processSingleUrl(
       }
     }
 
-    const fetchResult = await fetchUrlWithRetry(normalizedUrl);
+    const html = await fetchUrlWithRetry(normalizedUrl);
 
     let sourceHtml: string;
     let title: string | undefined;
@@ -107,8 +107,8 @@ async function processSingleUrl(
 
     // Fast path: Skip JSDOM entirely when extractMainContent is false
     if (!options.extractMainContent) {
-      sourceHtml = fetchResult.html;
-      const extractedMeta = extractMetadataWithCheerio(fetchResult.html);
+      sourceHtml = html;
+      const extractedMeta = extractMetadataWithCheerio(html);
       ({ title } = extractedMeta);
 
       // Use createContentMetadataBlock helper for consistency
@@ -122,7 +122,7 @@ async function processSingleUrl(
     } else {
       // Slow path: Use JSDOM only when article extraction is needed
       const { article, metadata: extractedMeta } = extractContent(
-        fetchResult.html,
+        html,
         normalizedUrl,
         {
           extractArticle: true,
@@ -139,9 +139,7 @@ async function processSingleUrl(
         shouldExtractFromArticle,
         options.includeMetadata
       );
-      sourceHtml = shouldExtractFromArticle
-        ? article.content
-        : fetchResult.html;
+      sourceHtml = shouldExtractFromArticle ? article.content : html;
       title = shouldExtractFromArticle ? article.title : extractedMeta.title;
     }
 

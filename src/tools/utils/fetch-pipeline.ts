@@ -75,12 +75,7 @@ export async function executeFetchPipeline<T>(
   };
 
   logDebug('Fetching URL', { url: normalizedUrl, retries });
-  const fetchResult = await fetchUrlWithRetry(
-    normalizedUrl,
-    fetchOptions,
-    retries
-  );
-  const { html } = fetchResult;
+  const html = await fetchUrlWithRetry(normalizedUrl, fetchOptions, retries);
   const data = transform(html, normalizedUrl);
 
   if (cacheKey) {

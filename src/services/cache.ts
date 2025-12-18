@@ -4,12 +4,9 @@ import NodeCache from 'node-cache';
 import { config } from '../config/index.js';
 import type { CacheEntry } from '../config/types.js';
 
-import { logDebug, logWarn } from './logger.js';
+import { logWarn } from './logger.js';
 
-const HTML_CACHE_TTL = 60;
-const HTML_CACHE_MAX_KEYS = 50;
 const MAX_CONTENT_SIZE = 5242880;
-const MAX_HTML_SIZE = 10485760;
 const MAX_KEY_LENGTH = 500;
 
 const contentCache = new NodeCache({
@@ -17,13 +14,6 @@ const contentCache = new NodeCache({
   checkperiod: Math.floor(config.cache.ttl / 10),
   useClones: false,
   maxKeys: config.cache.maxKeys,
-});
-
-const htmlCache = new NodeCache({
-  stdTTL: HTML_CACHE_TTL,
-  checkperiod: 30,
-  useClones: false,
-  maxKeys: HTML_CACHE_MAX_KEYS,
 });
 
 export function createCacheKey(namespace: string, url: string): string | null {
@@ -88,46 +78,6 @@ export function set(cacheKey: string | null, content: string): void {
   }
 }
 
-export function getHtml(url: string): string | undefined {
-  if (!config.cache.enabled) return undefined;
-
-  try {
-    const html = htmlCache.get<string>(url);
-    if (html && typeof html === 'string' && html.length <= MAX_HTML_SIZE) {
-      return html;
-    }
-    if (html) {
-      // Invalid cache entry, remove it
-      htmlCache.del(url);
-      logWarn('Removed oversized HTML from cache', {
-        url: url.substring(0, 100),
-        size: html.length,
-      });
-    }
-    return undefined;
-  } catch (error) {
-    logDebug('HTML cache get error (non-critical)', {
-      url: url.substring(0, 100),
-      error: error instanceof Error ? error.message : 'Unknown',
-    });
-    return undefined;
-  }
-}
-
-export function setHtml(url: string, html: string): void {
-  if (!config.cache.enabled) return;
-  if (!html || html.length > MAX_HTML_SIZE) return;
-
-  try {
-    htmlCache.set(url, html);
-  } catch (error) {
-    logDebug('HTML cache set error (non-critical)', {
-      url: url.substring(0, 100),
-      error: error instanceof Error ? error.message : 'Unknown',
-    });
-  }
-}
-
 export function keys(): string[] {
-  return [...contentCache.keys(), ...htmlCache.keys()];
+  return contentCache.keys();
 }

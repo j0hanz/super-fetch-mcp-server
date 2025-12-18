@@ -10,16 +10,10 @@ import os from 'os';
 
 import { config } from '../config/index.js';
 
-import {
-  AbortError,
-  FetchError,
-  RateLimitError,
-  TimeoutError,
-} from '../errors/app-error.js';
+import { FetchError } from '../errors/app-error.js';
 
 import { validateResolvedIps } from '../utils/url-validator.js';
 
-import { getHtml, setHtml } from './cache.js';
 import { logDebug, logError, logWarn } from './logger.js';
 
 /** Options for fetch operations */
@@ -184,20 +178,25 @@ client.interceptors.response.use(
     const url = error.config?.url ?? 'unknown';
 
     // Handle request cancellation (AbortController)
-    if (isCancel(error) || error.name === 'AbortError') {
-      logDebug('HTTP Request Aborted', { url });
-      throw new AbortError('Request was canceled');
-    }
-
-    // Handle CanceledError from AbortSignal.timeout()
-    if (error.name === 'CanceledError') {
-      logDebug('HTTP Request Canceled (timeout signal)', { url });
-      throw new TimeoutError(config.fetcher.timeout, true);
+    if (
+      isCancel(error) ||
+      error.name === 'AbortError' ||
+      error.name === 'CanceledError'
+    ) {
+      logDebug('HTTP Request Aborted/Canceled', { url });
+      throw new FetchError('Request was canceled', url, 499, {
+        reason: 'aborted',
+      });
     }
 
     if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') {
       logError('HTTP Timeout', { url, timeout: config.fetcher.timeout });
-      throw new TimeoutError(config.fetcher.timeout, true);
+      throw new FetchError(
+        `Request timeout after ${config.fetcher.timeout}ms`,
+        url,
+        504,
+        { timeout: config.fetcher.timeout }
+      );
     }
 
     if (error.response) {
@@ -206,7 +205,7 @@ client.interceptors.response.use(
       // Handle 429 Too Many Requests with Retry-After header
       if (status === 429) {
         const retryAfterHeader = headers['retry-after'] as string | undefined;
-        let retryAfterSeconds = 60; // Default 60 seconds
+        let retryAfterSeconds = 60;
 
         if (retryAfterHeader) {
           const parsed = parseInt(retryAfterHeader, 10);
@@ -219,7 +218,9 @@ client.interceptors.response.use(
           url,
           retryAfter: `${retryAfterSeconds}s`,
         });
-        throw new RateLimitError(retryAfterSeconds);
+        throw new FetchError('Too many requests', url, 429, {
+          retryAfter: retryAfterSeconds,
+        });
       }
 
       logError('HTTP Error Response', { url, status, statusText });
@@ -276,12 +277,7 @@ async function fetchUrl(url: string, options?: FetchOptions): Promise<string> {
     const response = await client.request<string>(requestConfig);
     return response.data;
   } catch (error) {
-    if (
-      error instanceof FetchError ||
-      error instanceof TimeoutError ||
-      error instanceof AbortError ||
-      error instanceof RateLimitError
-    ) {
+    if (error instanceof FetchError) {
       throw error;
     }
 
@@ -322,12 +318,14 @@ function shouldRetryError(
   error: Error
 ): boolean {
   if (attempt >= maxRetries) return false;
-  if (error.name === 'AbortError' || error.name === 'CanceledError')
+
+  // Don't retry aborted requests
+  if (error instanceof FetchError && error.details.reason === 'aborted')
     return false;
 
   // Don't retry on client errors (4xx except 429)
-  if ('httpStatus' in error) {
-    const status = (error as { httpStatus?: number }).httpStatus;
+  if (error instanceof FetchError) {
+    const status = error.details.httpStatus as number | undefined;
     if (status && status >= 400 && status < 500 && status !== 429) return false;
   }
 
@@ -337,40 +335,27 @@ function shouldRetryError(
 export async function fetchUrlWithRetry(
   url: string,
   options?: FetchOptions,
-  maxRetries = 3,
-  skipCache = false
-): Promise<{ html: string; fromHtmlCache: boolean }> {
-  if (!skipCache) {
-    const cachedHtml = getHtml(url);
-    if (cachedHtml) {
-      logDebug('HTML Cache Hit', { url });
-      return { html: cachedHtml, fromHtmlCache: true };
-    }
-  }
-
+  maxRetries = 3
+): Promise<string> {
   const retries = Math.min(Math.max(1, maxRetries), 10);
   let lastError: Error = new Error(`Failed to fetch ${url}`);
 
   for (let attempt = 1; attempt <= retries; attempt++) {
     // Check if aborted before attempting (early exit for batch operations)
     if (options?.signal?.aborted) {
-      const abortError = new AbortError('Request was aborted before execution');
-      throw abortError;
+      throw new FetchError('Request was aborted before execution', url);
     }
 
     try {
-      const html = await fetchUrl(url, options);
-      setHtml(url, html);
-      logDebug('HTML Cache Set', { url });
-
-      return { html, fromHtmlCache: false };
+      return await fetchUrl(url, options);
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
 
-      // Handle rate limiting with smart retry
-      if (error instanceof RateLimitError) {
-        if (attempt < retries) {
-          const waitTime = Math.min(error.retryAfter * 1000, 30000); // Cap at 30s
+      // Handle rate limiting with smart retry (429 with Retry-After)
+      if (error instanceof FetchError && error.details.httpStatus === 429) {
+        const retryAfter = error.details.retryAfter as number;
+        if (attempt < retries && retryAfter) {
+          const waitTime = Math.min(retryAfter * 1000, 30000);
           logWarn('Rate limited, waiting before retry', {
             url,
             attempt,
