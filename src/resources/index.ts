@@ -4,17 +4,11 @@ import { config } from '../config/index.js';
 
 import * as cache from '../services/cache.js';
 
-import {
-  registerCachedContentResource,
-  setupCacheSubscriptions,
-} from './cached-content.js';
+import { registerCachedContentResource } from './cached-content.js';
 
 export function registerResources(server: McpServer): void {
   // Register dynamic cached content resources
   registerCachedContentResource(server);
-
-  // Setup cache update subscriptions
-  setupCacheSubscriptions();
 
   // Register health check resource
   server.registerResource(

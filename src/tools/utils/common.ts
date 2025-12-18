@@ -1,4 +1,3 @@
-import { config } from '../../config/index.js';
 import type {
   ExtractedArticle,
   ExtractedMetadata,
@@ -9,9 +8,7 @@ export function shouldUseArticle(
   extractMainContent: boolean,
   article: ExtractedArticle | null
 ): article is ExtractedArticle {
-  return (
-    extractMainContent && config.extraction.extractMainContent && !!article
-  );
+  return extractMainContent && !!article;
 }
 
 export function buildMetadata(
@@ -21,7 +18,7 @@ export function buildMetadata(
   useArticle: boolean,
   includeMetadata: boolean
 ): MetadataBlock | undefined {
-  if (!includeMetadata || !config.extraction.includeMetadata) return undefined;
+  if (!includeMetadata) return undefined;
   const now = new Date().toISOString();
   return useArticle && article
     ? {

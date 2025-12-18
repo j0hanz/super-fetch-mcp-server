@@ -34,7 +34,7 @@ const BLOCKED_IP_PATTERNS: readonly RegExp[] = [
 /**
  * Check if an IP address is in a blocked private range
  */
-export function isBlockedIp(ip: string): boolean {
+function isBlockedIp(ip: string): boolean {
   return BLOCKED_IP_PATTERNS.some((pattern) => pattern.test(ip));
 }
 

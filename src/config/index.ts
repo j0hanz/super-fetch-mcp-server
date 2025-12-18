@@ -1,56 +1,40 @@
-function parseIntEnv(
-  value: string | undefined,
-  defaultValue: number,
-  min = 0,
-  max = Number.MAX_SAFE_INTEGER
-): number {
+function parseIntEnv(value: string | undefined, defaultValue: number): number {
   if (!value) return defaultValue;
   const parsed = parseInt(value, 10);
-  if (isNaN(parsed)) return defaultValue;
-  return Math.max(min, Math.min(max, parsed));
+  return isNaN(parsed) ? defaultValue : parsed;
 }
 
 export const config = {
   server: {
     name: 'superFetch',
     version: '1.0.0',
-    port: parseIntEnv(process.env.PORT, 3000, 1, 65535),
+    port: parseIntEnv(process.env.PORT, 3000),
     host: process.env.HOST ?? '127.0.0.1',
   },
   fetcher: {
-    timeout: parseIntEnv(process.env.FETCH_TIMEOUT, 30000, 1000, 120000),
-    maxRedirects: parseIntEnv(process.env.MAX_REDIRECTS, 5, 0, 20),
-    userAgent: process.env.USER_AGENT ?? 'superFetch-MCP/1.0',
-    maxContentLength: parseIntEnv(
-      process.env.MAX_CONTENT_LENGTH,
-      10485760,
-      1024,
-      52428800
-    ),
+    timeout: 30000,
+    maxRedirects: 5,
+    userAgent: 'superFetch-MCP/1.0',
+    maxContentLength: 10485760,
   },
   cache: {
     enabled: process.env.CACHE_ENABLED !== 'false',
-    ttl: parseIntEnv(process.env.CACHE_TTL, 3600, 60, 86400),
-    maxKeys: parseIntEnv(process.env.CACHE_MAX_KEYS, 100, 10, 10000),
+    ttl: 3600,
+    maxKeys: 100,
   },
   extraction: {
-    extractMainContent: process.env.EXTRACT_MAIN_CONTENT !== 'false',
-    includeMetadata: process.env.INCLUDE_METADATA !== 'false',
-    maxBlockLength: parseIntEnv(process.env.MAX_BLOCK_LENGTH, 5000, 100, 50000),
-    minParagraphLength: parseIntEnv(
-      process.env.MIN_PARAGRAPH_LENGTH,
-      10,
-      0,
-      1000
-    ),
+    extractMainContent: true,
+    includeMetadata: true,
+    maxBlockLength: 5000,
+    minParagraphLength: 10,
   },
   logging: {
     level: process.env.LOG_LEVEL ?? 'info',
     enabled: process.env.ENABLE_LOGGING !== 'false',
   },
   constants: {
-    maxHtmlSize: 10 * 1024 * 1024, // 10MB
-    maxContentSize: 5 * 1024 * 1024, // 5MB
+    maxHtmlSize: 10 * 1024 * 1024,
+    maxContentSize: 5 * 1024 * 1024,
     maxUrlLength: 2048,
   },
 } as const;

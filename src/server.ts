@@ -8,8 +8,6 @@ import { logError, logInfo } from './services/logger.js';
 
 import { registerTools } from './tools/index.js';
 
-import { registerPrompts } from './prompts/index.js';
-
 import { registerResources } from './resources/index.js';
 
 export function createMcpServer(): McpServer {
@@ -22,7 +20,6 @@ export function createMcpServer(): McpServer {
       capabilities: {
         tools: { listChanged: false },
         resources: { listChanged: true, subscribe: true },
-        prompts: { listChanged: false },
         logging: {},
       },
       instructions: `superFetch MCP server v${config.server.version} - AI-optimized web content fetching with JSONL/Markdown output. Provides tools for fetching, parsing, and transforming web content into structured formats suitable for LLM consumption. Supports resource subscriptions for cache updates.`,
@@ -32,7 +29,6 @@ export function createMcpServer(): McpServer {
   // Register all features using the modern API
   registerTools(server);
   registerResources(server);
-  registerPrompts(server);
 
   return server;
 }

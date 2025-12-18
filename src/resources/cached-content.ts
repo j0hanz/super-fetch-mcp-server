@@ -82,9 +82,3 @@ export function registerCachedContentResource(server: McpServer): void {
     }
   );
 }
-
-// Subscription notifications - placeholder until MCP SDK fully supports sendResourceUpdated
-export function setupCacheSubscriptions(): void {
-  // No-op: SDK doesn't support resource update notifications yet
-  // When it does, listen to cache.onUpdate() and call server.sendResourceUpdated()
-}

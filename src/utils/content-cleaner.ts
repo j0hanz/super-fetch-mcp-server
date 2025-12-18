@@ -3,93 +3,23 @@
  * that slip through Readability extraction.
  */
 
-// Pre-compiled combined pattern for optimal performance
-const NOISE_PATTERN_COMBINED = new RegExp(
+// Simplified noise patterns - essential patterns only
+const NOISE_PATTERN = new RegExp(
   [
-    // Relative timestamps
-    '^\\d+\\s*(seconds?|minutes?|hours?|days?|weeks?|months?|years?)\\s*ago$',
-    '^(just now|recently|today|yesterday|last week|last month)$',
-    '^(updated|modified|edited|created|published)\\s*:?\\s*\\d+\\s*(seconds?|minutes?|hours?|days?|weeks?|months?|years?)\\s*ago$',
-    '^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\\s+\\d{1,2},?\\s+\\d{4}$',
-    '^\\d{1,2}\\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\\s+\\d{4}$',
-    '^\\d{4}-\\d{2}-\\d{2}$',
-    '^last\\s+updated\\s*:?',
-    // Share/action buttons
-    '^(share|copy|like|follow|subscribe|download|print|save|bookmark|tweet|pin it|email|export)$',
+    // UI actions
+    '^(share|copy|like|follow|subscribe|download|print|save)$',
     '^(copy to clipboard|copied!?|copy code|copy link)$',
-    '^(share on|share to|share via)\\s+(twitter|facebook|linkedin|reddit|x|email)$',
-    // UI artifacts
-    '^(click to copy|expand|collapse|show more|show less|load more|view more|read more|see more|see all|view all)$',
-    '^(toggle|switch|enable|disable|on|off)$',
-    '^(edit|delete|remove|add|new|create|update|cancel|confirm|submit|reset|clear)$',
-    '^(open in|view in|edit in)\\s+\\w+$',
-    '^(try it|run|execute|play|preview|demo|live demo|playground)$',
-    '^(source|view source|edit this page|edit on github|improve this doc)$',
+    '^(show more|show less|load more|view more|read more|see all|view all)$',
+    // Navigation
+    '^(next|previous|prev|back|forward|home|menu|close|skip to)$',
+    '^(table of contents|toc|on this page)$',
     // Empty/placeholder
     '^(loading\\.{0,3}|please wait\\.{0,3}|\\.{2,})$',
-    '^(n\\/a|tbd|todo|coming soon|placeholder|untitled)$',
-    // Navigation
-    '^(next|previous|prev|back|forward|home|menu|close|open|skip to|jump to|go to)$',
-    '^(table of contents|toc|contents|on this page|in this article|in this section)$',
-    '^(scroll to top|back to top|top)$',
-    // Cookie/consent
-    '^(accept|reject|accept all|reject all|cookie settings|privacy settings|manage preferences)$',
-    '^(accept cookies|decline cookies|cookie policy|privacy policy|terms of service|terms & conditions)$',
-    // Counts
-    '^\\d+\\s*(comments?|replies?|reactions?|responses?)$',
-    '^\\d+\\s*(likes?|shares?|views?|followers?|retweets?|stars?|forks?|claps?|upvotes?|downvotes?)$',
-    '^(liked by|shared by|followed by)\\s+\\d+',
-    // Version badges
-    '^v?\\d+\\.\\d+(\\.\\d+)?(-\\w+)?$',
-    '^(stable|beta|alpha|rc|preview|experimental|deprecated|legacy|new|updated)$',
-    // Structural
-    '^(a|b|c|d|e|f|g|h|i|j|k|l|m|n|o|p|q|r|s|t|u|v|w|x|y|z)$',
-    '^panel\\s*[a-z]?$',
-    // API artifacts
-    '^(required|optional|default|type|example|description|parameters?|returns?|response|request)$',
-    '^(get|post|put|patch|delete|head|options)\\s*$',
-    // Interactive
-    '^(drag|drop|resize|zoom|scroll|swipe|tap|click|hover|focus)(\\s+to\\s+\\w+)?$',
-    '^(drag the|move the|resize the|drag to|click to)\\s+\\w+',
+    '^(n\\/a|tbd|todo|coming soon|placeholder)$',
+    // Counts (standalone)
+    '^\\d+\\s*(comments?|replies?|likes?|shares?|views?)$',
     // Breadcrumbs
     '^[/\\\\>→»›]+$',
-    // Ads
-    '^(ad|advertisement|sponsored|promoted|partner content)$',
-  ].join('|'),
-  'i'
-);
-
-// Pre-compiled pattern for short text noise
-const SHORT_TEXT_NOISE_PATTERN = new RegExp(
-  [
-    '^#\\w+$',
-    '^@\\w+$',
-    '^\\d+$',
-    '^[•·→←↑↓►▼▲◄▶◀■□●○★☆✓✗✔✘×]+$',
-    '^[,;:\\-–—]+$',
-    '^\\[\\d+\\]$',
-    '^\\(\\d+\\)$',
-    '^fig\\.?\\s*\\d+$',
-    '^table\\s*\\d+$',
-    '^step\\s*\\d+$',
-    '^note:?$',
-    '^tip:?$',
-    '^warning:?$',
-    '^info:?$',
-    '^caution:?$',
-  ].join('|'),
-  'i'
-);
-
-// Pre-compiled pattern for UI chrome detection
-const UI_CHROME_PATTERN = new RegExp(
-  [
-    '^(sign in|sign up|log in|log out|register|create account)$',
-    '^(search|search\\.\\.\\.|search docs|search documentation)$',
-    '^(dark mode|light mode|theme|language|locale)$',
-    '^(feedback|report issue|report a bug|file an issue|suggest edit)$',
-    '^(documentation|docs|api|reference|guide|tutorial|examples?)$',
-    "^(version|changelog|release notes|what's new)$",
   ].join('|'),
   'i'
 );
@@ -98,98 +28,18 @@ const UI_CHROME_PATTERN = new RegExp(
 const MIN_PARAGRAPH_LENGTH = 20;
 const MIN_HEADING_LENGTH = 2;
 const MIN_LIST_ITEM_LENGTH = 3;
-const SHORT_TEXT_THRESHOLD = 25;
 
 // Maximum text length to test against regex patterns (ReDoS protection)
 const MAX_REGEX_INPUT_LENGTH = 500;
 
 /**
- * Check if text matches any noise pattern
- * Protected against ReDoS by limiting input length
+ * Check if text matches noise pattern
  */
 function isNoiseText(text: string): boolean {
   const trimmed = text.trim();
-
-  // Empty or whitespace-only
-  if (!trimmed) {
-    return true;
-  }
-
-  // ReDoS protection: skip regex for very long strings
-  if (trimmed.length > MAX_REGEX_INPUT_LENGTH) {
-    return false;
-  }
-
-  // Check combined noise pattern (single regex test)
-  if (NOISE_PATTERN_COMBINED.test(trimmed)) {
-    return true;
-  }
-
-  // Check short text patterns for brief content
-  if (trimmed.length < SHORT_TEXT_THRESHOLD) {
-    if (SHORT_TEXT_NOISE_PATTERN.test(trimmed)) {
-      return true;
-    }
-
-    // Also check UI chrome patterns for short text
-    if (UI_CHROME_PATTERN.test(trimmed)) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-// Pre-compiled placeholder pattern (combined for performance)
-const PLACEHOLDER_PATTERN =
-  /^(lorem ipsum|sample text|placeholder|example (text|content|data)|test (text|content|data)|your (text|content|name|email) here|enter (your|a) |type (your|a|something) )/i;
-
-// Cache for placeholder checks with TTL to avoid memory leaks
-interface CacheEntry {
-  value: boolean;
-  timestamp: number;
-}
-const PLACEHOLDER_CACHE = new Map<string, CacheEntry>();
-const PLACEHOLDER_CACHE_MAX_SIZE = 1000;
-const PLACEHOLDER_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
-
-/**
- * Check if text looks like placeholder/demo content
- * Uses caching with TTL for performance and memory safety
- */
-function isPlaceholderContent(text: string): boolean {
-  const trimmed = text.trim().toLowerCase();
-  const now = Date.now();
-
-  // Check cache first
-  const cached = PLACEHOLDER_CACHE.get(trimmed);
-  if (cached !== undefined) {
-    // Check if entry is still valid
-    if (now - cached.timestamp < PLACEHOLDER_CACHE_TTL_MS) {
-      return cached.value;
-    }
-    // Expired entry, remove it
-    PLACEHOLDER_CACHE.delete(trimmed);
-  }
-
-  // Single regex test (faster than array iteration)
-  const result = PLACEHOLDER_PATTERN.test(trimmed);
-
-  // Cache result with LRU eviction and timestamp
-  if (PLACEHOLDER_CACHE.size >= PLACEHOLDER_CACHE_MAX_SIZE) {
-    // Remove oldest entries (first 10% of cache)
-    const keysToDelete = Math.ceil(PLACEHOLDER_CACHE_MAX_SIZE * 0.1);
-    const iterator = PLACEHOLDER_CACHE.keys();
-    for (let i = 0; i < keysToDelete; i++) {
-      const key = iterator.next().value;
-      if (key !== undefined) {
-        PLACEHOLDER_CACHE.delete(key);
-      }
-    }
-  }
-  PLACEHOLDER_CACHE.set(trimmed, { value: result, timestamp: now });
-
-  return result;
+  if (!trimmed) return true;
+  if (trimmed.length > MAX_REGEX_INPUT_LENGTH) return false;
+  return NOISE_PATTERN.test(trimmed);
 }
 
 /**
@@ -208,11 +58,6 @@ export function cleanParagraph(text: string): string | null {
 
   // Is noise content
   if (isNoiseText(trimmed)) {
-    return null;
-  }
-
-  // Is placeholder content (in paragraphs, not in examples)
-  if (isPlaceholderContent(trimmed)) {
     return null;
   }
 
@@ -279,39 +124,27 @@ export function cleanCodeBlock(code: string): string | null {
   return trimmed;
 }
 
-/**
- * Strip markdown link syntax from text for cleaner slugs/display
- * [Text](#anchor) -> Text
- * [Text](url) -> Text
- */
 export function stripMarkdownLinks(text: string): string {
   return text.replace(/\[([^\]]+)\]\([^)]*\)/g, '$1');
 }
 
 /**
  * Remove common timestamp patterns from text (inline removal)
- * Use when you want to strip timestamps from within longer content
  */
 export function removeInlineTimestamps(text: string): string {
-  return (
-    text
-      // Remove "X days/hours/etc ago" patterns
-      .replace(
-        /\b\d+\s*(seconds?|minutes?|hours?|days?|weeks?|months?|years?)\s*ago\b/gi,
-        ''
-      )
-      // Remove "Updated: date" patterns
-      .replace(
-        /\b(updated|modified|edited|created|published)\s*:?\s*\d+\s*(seconds?|minutes?|hours?|days?|weeks?|months?|years?)\s*ago\b/gi,
-        ''
-      )
-      // Remove standalone dates
-      .replace(
-        /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+\d{1,2},?\s+\d{4}\b/gi,
-        ''
-      )
-      // Clean up extra whitespace
-      .replace(/\s{2,}/g, ' ')
-      .trim()
-  );
+  return text
+    .replace(
+      /\b\d+\s*(seconds?|minutes?|hours?|days?|weeks?|months?|years?)\s*ago\b/gi,
+      ''
+    )
+    .replace(
+      /\b(updated|modified|edited|created|published)\s*:?\s*\d+\s*(seconds?|minutes?|hours?|days?|weeks?|months?|years?)\s*ago\b/gi,
+      ''
+    )
+    .replace(
+      /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+\d{1,2},?\s+\d{4}\b/gi,
+      ''
+    )
+    .replace(/\s{2,}/g, ' ')
+    .trim();
 }
