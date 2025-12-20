@@ -2,38 +2,11 @@ import dns from 'dns/promises';
 
 import { config } from '../config/index.js';
 
-const BLOCKED_HOSTS = new Set([
-  'localhost',
-  '127.0.0.1',
-  '0.0.0.0',
-  '::1',
-  '169.254.169.254',
-  'metadata.google.internal',
-  'metadata.azure.com',
-  '100.100.100.200',
-  'instance-data',
-]);
-
-const BLOCKED_IP_PATTERNS: readonly RegExp[] = [
-  /^10\./,
-  /^172\.(1[6-9]|2\d|3[01])\./,
-  /^192\.168\./,
-  /^127\./,
-  /^0\./,
-  /^169\.254\./,
-  /^fc00:/i,
-  /^fe80:/i,
-  /^::ffff:127\./,
-  /^::ffff:10\./,
-  /^::ffff:172\.(1[6-9]|2\d|3[01])\./,
-  /^::ffff:192\.168\./,
-];
-
 /**
  * Check if an IP address is in a blocked private range
  */
-function isBlockedIp(ip: string): boolean {
-  return BLOCKED_IP_PATTERNS.some((pattern) => pattern.test(ip));
+export function isBlockedIp(ip: string): boolean {
+  return config.security.blockedIpPatterns.some((pattern) => pattern.test(ip));
 }
 
 export async function validateResolvedIps(hostname: string): Promise<void> {
@@ -44,7 +17,7 @@ export async function validateResolvedIps(hostname: string): Promise<void> {
   try {
     const ipv4Addresses = await dns.resolve4(hostname).catch(() => []);
     for (const ip of ipv4Addresses) {
-      if (isBlockedIp(ip) || BLOCKED_HOSTS.has(ip)) {
+      if (isBlockedIp(ip) || config.security.blockedHosts.has(ip)) {
         throw new Error(
           `DNS rebinding detected: ${hostname} resolves to blocked IP ${ip}`
         );
@@ -53,7 +26,7 @@ export async function validateResolvedIps(hostname: string): Promise<void> {
 
     const ipv6Addresses = await dns.resolve6(hostname).catch(() => []);
     for (const ip of ipv6Addresses) {
-      if (isBlockedIp(ip) || BLOCKED_HOSTS.has(ip)) {
+      if (isBlockedIp(ip) || config.security.blockedHosts.has(ip)) {
         throw new Error(
           `DNS rebinding detected: ${hostname} resolves to blocked IP ${ip}`
         );
@@ -106,7 +79,7 @@ export function validateAndNormalizeUrl(urlString: string): string {
     throw new Error('URL must have a valid hostname');
   }
 
-  if (BLOCKED_HOSTS.has(hostname)) {
+  if (config.security.blockedHosts.has(hostname)) {
     throw new Error(
       `Blocked host: ${hostname}. Internal hosts are not allowed`
     );

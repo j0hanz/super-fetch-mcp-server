@@ -4,6 +4,7 @@ import axios, {
   isCancel,
 } from 'axios';
 import crypto from 'crypto';
+import dns from 'dns';
 import http from 'http';
 import https from 'https';
 import os from 'os';
@@ -13,7 +14,7 @@ import type { FetchOptions } from '../config/types.js';
 
 import { FetchError } from '../errors/app-error.js';
 
-import { validateResolvedIps } from '../utils/url-validator.js';
+import { isBlockedIp } from '../utils/url-validator.js';
 
 import { logDebug, logError, logWarn } from './logger.js';
 
@@ -57,12 +58,44 @@ const CPU_COUNT = os.cpus().length;
 const MAX_SOCKETS = Math.max(CPU_COUNT * 2, 25);
 const MAX_FREE_SOCKETS = Math.max(Math.floor(CPU_COUNT * 0.5), 10);
 
+function customLookup(
+  hostname: string,
+  options: dns.LookupOptions,
+  callback: (
+    err: NodeJS.ErrnoException | null,
+    address: string | dns.LookupAddress[],
+    family?: number
+  ) => void
+): void {
+  dns.lookup(hostname, options, (err, address, family) => {
+    if (err) {
+      callback(err, address, family);
+      return;
+    }
+
+    const addresses = Array.isArray(address) ? address : [{ address, family }];
+
+    for (const addr of addresses) {
+      const ip = typeof addr === 'string' ? addr : addr.address;
+      if (isBlockedIp(ip)) {
+        const error = new Error(`Blocked IP: ${ip}`);
+        (error as any).code = 'EBLOCKED';
+        callback(error as NodeJS.ErrnoException, address, family);
+        return;
+      }
+    }
+
+    callback(null, address, family);
+  });
+}
+
 const httpAgent = new http.Agent({
   keepAlive: true,
   maxSockets: MAX_SOCKETS,
   maxFreeSockets: MAX_FREE_SOCKETS,
   timeout: 60000,
   scheduling: 'fifo',
+  lookup: customLookup,
 });
 
 const httpsAgent = new https.Agent({
@@ -71,6 +104,7 @@ const httpsAgent = new https.Agent({
   maxFreeSockets: MAX_FREE_SOCKETS,
   timeout: 60000,
   scheduling: 'fifo',
+  lookup: customLookup,
 });
 
 export function destroyAgents(): void {
@@ -213,15 +247,8 @@ client.interceptors.response.use(
 );
 
 async function fetchUrl(url: string, options?: FetchOptions): Promise<string> {
-  try {
-    const urlObj = new URL(url);
-    await validateResolvedIps(urlObj.hostname);
-  } catch (error) {
-    if (error instanceof Error) {
-      throw new FetchError(error.message, url);
-    }
-    throw error;
-  }
+  // URL validation happens in the pipeline before reaching here
+  // DNS rebinding protection is handled by the custom lookup in http(s)Agent
 
   const requestConfig: AxiosRequestConfig = {
     method: 'GET',
