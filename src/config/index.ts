@@ -42,7 +42,7 @@ const isLoopbackHost =
 export const config = {
   server: {
     name: 'superFetch',
-    version: '1.0.0',
+    version: '1.1.2',
     port: parseInteger(process.env.PORT, 3000, 1024, 65535),
     host,
     sessionTtlMs: parseInteger(

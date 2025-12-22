@@ -477,12 +477,6 @@ Fetches multiple URLs in parallel with concurrency control. Ideal for comparing 
 | `superfetch://health` | Real-time server health and dependency status       |
 | Dynamic resources     | Cached content available via resource subscriptions |
 
-### Prompts
-
-- **`analyze-web-content`** — Analyze fetched content with optional focus area
-- **`summarize-page`** — Fetch and summarize a webpage concisely
-- **`extract-data`** — Extract structured data from a webpage
-
 ---
 
 ## Configuration
@@ -655,6 +649,14 @@ Configure SuperFetch behavior by adding environment variables to your MCP client
 | `EXTRACT_MAIN_CONTENT` | `true`  | `true` / `false` | Use Mozilla Readability to extract main content    |
 | `INCLUDE_METADATA`     | `true`  | `true` / `false` | Include page metadata (title, description, author) |
 
+#### 🛡️ Security Settings
+
+| Variable       | Default  | Description                                                                  |
+| -------------- | -------- | ---------------------------------------------------------------------------- |
+| `API_KEY`      | –        | API Key for authentication (required if `REQUIRE_AUTH` is true)              |
+| `REQUIRE_AUTH` | `true`\* | Require authentication (\*defaults to `false` on loopback unless configured) |
+| `ALLOW_REMOTE` | `false`  | Allow binding to non-loopback interfaces                                     |
+
 ### HTTP Mode Configuration
 
 <details>
@@ -677,6 +679,8 @@ npx -y @j0hanz/superfetch@latest
 | `HOST`            | `127.0.0.1` | HTTP server host (`0.0.0.0` for Docker/K8s)      |
 | `ALLOWED_ORIGINS` | `[]`        | Comma-separated CORS origins                     |
 | `CORS_ALLOW_ALL`  | `false`     | Allow all CORS origins (dev only, security risk) |
+| `SESSION_TTL_MS`  | `1800000`   | Session time-to-live in milliseconds (30 mins)   |
+| `MAX_SESSIONS`    | `200`       | Maximum number of active sessions                |
 
 #### VS Code HTTP Mode Setup
 
@@ -788,10 +792,9 @@ Sessions are managed via `mcp-session-id` header with 30-minute TTL.
 | Content Extraction | @mozilla/readability ^0.6.0       |
 | HTML Parsing       | Cheerio ^1.1.2, JSDOM ^27.3.0     |
 | Markdown           | Turndown ^7.2.2                   |
-| HTTP               | Express ^5.2.1, Axios ^1.13.2     |
+| HTTP               | Express ^5.2.1, Axios ^1.7.9      |
 | Caching            | node-cache ^5.1.2                 |
-| Validation         | Zod ^3.25.76                      |
-| Logging            | Winston ^3.19.0                   |
+| Validation         | Zod ^3.24.1                       |
 
 ---
 
