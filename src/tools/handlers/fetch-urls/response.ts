@@ -5,27 +5,41 @@ import type {
   ToolResponse,
 } from '../../../config/types.js';
 
+import { normalizeToolErrorCode } from '../../../utils/tool-error-handler.js';
+
+function normalizeBatchResults(results: BatchUrlResult[]): BatchUrlResult[] {
+  return results.map((result) => {
+    if (!result.errorCode) return result;
+    const normalized = normalizeToolErrorCode(result.errorCode);
+    return normalized === result.errorCode
+      ? result
+      : { ...result, errorCode: normalized };
+  });
+}
+
 export function createBatchResponse(
   results: BatchUrlResult[]
 ): ToolResponse<BatchResponseContent> {
+  const normalizedResults = normalizeBatchResults(results);
+
   const summary: BatchSummary = {
-    total: results.length,
-    successful: results.filter((result) => result.success).length,
-    failed: results.filter((result) => !result.success).length,
-    cached: results.filter((result) => result.cached).length,
-    totalContentBlocks: results.reduce(
+    total: normalizedResults.length,
+    successful: normalizedResults.filter((result) => result.success).length,
+    failed: normalizedResults.filter((result) => !result.success).length,
+    cached: normalizedResults.filter((result) => result.cached).length,
+    totalContentBlocks: normalizedResults.reduce(
       (sum, result) => sum + (result.contentBlocks ?? 0),
       0
     ),
   };
 
   const structuredContent: BatchResponseContent = {
-    results,
+    results: normalizedResults,
     summary,
     fetchedAt: new Date().toISOString(),
   };
 
-  const resourceLinks = results
+  const resourceLinks = normalizedResults
     .filter(
       (result): result is BatchUrlResult & { resourceUri: string } =>
         typeof result.resourceUri === 'string'

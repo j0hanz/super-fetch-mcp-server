@@ -18,7 +18,16 @@ const MCP_ERROR_CODE_MAP: Record<string, string> = {
   UNKNOWN_ERROR: String(ErrorCode.InternalError),
 };
 
-function normalizeErrorCode(code: string): string {
+const NUMERIC_ERROR_CODE = /^-?\d+$/;
+
+function isNumericErrorCode(code: string): boolean {
+  return NUMERIC_ERROR_CODE.test(code);
+}
+
+export function normalizeToolErrorCode(code: string): string {
+  if (!code) return String(ErrorCode.InternalError);
+  if (isNumericErrorCode(code)) return code;
+  if (code.startsWith('HTTP_')) return String(ErrorCode.InternalError);
   return MCP_ERROR_CODE_MAP[code] ?? code;
 }
 
@@ -30,7 +39,7 @@ export function createToolErrorResponse(
   const structuredContent = {
     error: message,
     url,
-    errorCode: normalizeErrorCode(code),
+    errorCode: normalizeToolErrorCode(code),
     errorType: code,
   };
 
