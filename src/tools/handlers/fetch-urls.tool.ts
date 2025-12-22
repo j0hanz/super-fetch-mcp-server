@@ -1,3 +1,4 @@
+import { config } from '../../config/index.js';
 import type {
   BatchResponseContent,
   BatchSummary,
@@ -33,6 +34,41 @@ const MAX_CONCURRENCY = 5;
 export const FETCH_URLS_TOOL_NAME = 'fetch-urls';
 export const FETCH_URLS_TOOL_DESCRIPTION =
   'Fetches multiple URLs in parallel and converts them to AI-readable format (JSONL or Markdown). Supports concurrency control and continues on individual failures.';
+
+interface CachedUrlEntry {
+  content: string;
+  title?: string;
+  contentBlocks?: number;
+  truncated?: boolean;
+}
+
+function isCachedUrlEntry(value: unknown): value is CachedUrlEntry {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  const record = value as Record<string, unknown>;
+  if (typeof record.content !== 'string') {
+    return false;
+  }
+
+  if (record.title !== undefined && typeof record.title !== 'string') {
+    return false;
+  }
+
+  if (
+    record.contentBlocks !== undefined &&
+    typeof record.contentBlocks !== 'number'
+  ) {
+    return false;
+  }
+
+  if (record.truncated !== undefined && typeof record.truncated !== 'boolean') {
+    return false;
+  }
+
+  return true;
+}
 
 function createBatchResponse(
   results: BatchUrlResult[]
@@ -87,22 +123,80 @@ interface SingleUrlResult {
 
 function attemptCacheRetrievalForUrl(
   normalizedUrl: string,
-  format: 'jsonl' | 'markdown'
+  format: 'jsonl' | 'markdown',
+  cacheVary: Record<string, unknown> | string | undefined
 ): SingleUrlResult | null {
   const cacheNamespace = format === 'markdown' ? 'markdown' : 'url';
-  const cacheKey = cache.createCacheKey(cacheNamespace, normalizedUrl);
+  const cacheKey = cache.createCacheKey(
+    cacheNamespace,
+    normalizedUrl,
+    cacheVary
+  );
 
   if (!cacheKey) return null;
 
   const cached = cache.get(cacheKey);
   if (!cached) return null;
 
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(cached.content);
+  } catch {
+    return null;
+  }
+
+  if (!isCachedUrlEntry(parsed)) {
+    return null;
+  }
+
   logDebug('Batch cache hit', { url: normalizedUrl });
   return {
     url: normalizedUrl,
     success: true,
-    content: cached.content,
+    content: parsed.content,
+    title: parsed.title,
+    contentBlocks: parsed.contentBlocks,
     cached: true,
+  };
+}
+
+function normalizeHeadersForCache(
+  headers?: Record<string, string>
+): Record<string, string> | undefined {
+  if (!headers || Object.keys(headers).length === 0) {
+    return undefined;
+  }
+
+  const { blockedHeaders } = config.security;
+  const crlfRegex = /[\r\n]/;
+  const normalized: Record<string, string> = {};
+
+  for (const [key, value] of Object.entries(headers)) {
+    const lowerKey = key.toLowerCase();
+    if (
+      !blockedHeaders.has(lowerKey) &&
+      !crlfRegex.test(key) &&
+      !crlfRegex.test(value)
+    ) {
+      normalized[lowerKey] = value.trim();
+    }
+  }
+
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function buildCacheVary(
+  options: SingleUrlProcessOptions,
+  customHeaders?: Record<string, string>
+): Record<string, unknown> | undefined {
+  const headers = normalizeHeadersForCache(customHeaders);
+  return {
+    format: options.format,
+    extractMainContent: options.extractMainContent,
+    includeMetadata: options.includeMetadata,
+    maxContentLength: options.maxContentLength ?? null,
+    ...(options.format === 'markdown' ? {} : { contentBlocks: true }),
+    ...(headers ? { headers } : {}),
   };
 }
 
@@ -181,10 +275,15 @@ async function processSingleUrl(
 ): Promise<SingleUrlResult> {
   try {
     const normalizedUrl = validateAndNormalizeUrl(url);
+    const cacheVary = buildCacheVary(
+      options,
+      options.requestOptions?.customHeaders
+    );
 
     const cachedResult = attemptCacheRetrievalForUrl(
       normalizedUrl,
-      options.format
+      options.format,
+      cacheVary
     );
     if (cachedResult) return cachedResult;
 
@@ -213,9 +312,18 @@ async function processSingleUrl(
     );
 
     const cacheNamespace = options.format === 'markdown' ? 'markdown' : 'url';
-    const cacheKey = cache.createCacheKey(cacheNamespace, normalizedUrl);
+    const cacheKey = cache.createCacheKey(
+      cacheNamespace,
+      normalizedUrl,
+      cacheVary
+    );
     if (cacheKey) {
-      cache.set(cacheKey, finalContent);
+      const cachePayload: CachedUrlEntry = {
+        content: finalContent,
+        title,
+        contentBlocks,
+      };
+      cache.set(cacheKey, JSON.stringify(cachePayload));
     }
 
     return {

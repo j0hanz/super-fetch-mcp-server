@@ -124,14 +124,13 @@ export async function fetchMarkdownToolHandler(
       cacheNamespace: 'markdown',
       customHeaders: input.customHeaders,
       retries: input.retries,
+      cacheVary: {
+        extractMainContent: options.extractMainContent,
+        includeMetadata: options.includeMetadata,
+        generateToc: options.generateToc,
+        maxContentLength: options.maxContentLength,
+      },
       transform: (html, url) => transformToMarkdown(html, url, options),
-      serialize: (data) => data.markdown,
-      deserialize: (cached) => ({
-        markdown: cached,
-        title: undefined,
-        toc: undefined,
-        truncated: false,
-      }),
     });
 
     const structuredContent = {

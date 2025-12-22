@@ -227,6 +227,7 @@ export interface JsonlTransformResult {
   content: string;
   contentBlocks: number;
   title: string | undefined;
+  truncated?: boolean;
 }
 
 export interface SingleUrlResult {
@@ -253,6 +254,8 @@ export interface FetchPipelineOptions<T> {
   signal?: AbortSignal;
   /** Optional: per-request timeout override in milliseconds */
   timeout?: number;
+  /** Optional: cache variation input for headers/flags */
+  cacheVary?: Record<string, unknown> | string;
   /** Transform function to process HTML into desired format */
   transform: (html: string, url: string) => T;
   /** Optional: serialize result for caching (defaults to JSON.stringify) */

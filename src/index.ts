@@ -7,7 +7,11 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 
 import { config } from './config/index.js';
-import type { McpRequestBody, SessionEntry } from './config/types.js';
+import type {
+  McpRequestBody,
+  RateLimitEntry,
+  SessionEntry,
+} from './config/types.js';
 
 import { requestContext } from './services/context.js';
 import { destroyAgents } from './services/fetcher.js';
@@ -193,6 +197,66 @@ if (isStdioMode) {
     next();
   });
 
+  const rateLimitStore = new Map<string, RateLimitEntry>();
+  const { rateLimit } = config;
+
+  const getRateLimitKey = (req: Request): string => {
+    return req.ip ?? req.socket.remoteAddress ?? 'unknown';
+  };
+
+  const rateLimitCleanup = setInterval(() => {
+    const now = Date.now();
+    for (const [key, entry] of rateLimitStore.entries()) {
+      if (now - entry.lastAccessed > rateLimit.windowMs * 2) {
+        rateLimitStore.delete(key);
+      }
+    }
+  }, rateLimit.cleanupIntervalMs);
+  rateLimitCleanup.unref();
+
+  const rateLimitMiddleware = (
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ): void => {
+    if (!rateLimit.enabled || req.method === 'OPTIONS') {
+      next();
+      return;
+    }
+
+    const now = Date.now();
+    const key = getRateLimitKey(req);
+    const existing = rateLimitStore.get(key);
+
+    if (!existing || now > existing.resetTime) {
+      rateLimitStore.set(key, {
+        count: 1,
+        resetTime: now + rateLimit.windowMs,
+        lastAccessed: now,
+      });
+      next();
+      return;
+    }
+
+    existing.count += 1;
+    existing.lastAccessed = now;
+
+    if (existing.count > rateLimit.maxRequests) {
+      const retryAfter = Math.max(
+        1,
+        Math.ceil((existing.resetTime - now) / 1000)
+      );
+      res.set('Retry-After', String(retryAfter));
+      res.status(429).json({
+        error: 'Rate limit exceeded',
+        retryAfter,
+      });
+      return;
+    }
+
+    next();
+  };
+
   app.get('/health', (_req, res) => {
     res.json({
       status: 'healthy',
@@ -277,7 +341,7 @@ if (isStdioMode) {
   );
   sessionCleanupInterval.unref();
 
-  app.use('/mcp', authMiddleware);
+  app.use('/mcp', rateLimitMiddleware, authMiddleware);
 
   app.post(
     '/mcp',

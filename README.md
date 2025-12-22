@@ -653,9 +653,18 @@ Configure SuperFetch behavior by adding environment variables to your MCP client
 
 | Variable       | Default  | Description                                                                  |
 | -------------- | -------- | ---------------------------------------------------------------------------- |
-| `API_KEY`      | –        | API Key for authentication (required if `REQUIRE_AUTH` is true)              |
+| `API_KEY`      | -        | API Key for authentication (required if `REQUIRE_AUTH` is true)              |
 | `REQUIRE_AUTH` | `true`\* | Require authentication (\*defaults to `false` on loopback unless configured) |
 | `ALLOW_REMOTE` | `false`  | Allow binding to non-loopback interfaces                                     |
+
+#### Rate Limiting
+
+| Variable                | Default | Valid Values      | Description                          |
+| ----------------------- | ------- | ----------------- | ------------------------------------ |
+| `RATE_LIMIT_ENABLED`    | `true`  | `true` / `false`  | Enable/disable HTTP rate limiting    |
+| `RATE_LIMIT_MAX`        | `100`   | `1`-`10000`       | Max requests per window per IP       |
+| `RATE_LIMIT_WINDOW_MS`  | `60000` | `1000`-`3600000`  | Rate limit window in milliseconds    |
+| `RATE_LIMIT_CLEANUP_MS` | `60000` | `10000`-`3600000` | Cleanup interval for limiter entries |
 
 ### HTTP Mode Configuration
 
@@ -749,7 +758,8 @@ Blocked headers: `host`, `authorization`, `cookie`, `x-forwarded-for`, `x-real-i
 
 ### Rate Limiting
 
-Default: **100 requests/minute** per IP (configurable)
+Default: **100 requests/minute** per IP. Configure with `RATE_LIMIT_MAX` and
+`RATE_LIMIT_WINDOW_MS`.
 
 ### HTTP Mode Endpoints
 

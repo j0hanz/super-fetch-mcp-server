@@ -166,12 +166,16 @@ const FetchUrlsInputSchema = {
 const FetchUrlOutputSchema = {
   url: z.string().describe('The fetched URL'),
   title: z.string().optional().describe('Page title'),
-  contentBlocks: z.number().describe('Number of content blocks extracted'),
+  contentBlocks: z
+    .number()
+    .describe('Number of content blocks extracted (JSONL only)'),
   fetchedAt: z
     .string()
     .describe('ISO timestamp of when the content was fetched'),
   format: z.enum(['jsonl', 'markdown']).describe('Output format used'),
-  content: z.string().describe('The extracted content in JSONL format'),
+  content: z
+    .string()
+    .describe('The extracted content in JSONL or Markdown format'),
   cached: z.boolean().describe('Whether the result was served from cache'),
   error: z.string().optional().describe('Error message if the request failed'),
   errorCode: z.string().optional().describe('Error code if the request failed'),

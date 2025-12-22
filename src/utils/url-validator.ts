@@ -1,10 +1,64 @@
+import ipaddr from 'ipaddr.js';
+
 import { config } from '../config/index.js';
 
 /**
  * Check if an IP address is in a blocked private range
  */
+function isBlockedIpv4Range(range: string): boolean {
+  return (
+    range === 'private' ||
+    range === 'loopback' ||
+    range === 'linkLocal' ||
+    range === 'multicast' ||
+    range === 'broadcast' ||
+    range === 'reserved' ||
+    range === 'unspecified'
+  );
+}
+
+function isBlockedIpv6Range(range: string): boolean {
+  return (
+    range === 'uniqueLocal' ||
+    range === 'linkLocal' ||
+    range === 'loopback' ||
+    range === 'multicast' ||
+    range === 'reserved' ||
+    range === 'unspecified' ||
+    range === 'ipv4Mapped' ||
+    range === 'rfc6145' ||
+    range === 'rfc6052' ||
+    range === '6to4' ||
+    range === 'teredo'
+  );
+}
+
+type IpAddress = ipaddr.IPv4 | ipaddr.IPv6;
+
+function isIpv6Address(addr: IpAddress): addr is ipaddr.IPv6 {
+  return addr.kind() === 'ipv6';
+}
+
 export function isBlockedIp(ip: string): boolean {
-  return config.security.blockedIpPatterns.some((pattern) => pattern.test(ip));
+  if (config.security.blockedHosts.has(ip)) {
+    return true;
+  }
+
+  if (!ipaddr.isValid(ip)) {
+    return false;
+  }
+
+  const addr = ipaddr.parse(ip) as IpAddress;
+  if (isIpv6Address(addr)) {
+    if (addr.isIPv4MappedAddress()) {
+      const ipv4 = addr.toIPv4Address();
+      return isBlockedIpv4Range(ipv4.range());
+    }
+
+    return isBlockedIpv6Range(addr.range());
+  }
+
+  return isBlockedIpv4Range(addr.range());
 }
 
 export function validateAndNormalizeUrl(urlString: string): string {

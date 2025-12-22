@@ -98,12 +98,15 @@ export const config = {
       /^127\./,
       /^0\./,
       /^169\.254\./,
+      /^100\.64\./,
       /^fc00:/i,
+      /^fd00:/i,
       /^fe80:/i,
       /^::ffff:127\./,
       /^::ffff:10\./,
       /^::ffff:172\.(1[6-9]|2\d|3[01])\./,
       /^::ffff:192\.168\./,
+      /^::ffff:169\.254\./,
     ] as readonly RegExp[],
     blockedHeaders: new Set([
       'host',
@@ -116,5 +119,21 @@ export const config = {
     apiKey: process.env.API_KEY,
     allowRemote: parseBoolean(process.env.ALLOW_REMOTE, false),
     requireAuth: parseBoolean(process.env.REQUIRE_AUTH, !isLoopbackHost),
+  },
+  rateLimit: {
+    enabled: parseBoolean(process.env.RATE_LIMIT_ENABLED, true),
+    maxRequests: parseInteger(process.env.RATE_LIMIT_MAX, 100, 1, 10000),
+    windowMs: parseInteger(
+      process.env.RATE_LIMIT_WINDOW_MS,
+      60000,
+      1000,
+      3600000
+    ),
+    cleanupIntervalMs: parseInteger(
+      process.env.RATE_LIMIT_CLEANUP_MS,
+      60000,
+      10000,
+      3600000
+    ),
   },
 } as const;

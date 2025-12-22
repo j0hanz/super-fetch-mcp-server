@@ -1,3 +1,4 @@
+import { config } from '../../config/index.js';
 import type {
   FetchOptions,
   FetchPipelineOptions,
@@ -9,6 +10,50 @@ import { fetchUrlWithRetry } from '../../services/fetcher.js';
 import { logDebug, logWarn } from '../../services/logger.js';
 
 import { validateAndNormalizeUrl } from '../../utils/url-validator.js';
+
+function normalizeHeadersForCache(
+  headers?: Record<string, string>
+): Record<string, string> | undefined {
+  if (!headers || Object.keys(headers).length === 0) {
+    return undefined;
+  }
+
+  const { blockedHeaders } = config.security;
+  const crlfRegex = /[\r\n]/;
+  const normalized: Record<string, string> = {};
+
+  for (const [key, value] of Object.entries(headers)) {
+    const lowerKey = key.toLowerCase();
+    if (
+      !blockedHeaders.has(lowerKey) &&
+      !crlfRegex.test(key) &&
+      !crlfRegex.test(value)
+    ) {
+      normalized[lowerKey] = value.trim();
+    }
+  }
+
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function buildCacheVary(
+  cacheVary: Record<string, unknown> | string | undefined,
+  customHeaders?: Record<string, string>
+): Record<string, unknown> | string | undefined {
+  const headerVary = normalizeHeadersForCache(customHeaders);
+
+  if (!cacheVary && !headerVary) {
+    return undefined;
+  }
+
+  if (typeof cacheVary === 'string') {
+    return headerVary
+      ? { key: cacheVary, headers: headerVary }
+      : { key: cacheVary };
+  }
+
+  return headerVary ? { ...(cacheVary ?? {}), headers: headerVary } : cacheVary;
+}
 
 function safeJsonParse(cached: string, cacheKey: string): unknown {
   try {
@@ -78,7 +123,12 @@ export async function executeFetchPipeline<T>(
   } = options;
 
   const normalizedUrl = validateAndNormalizeUrl(url);
-  const cacheKey = cache.createCacheKey(cacheNamespace, normalizedUrl);
+  const cacheVary = buildCacheVary(options.cacheVary, customHeaders);
+  const cacheKey = cache.createCacheKey(
+    cacheNamespace,
+    normalizedUrl,
+    cacheVary
+  );
 
   const cachedResult = attemptCacheRetrieval<T>(
     cacheKey,

@@ -14,7 +14,35 @@ const contentCache = new NodeCache({
   maxKeys: config.cache.maxKeys,
 });
 
-export function createCacheKey(namespace: string, url: string): string | null {
+function stableStringify(value: unknown): string {
+  if (value === null || value === undefined) {
+    return '';
+  }
+
+  if (typeof value !== 'object') {
+    return JSON.stringify(value);
+  }
+
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableStringify(item)).join(',')}]`;
+  }
+
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, entryValue]) => entryValue !== undefined)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(
+      ([key, entryValue]) =>
+        `${JSON.stringify(key)}:${stableStringify(entryValue)}`
+    );
+
+  return `{${entries.join(',')}}`;
+}
+
+export function createCacheKey(
+  namespace: string,
+  url: string,
+  vary?: Record<string, unknown> | string
+): string | null {
   if (!namespace || !url) return null;
 
   // Hash URL for consistent key length and smaller memory footprint
@@ -22,7 +50,21 @@ export function createCacheKey(namespace: string, url: string): string | null {
     .update(url)
     .digest('hex')
     .substring(0, 16);
-  return `${namespace}:${urlHash}`;
+
+  if (!vary) {
+    return `${namespace}:${urlHash}`;
+  }
+
+  const varyString = typeof vary === 'string' ? vary : stableStringify(vary);
+  if (!varyString) {
+    return `${namespace}:${urlHash}`;
+  }
+
+  const varyHash = createHash('sha256')
+    .update(varyString)
+    .digest('hex')
+    .substring(0, 12);
+  return `${namespace}:${urlHash}.${varyHash}`;
 }
 
 export function get(cacheKey: string | null): CacheEntry | undefined {

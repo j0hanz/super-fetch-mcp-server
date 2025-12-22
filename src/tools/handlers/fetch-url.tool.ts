@@ -21,15 +21,20 @@ import {
 import { executeFetchPipeline } from '../utils/fetch-pipeline.js';
 
 import { toJsonl } from '../../transformers/jsonl.transformer.js';
+import { htmlToMarkdown } from '../../transformers/markdown.transformer.js';
 
 export const FETCH_URL_TOOL_NAME = 'fetch-url';
 export const FETCH_URL_TOOL_DESCRIPTION =
   'Fetches a webpage and converts it to AI-readable JSONL format with semantic content blocks. Supports custom headers, retries, and content length limits.';
 
+type ContentTransformOptionsWithLimits = ContentTransformOptions & {
+  maxContentLength?: number;
+};
+
 function transformToJsonl(
   html: string,
   url: string,
-  options: ContentTransformOptions
+  options: ContentTransformOptionsWithLimits
 ): JsonlTransformResult {
   const { article, metadata: extractedMeta } = extractContent(html, url, {
     extractArticle: options.extractMainContent,
@@ -53,10 +58,58 @@ function transformToJsonl(
 
   const title = shouldExtractFromArticle ? article.title : extractedMeta.title;
 
+  const { content, truncated } = enforceContentLengthLimit(
+    toJsonl(contentBlocks, metadata),
+    options.maxContentLength
+  );
+
   return {
-    content: toJsonl(contentBlocks, metadata),
+    content,
     contentBlocks: contentBlocks.length,
     title,
+    ...(truncated && { truncated }),
+  };
+}
+
+function transformToMarkdown(
+  html: string,
+  url: string,
+  options: ContentTransformOptionsWithLimits
+): JsonlTransformResult {
+  const { article, metadata: extractedMeta } = extractContent(html, url, {
+    extractArticle: options.extractMainContent,
+  });
+
+  const shouldExtractFromArticle = determineContentExtractionSource(
+    options.extractMainContent,
+    article
+  );
+
+  const sourceHtml = shouldExtractFromArticle ? article.content : html;
+  const contentBlocks = parseHtml(sourceHtml);
+
+  const metadata = createContentMetadataBlock(
+    url,
+    article,
+    extractedMeta,
+    shouldExtractFromArticle,
+    options.includeMetadata
+  );
+
+  const title = shouldExtractFromArticle ? article.title : extractedMeta.title;
+
+  let markdown = htmlToMarkdown(sourceHtml, metadata);
+  let truncated = false;
+  if (options.maxContentLength && markdown.length > options.maxContentLength) {
+    markdown = `${markdown.substring(0, options.maxContentLength)}\n\n...[truncated]`;
+    truncated = true;
+  }
+
+  return {
+    content: markdown,
+    contentBlocks: contentBlocks.length,
+    title,
+    ...(truncated && { truncated }),
   };
 }
 
@@ -69,44 +122,50 @@ export async function fetchUrlToolHandler(
 
   const extractMainContent = input.extractMainContent ?? true;
   const includeMetadata = input.includeMetadata ?? true;
+  const format = input.format ?? 'jsonl';
 
   logDebug('Fetching URL', {
     url: input.url,
     extractMainContent,
     includeMetadata,
+    format,
   });
 
   try {
     const result = await executeFetchPipeline<JsonlTransformResult>({
       url: input.url,
-      cacheNamespace: 'url',
+      cacheNamespace: format === 'markdown' ? 'markdown' : 'url',
       customHeaders: input.customHeaders,
       retries: input.retries,
+      cacheVary: {
+        format,
+        extractMainContent,
+        includeMetadata,
+        maxContentLength: input.maxContentLength,
+      },
       transform: (html, url) =>
-        transformToJsonl(html, url, { extractMainContent, includeMetadata }),
-      serialize: (data) =>
-        enforceContentLengthLimit(data.content, input.maxContentLength).content,
-      deserialize: (cached) => ({
-        content: cached,
-        contentBlocks: 0,
-        title: undefined,
-      }),
+        format === 'markdown'
+          ? transformToMarkdown(html, url, {
+              extractMainContent,
+              includeMetadata,
+              maxContentLength: input.maxContentLength,
+            })
+          : transformToJsonl(html, url, {
+              extractMainContent,
+              includeMetadata,
+              maxContentLength: input.maxContentLength,
+            }),
     });
-
-    const { content, truncated } = enforceContentLengthLimit(
-      result.data.content,
-      input.maxContentLength
-    );
 
     const structuredContent = {
       url: result.url,
       title: result.data.title,
       contentBlocks: result.data.contentBlocks,
       fetchedAt: result.fetchedAt,
-      format: 'jsonl' as const,
-      content,
+      format,
+      content: result.data.content,
       cached: result.fromCache,
-      ...(truncated && { truncated }),
+      ...(result.data.truncated && { truncated: result.data.truncated }),
     };
 
     const jsonOutput = JSON.stringify(

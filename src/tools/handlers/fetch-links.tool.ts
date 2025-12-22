@@ -152,6 +152,13 @@ export async function fetchLinksToolHandler(
       cacheNamespace: 'links',
       customHeaders: input.customHeaders,
       retries: input.retries,
+      cacheVary: {
+        includeInternal: options.includeInternal,
+        includeExternal: options.includeExternal,
+        includeImages: options.includeImages,
+        maxLinks: options.maxLinks,
+        filterPattern: input.filterPattern ?? null,
+      },
       transform: (html, url) => extractLinks(html, url, options),
     });
 
