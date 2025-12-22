@@ -1,4 +1,5 @@
 import * as cheerio from 'cheerio';
+import safeRegex from 'safe-regex';
 
 import type {
   ExtractedLink,
@@ -126,6 +127,14 @@ export async function fetchLinksToolHandler(
     } catch {
       return createToolErrorResponse(
         `Invalid filter pattern: ${input.filterPattern}`,
+        input.url,
+        'VALIDATION_ERROR'
+      );
+    }
+
+    if (!safeRegex(filterPattern)) {
+      return createToolErrorResponse(
+        'Filter pattern is unsafe (potential catastrophic backtracking)',
         input.url,
         'VALIDATION_ERROR'
       );

@@ -13,7 +13,8 @@ function isBlockedIpv4Range(range: string): boolean {
     range === 'multicast' ||
     range === 'broadcast' ||
     range === 'reserved' ||
-    range === 'unspecified'
+    range === 'unspecified' ||
+    range === 'carrierGradeNat'
   );
 }
 
@@ -52,13 +53,31 @@ export function isBlockedIp(ip: string): boolean {
   if (isIpv6Address(addr)) {
     if (addr.isIPv4MappedAddress()) {
       const ipv4 = addr.toIPv4Address();
-      return isBlockedIpv4Range(ipv4.range());
+      return (
+        isBlockedIpv4Range(ipv4.range()) ||
+        matchesBlockedIpPatterns(ipv4.toString())
+      );
     }
 
-    return isBlockedIpv6Range(addr.range());
+    return (
+      isBlockedIpv6Range(addr.range()) ||
+      matchesBlockedIpPatterns(addr.toNormalizedString())
+    );
   }
 
-  return isBlockedIpv4Range(addr.range());
+  return (
+    isBlockedIpv4Range(addr.range()) ||
+    matchesBlockedIpPatterns(addr.toString())
+  );
+}
+
+function matchesBlockedIpPatterns(resolvedIp: string): boolean {
+  for (const pattern of config.security.blockedIpPatterns) {
+    if (pattern.test(resolvedIp)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function validateAndNormalizeUrl(urlString: string): string {
