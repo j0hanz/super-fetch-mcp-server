@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import diagnosticsChannel from 'node:diagnostics_channel';
 import { performance } from 'node:perf_hooks';
 
@@ -18,7 +18,7 @@ export function startFetchTelemetry(
   method: string
 ): FetchTelemetryContext {
   const context: FetchTelemetryContext = {
-    requestId: randomBytes(4).toString('hex'),
+    requestId: randomUUID(),
     startTime: performance.now(),
     url,
     method: method.toUpperCase(),

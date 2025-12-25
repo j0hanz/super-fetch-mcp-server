@@ -1,16 +1,4 @@
-import { validateHeaderName, validateHeaderValue } from 'node:http';
-
 import { config } from '../../config/index.js';
-
-function isValidHeader(key: string, value: string): boolean {
-  try {
-    validateHeaderName(key);
-    validateHeaderValue(key, value);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 function sanitizeHeaderValue(value: string): string {
   return value.trim();
@@ -24,16 +12,24 @@ export function normalizeHeadersForCache(
   }
 
   const { blockedHeaders } = config.security;
-  const normalized: Record<string, string> = {};
+  const normalized = new Headers();
 
   for (const [key, value] of Object.entries(headers)) {
     const lowerKey = key.toLowerCase();
-    if (!blockedHeaders.has(lowerKey) && isValidHeader(key, value)) {
-      normalized[lowerKey] = sanitizeHeaderValue(value);
+    if (blockedHeaders.has(lowerKey)) continue;
+    try {
+      normalized.set(key, sanitizeHeaderValue(value));
+    } catch {
+      continue;
     }
   }
 
-  return Object.keys(normalized).length > 0 ? normalized : undefined;
+  const entries = Array.from(normalized.entries());
+  if (entries.length === 0) {
+    return undefined;
+  }
+
+  return Object.fromEntries(entries);
 }
 
 export function appendHeaderVary(

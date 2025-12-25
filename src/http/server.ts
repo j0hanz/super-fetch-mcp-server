@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { setInterval as setIntervalPromise } from 'node:timers/promises';
 
 import type { Express, NextFunction, Request, Response } from 'express';
 
@@ -110,9 +111,8 @@ export async function startHttpServer(): Promise<{
   app.use(createJsonParseErrorHandler());
   app.use(createCorsMiddleware(buildCorsOptions()));
 
-  const { middleware: rateLimitMiddleware, cleanupInterval } =
+  const { middleware: rateLimitMiddleware, stop: stopRateLimitCleanup } =
     createRateLimitMiddleware(config.rateLimit);
-  cleanupInterval.unref();
 
   const authMiddleware = createAuthMiddleware(config.security.apiKey ?? '');
   app.use('/mcp', rateLimitMiddleware);
@@ -123,16 +123,34 @@ export async function startHttpServer(): Promise<{
   assertHttpConfiguration();
 
   const sessionStore = createSessionStore(config.server.sessionTtlMs);
-  const sessionCleanupInterval = setInterval(
-    () => {
-      const evicted = evictExpiredSessions(sessionStore);
-      if (evicted > 0) {
-        logInfo('Expired sessions evicted', { evicted });
-      }
-    },
-    Math.min(Math.max(Math.floor(config.server.sessionTtlMs / 2), 10000), 60000)
+  const sessionCleanupController = new AbortController();
+  const sessionCleanupIntervalMs = Math.min(
+    Math.max(Math.floor(config.server.sessionTtlMs / 2), 10000),
+    60000
   );
-  sessionCleanupInterval.unref();
+
+  void (async () => {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      for await (const _ of setIntervalPromise(
+        sessionCleanupIntervalMs,
+        undefined,
+        { signal: sessionCleanupController.signal, ref: false }
+      )) {
+        const evicted = evictExpiredSessions(sessionStore);
+        if (evicted > 0) {
+          logInfo('Expired sessions evicted', { evicted });
+        }
+      }
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        return;
+      }
+      logWarn('Session cleanup loop failed', {
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  })();
 
   registerMcpRoutes(app, {
     sessionStore,
@@ -168,6 +186,9 @@ export async function startHttpServer(): Promise<{
 
   const shutdown = async (signal: string): Promise<void> => {
     process.stdout.write(`\n${signal} received, shutting down gracefully...\n`);
+
+    stopRateLimitCleanup();
+    sessionCleanupController.abort();
 
     const sessions = sessionStore.clear();
     await Promise.allSettled(

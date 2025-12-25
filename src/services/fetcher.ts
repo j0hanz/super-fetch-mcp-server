@@ -1,6 +1,3 @@
-import { Readable } from 'node:stream';
-import type { ReadableStream as WebReadableStream } from 'node:stream/web';
-
 import { config } from '../config/index.js';
 import type { FetchOptions } from '../config/types.js';
 
@@ -163,29 +160,31 @@ async function readResponseText(
     return { text, size: Buffer.byteLength(text) };
   }
 
-  const readable = Readable.fromWeb(response.body as WebReadableStream);
-  const chunks: Buffer[] = [];
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
   let total = 0;
+  let text = '';
 
-  for await (const chunk of readable) {
-    const buffer =
-      chunk instanceof Uint8Array
-        ? Buffer.from(chunk)
-        : Buffer.from(String(chunk));
-    total += buffer.length;
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+
+    total += value.byteLength;
 
     if (total > maxBytes) {
-      readable.destroy();
+      await reader.cancel();
       throw new FetchError(
         `Response exceeds maximum size of ${maxBytes} bytes`,
         url
       );
     }
 
-    chunks.push(buffer);
+    text += decoder.decode(value, { stream: true });
   }
 
-  return { text: Buffer.concat(chunks).toString('utf-8'), size: total };
+  text += decoder.decode();
+
+  return { text, size: total };
 }
 
 async function fetchWithRedirects(

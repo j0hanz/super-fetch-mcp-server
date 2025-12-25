@@ -79,7 +79,7 @@ function resolveDns(
 }
 
 function getAgentOptions(): ConstructorParameters<typeof Agent>[0] {
-  const cpuCount = os.cpus().length;
+  const cpuCount = os.availableParallelism();
   return {
     keepAliveTimeout: 60000,
     connections: Math.max(cpuCount * 2, 25),
