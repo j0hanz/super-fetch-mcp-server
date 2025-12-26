@@ -46,14 +46,9 @@ export function createBatchResponse(
 function formatBatchResponseSummary(content: BatchResponseContent): string {
   const { results, summary, fetchedAt } = content;
   const resultSummaries = results.map((result) => {
-    if (result.success && result.content) {
-      const { content: _, ...summary } = result;
-      return {
-        ...summary,
-        contentPreview: `${result.content.substring(0, 100)}...`,
-      };
-    }
-    return result;
+    if (!result.success) return result;
+    const { content: _, ...rest } = result;
+    return rest;
   });
 
   return JSON.stringify(
@@ -61,7 +56,6 @@ function formatBatchResponseSummary(content: BatchResponseContent): string {
       results: resultSummaries,
       summary,
       fetchedAt,
-      note: 'Full content available via resource links below',
     },
     null,
     2
