@@ -23,8 +23,14 @@ export function createBatchResponse(
 ): ToolResponse<BatchResponseContent> {
   const normalizedResults = normalizeBatchResults(results);
   const summary = buildBatchSummary(normalizedResults);
+  const resultsWithoutContent = normalizedResults.map((result) => {
+    if (!result.success || !result.content) return result;
+    const { content: _, ...rest } = result;
+    return rest;
+  });
+
   const structuredContent: BatchResponseContent = {
-    results: normalizedResults,
+    results: resultsWithoutContent,
     summary,
     fetchedAt: new Date().toISOString(),
   };
@@ -35,31 +41,12 @@ export function createBatchResponse(
     content: [
       {
         type: 'text' as const,
-        text: formatBatchResponseSummary(structuredContent),
+        text: JSON.stringify(structuredContent, null, 2),
       },
       ...resourceLinks,
     ],
     structuredContent,
   };
-}
-
-function formatBatchResponseSummary(content: BatchResponseContent): string {
-  const { results, summary, fetchedAt } = content;
-  const resultSummaries = results.map((result) => {
-    if (!result.success) return result;
-    const { content: _, ...rest } = result;
-    return rest;
-  });
-
-  return JSON.stringify(
-    {
-      results: resultSummaries,
-      summary,
-      fetchedAt,
-    },
-    null,
-    2
-  );
 }
 
 function buildBatchSummary(results: BatchUrlResult[]): BatchSummary {
