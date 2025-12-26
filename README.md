@@ -663,6 +663,7 @@ Configure SuperFetch behavior by adding environment variables to your MCP client
 | -------------- | ------- | -------------------------------------------------------- |
 | `API_KEY`      | -       | API Key for HTTP authentication (required for HTTP mode) |
 | `ALLOW_REMOTE` | `false` | Allow binding to non-loopback interfaces                 |
+| `TRUST_PROXY`  | `false` | Trust proxy headers for client IP resolution             |
 
 #### Rate Limiting
 
@@ -695,6 +696,7 @@ npx -y @j0hanz/superfetch@latest
 | `HOST`                    | `127.0.0.1` | HTTP server host (`0.0.0.0` for Docker/K8s)      |
 | `ALLOWED_ORIGINS`         | `[]`        | Comma-separated CORS origins                     |
 | `CORS_ALLOW_ALL`          | `false`     | Allow all CORS origins (dev only, security risk) |
+| `TRUST_PROXY`             | `false`     | Trust proxy headers for client IP resolution     |
 | `SESSION_TTL_MS`          | `1800000`   | Session time-to-live in milliseconds (30 mins)   |
 | `SESSION_INIT_TIMEOUT_MS` | `10000`     | Time allowed for session initialization (ms)     |
 | `MAX_SESSIONS`            | `200`       | Maximum number of active sessions                |

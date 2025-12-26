@@ -57,6 +57,9 @@ function applyCorsHeaders(
   options: CorsOptions
 ): boolean {
   if (isOriginAllowed(origin, options)) {
+    if (origin) {
+      res.vary('Origin');
+    }
     res.header('Access-Control-Allow-Origin', origin ?? '*');
     res.header('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
     res.header(

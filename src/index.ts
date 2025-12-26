@@ -45,9 +45,19 @@ process.on('unhandledRejection', (reason) => {
   process.stderr.write(`Unhandled rejection: ${error.message}\n`);
 });
 
-if (isStdioMode) {
-  await startStdioServer();
-} else {
-  const { shutdown } = await startHttpServer();
-  shutdownHandlerRef.current = shutdown;
+try {
+  if (isStdioMode) {
+    await startStdioServer();
+  } else {
+    const { shutdown } = await startHttpServer();
+    shutdownHandlerRef.current = shutdown;
+  }
+} catch (error) {
+  logError(
+    'Failed to start server',
+    error instanceof Error ? error : undefined
+  );
+  const message = error instanceof Error ? error.message : String(error);
+  process.stderr.write(`Failed to start server: ${message}\n`);
+  process.exit(1);
 }

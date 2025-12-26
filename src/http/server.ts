@@ -294,6 +294,9 @@ async function createExpressApp(): Promise<{
 }> {
   const { default: express } = await import('express');
   const app = express();
+  if (config.server.trustProxy) {
+    app.set('trust proxy', true);
+  }
   const jsonParser = express.json({ limit: '1mb' });
   return { app, jsonParser };
 }

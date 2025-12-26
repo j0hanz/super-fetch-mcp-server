@@ -66,6 +66,7 @@ export const config = {
     version: packageJson.version,
     port: parseInteger(process.env.PORT, 3000, 1024, 65535),
     host,
+    trustProxy: parseBoolean(process.env.TRUST_PROXY, false),
     sessionTtlMs: parseInteger(
       process.env.SESSION_TTL_MS,
       30 * 60 * 1000,
