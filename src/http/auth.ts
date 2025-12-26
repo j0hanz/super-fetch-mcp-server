@@ -16,18 +16,25 @@ function timingSafeEquals(a: string, b: string): boolean {
 function isAuthorizedRequest(req: Request, authToken: string): boolean {
   if (!authToken) return false;
 
+  const bearerToken = getBearerToken(req);
+  if (bearerToken) {
+    return timingSafeEquals(bearerToken, authToken);
+  }
+
+  const apiKeyHeader = getApiKeyHeader(req);
+  return apiKeyHeader ? timingSafeEquals(apiKeyHeader, authToken) : false;
+}
+
+function getBearerToken(req: Request): string | null {
   const authHeader = normalizeHeaderValue(req.headers.authorization);
-  if (authHeader?.startsWith('Bearer ')) {
-    const token = authHeader.slice('Bearer '.length).trim();
-    return token.length > 0 && timingSafeEquals(token, authToken);
-  }
+  if (!authHeader?.startsWith('Bearer ')) return null;
+  const token = authHeader.slice('Bearer '.length).trim();
+  return token.length > 0 ? token : null;
+}
 
+function getApiKeyHeader(req: Request): string | null {
   const apiKeyHeader = normalizeHeaderValue(req.headers['x-api-key']);
-  if (apiKeyHeader) {
-    return timingSafeEquals(apiKeyHeader.trim(), authToken);
-  }
-
-  return false;
+  return apiKeyHeader ? apiKeyHeader.trim() : null;
 }
 
 export function createAuthMiddleware(

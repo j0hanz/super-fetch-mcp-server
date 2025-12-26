@@ -48,35 +48,58 @@ export function recordFetchResponse(
   contentSize?: number
 ): void {
   const duration = performance.now() - context.startTime;
-  const contentType = response.headers.get('content-type') ?? undefined;
-  const contentLength =
-    response.headers.get('content-length') ?? contentSize?.toString();
-
-  if (fetchChannel.hasSubscribers) {
-    fetchChannel.publish({
-      type: 'end',
-      requestId: context.requestId,
-      status: response.status,
-      duration,
-    });
-  }
+  publishFetchEnd(context, response.status, duration);
 
   logDebug('HTTP Response', {
     requestId: context.requestId,
     status: response.status,
     url: context.url,
+    ...buildResponseMeta(response, contentSize, duration),
+  });
+
+  logSlowRequestIfNeeded(context, duration);
+}
+
+function publishFetchEnd(
+  context: FetchTelemetryContext,
+  status: number,
+  duration: number
+): void {
+  if (!fetchChannel.hasSubscribers) return;
+  fetchChannel.publish({
+    type: 'end',
+    requestId: context.requestId,
+    status,
+    duration,
+  });
+}
+
+function buildResponseMeta(
+  response: Response,
+  contentSize: number | undefined,
+  duration: number
+): { contentType?: string; duration: string; size?: string } {
+  const contentType = response.headers.get('content-type') ?? undefined;
+  const contentLength =
+    response.headers.get('content-length') ?? contentSize?.toString();
+
+  return {
     contentType,
     duration: `${Math.round(duration)}ms`,
     size: contentLength,
-  });
+  };
+}
 
-  if (duration > 5000) {
-    logWarn('Slow HTTP request detected', {
-      requestId: context.requestId,
-      url: context.url,
-      duration: `${Math.round(duration)}ms`,
-    });
-  }
+function logSlowRequestIfNeeded(
+  context: FetchTelemetryContext,
+  duration: number
+): void {
+  if (duration <= 5000) return;
+  logWarn('Slow HTTP request detected', {
+    requestId: context.requestId,
+    url: context.url,
+    duration: `${Math.round(duration)}ms`,
+  });
 }
 
 export function recordFetchError(

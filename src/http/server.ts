@@ -1,18 +1,9 @@
-import { randomUUID } from 'node:crypto';
-import { setInterval as setIntervalPromise } from 'node:timers/promises';
 import { styleText } from 'node:util';
 
-import type {
-  Express,
-  NextFunction,
-  Request,
-  RequestHandler,
-  Response,
-} from 'express';
+import type { Express, RequestHandler } from 'express';
 
 import { config } from '../config/index.js';
 
-import { requestContext } from '../services/context.js';
 import { destroyAgents } from '../services/fetcher.js';
 import { logError, logInfo, logWarn } from '../services/logger.js';
 
@@ -20,62 +11,14 @@ import { errorHandler } from '../middleware/error-handler.js';
 
 import { createAuthMiddleware } from './auth.js';
 import { createCorsMiddleware } from './cors.js';
-import { evictExpiredSessions, registerMcpRoutes } from './mcp-routes.js';
+import { registerMcpRoutes } from './mcp-routes.js';
 import { createRateLimitMiddleware } from './rate-limit.js';
-import { createSessionStore, getSessionId } from './sessions.js';
+import { attachBaseMiddleware, buildCorsOptions } from './server-middleware.js';
+import { startSessionCleanupLoop } from './session-cleanup.js';
+import { createSessionStore } from './sessions.js';
 
 function isLoopbackHost(host: string): boolean {
   return host === '127.0.0.1' || host === '::1' || host === 'localhost';
-}
-function buildCorsOptions(): {
-  allowedOrigins: string[];
-  allowAllOrigins: boolean;
-} {
-  const allowedOrigins = process.env.ALLOWED_ORIGINS
-    ? process.env.ALLOWED_ORIGINS.split(',').map((o) => o.trim())
-    : [];
-  const allowAllOrigins = process.env.CORS_ALLOW_ALL === 'true';
-  return { allowedOrigins, allowAllOrigins };
-}
-function createJsonParseErrorHandler(): (
-  err: Error,
-  _req: Request,
-  res: Response,
-  next: NextFunction
-) => void {
-  return (
-    err: Error,
-    _req: Request,
-    res: Response,
-    next: NextFunction
-  ): void => {
-    if (err instanceof SyntaxError && 'body' in err) {
-      res.status(400).json({
-        jsonrpc: '2.0',
-        error: {
-          code: -32700,
-          message: 'Parse error: Invalid JSON',
-        },
-        id: null,
-      });
-      return;
-    }
-    next();
-  };
-}
-function createContextMiddleware(): (
-  req: Request,
-  _res: Response,
-  next: NextFunction
-) => void {
-  return (req: Request, _res: Response, next: NextFunction): void => {
-    const requestId = randomUUID();
-    const sessionId = getSessionId(req);
-
-    requestContext.run({ requestId, sessionId }, () => {
-      next();
-    });
-  };
 }
 
 function assertHttpConfiguration(): void {
@@ -91,86 +34,6 @@ function assertHttpConfiguration(): void {
     logError('API_KEY is required for HTTP mode; refusing to start');
     process.exit(1);
   }
-}
-
-function registerHealthRoute(app: Express): void {
-  app.get('/health', (_req, res) => {
-    res.json({
-      status: 'healthy',
-      name: config.server.name,
-      version: config.server.version,
-      uptime: process.uptime(),
-    });
-  });
-}
-
-function attachBaseMiddleware(
-  app: Express,
-  jsonParser: RequestHandler,
-  rateLimitMiddleware: ReturnType<
-    typeof createRateLimitMiddleware
-  >['middleware'],
-  authMiddleware: ReturnType<typeof createAuthMiddleware>,
-  corsOptions: { allowedOrigins: string[]; allowAllOrigins: boolean }
-): void {
-  app.use(jsonParser);
-  app.use(createContextMiddleware());
-  app.use(createJsonParseErrorHandler());
-  app.use(createCorsMiddleware(corsOptions));
-  app.use('/mcp', rateLimitMiddleware);
-  app.use(authMiddleware);
-  registerHealthRoute(app);
-}
-
-function startSessionCleanupLoop(
-  store: ReturnType<typeof createSessionStore>,
-  sessionTtlMs: number
-): AbortController {
-  const controller = new AbortController();
-  void runSessionCleanupLoop(store, sessionTtlMs, controller.signal).catch(
-    handleSessionCleanupError
-  );
-  return controller;
-}
-
-async function runSessionCleanupLoop(
-  store: ReturnType<typeof createSessionStore>,
-  sessionTtlMs: number,
-  signal: AbortSignal
-): Promise<void> {
-  const intervalMs = getCleanupIntervalMs(sessionTtlMs);
-  for await (const _ of setIntervalPromise(intervalMs, undefined, {
-    signal,
-    ref: false,
-  })) {
-    handleSessionEvictions(store);
-  }
-}
-
-function getCleanupIntervalMs(sessionTtlMs: number): number {
-  return Math.min(Math.max(Math.floor(sessionTtlMs / 2), 10000), 60000);
-}
-
-function isAbortError(error: unknown): boolean {
-  return error instanceof Error && error.name === 'AbortError';
-}
-
-function handleSessionEvictions(
-  store: ReturnType<typeof createSessionStore>
-): void {
-  const evicted = evictExpiredSessions(store);
-  if (evicted > 0) {
-    logInfo('Expired sessions evicted', { evicted });
-  }
-}
-
-function handleSessionCleanupError(error: unknown): void {
-  if (isAbortError(error)) {
-    return;
-  }
-  logWarn('Session cleanup loop failed', {
-    error: error instanceof Error ? error.message : 'Unknown error',
-  });
 }
 
 function startListening(app: Express): ReturnType<Express['listen']> {
@@ -264,7 +127,7 @@ export async function startHttpServer(): Promise<{
     jsonParser,
     rateLimitMiddleware,
     authMiddleware,
-    corsOptions
+    createCorsMiddleware(corsOptions)
   );
   assertHttpConfiguration();
 

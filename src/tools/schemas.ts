@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { config } from '../config/index.js';
+
 const requestOptionsSchema = z.object({
   customHeaders: z
     .record(z.string())
@@ -8,15 +10,38 @@ const requestOptionsSchema = z.object({
   timeout: z
     .number()
     .min(1000)
-    .max(60000)
-    .optional()
-    .describe('Request timeout in milliseconds (1000-60000)'),
+    .max(120000)
+    .default(config.fetcher.timeout)
+    .describe('Request timeout in milliseconds (1000-120000)'),
   retries: z
     .number()
     .min(1)
     .max(10)
-    .optional()
+    .default(3)
     .describe('Number of retry attempts (1-10)'),
+});
+
+const extractionOptionsSchema = z.object({
+  extractMainContent: z
+    .boolean()
+    .default(true)
+    .describe('Use Readability to extract main article content'),
+  includeMetadata: z
+    .boolean()
+    .default(true)
+    .describe('Include page metadata (title, description, etc.)'),
+  maxContentLength: z
+    .number()
+    .positive()
+    .optional()
+    .describe('Maximum content length in characters'),
+});
+
+const formatOptionsSchema = z.object({
+  format: z
+    .enum(['jsonl', 'markdown'])
+    .default('jsonl')
+    .describe('Output format'),
 });
 
 const linkEntrySchema = z
@@ -27,53 +52,49 @@ const linkEntrySchema = z
   })
   .strict();
 
+const resourceFieldsSchema = z.object({
+  contentSize: z.number().optional().describe('Content length in characters'),
+  resourceUri: z
+    .string()
+    .optional()
+    .describe('Resource URI when content is too large to inline'),
+  resourceMimeType: z
+    .string()
+    .optional()
+    .describe('MIME type for the resource URI'),
+  cached: z.boolean().describe('Whether the result was served from cache'),
+  truncated: z
+    .boolean()
+    .optional()
+    .describe('Whether content was truncated by maxContentLength'),
+  error: z.string().optional().describe('Error message if the request failed'),
+  errorCode: z.string().optional().describe('Error code if the request failed'),
+});
+
+const batchResourceFieldsSchema = resourceFieldsSchema.extend({
+  cached: z.boolean().optional().describe('Whether served from cache'),
+});
+
 const batchResultSchema = z
   .object({
     url: z.string().describe('The fetched URL'),
     success: z.boolean().describe('Whether the fetch was successful'),
     title: z.string().optional().describe('Page title'),
     content: z.string().optional().describe('The extracted content'),
-    contentSize: z.number().optional().describe('Content length in characters'),
-    resourceUri: z
-      .string()
-      .optional()
-      .describe('Resource URI when content is too large to inline'),
-    resourceMimeType: z
-      .string()
-      .optional()
-      .describe('MIME type for the resource URI'),
     contentBlocks: z
       .number()
       .optional()
       .describe('Number of content blocks (JSONL only)'),
-    cached: z.boolean().optional().describe('Whether served from cache'),
-    truncated: z.boolean().optional().describe('Whether content was truncated'),
-    error: z.string().optional().describe('Error message if failed'),
-    errorCode: z.string().optional().describe('Error code if failed'),
   })
+  .merge(batchResourceFieldsSchema)
   .strict();
 
 export const fetchUrlInputSchema = requestOptionsSchema
   .extend({
     url: z.string().min(1).describe('The URL to fetch'),
-    extractMainContent: z
-      .boolean()
-      .default(true)
-      .describe('Use Readability to extract main article content'),
-    includeMetadata: z
-      .boolean()
-      .default(true)
-      .describe('Include page metadata (title, description, etc.)'),
-    maxContentLength: z
-      .number()
-      .positive()
-      .optional()
-      .describe('Maximum content length in characters'),
-    format: z
-      .enum(['jsonl', 'markdown'])
-      .default('jsonl')
-      .describe('Output format'),
   })
+  .merge(extractionOptionsSchema)
+  .merge(formatOptionsSchema)
   .strict();
 
 export const fetchLinksInputSchema = requestOptionsSchema
@@ -107,20 +128,8 @@ export const fetchLinksInputSchema = requestOptionsSchema
 export const fetchMarkdownInputSchema = requestOptionsSchema
   .extend({
     url: z.string().min(1).describe('The URL to fetch'),
-    extractMainContent: z
-      .boolean()
-      .default(true)
-      .describe('Extract main article content using Readability'),
-    includeMetadata: z
-      .boolean()
-      .default(true)
-      .describe('Include YAML frontmatter metadata'),
-    maxContentLength: z
-      .number()
-      .positive()
-      .optional()
-      .describe('Maximum content length in characters'),
   })
+  .merge(extractionOptionsSchema)
   .strict();
 
 export const fetchUrlsInputSchema = requestOptionsSchema
@@ -130,19 +139,6 @@ export const fetchUrlsInputSchema = requestOptionsSchema
       .min(1)
       .max(10)
       .describe('Array of URLs to fetch (1-10 URLs)'),
-    extractMainContent: z
-      .boolean()
-      .default(true)
-      .describe('Use Readability to extract main article content'),
-    includeMetadata: z
-      .boolean()
-      .default(true)
-      .describe('Include page metadata (title, description, etc.)'),
-    maxContentLength: z
-      .number()
-      .positive()
-      .optional()
-      .describe('Maximum content length per URL in characters'),
     format: z
       .enum(['jsonl', 'markdown'])
       .default('jsonl')
@@ -158,6 +154,7 @@ export const fetchUrlsInputSchema = requestOptionsSchema
       .default(true)
       .describe('Continue processing if some URLs fail'),
   })
+  .merge(extractionOptionsSchema)
   .strict();
 
 export const fetchUrlOutputSchema = z
@@ -175,29 +172,8 @@ export const fetchUrlOutputSchema = z
       .string()
       .optional()
       .describe('The extracted content in JSONL or Markdown format'),
-    contentSize: z.number().optional().describe('Content length in characters'),
-    resourceUri: z
-      .string()
-      .optional()
-      .describe('Resource URI when content is too large to inline'),
-    resourceMimeType: z
-      .string()
-      .optional()
-      .describe('MIME type for the resource URI'),
-    cached: z.boolean().describe('Whether the result was served from cache'),
-    truncated: z
-      .boolean()
-      .optional()
-      .describe('Whether content was truncated by maxContentLength'),
-    error: z
-      .string()
-      .optional()
-      .describe('Error message if the request failed'),
-    errorCode: z
-      .string()
-      .optional()
-      .describe('Error code if the request failed'),
   })
+  .merge(resourceFieldsSchema)
   .strict();
 
 export const fetchLinksOutputSchema = z
@@ -235,29 +211,8 @@ export const fetchMarkdownOutputSchema = z
       .string()
       .optional()
       .describe('The extracted content in Markdown format'),
-    contentSize: z.number().optional().describe('Content length in characters'),
-    resourceUri: z
-      .string()
-      .optional()
-      .describe('Resource URI when content is too large to inline'),
-    resourceMimeType: z
-      .string()
-      .optional()
-      .describe('MIME type for the resource URI'),
-    cached: z.boolean().describe('Whether the result was served from cache'),
-    truncated: z
-      .boolean()
-      .optional()
-      .describe('Whether content was truncated by maxContentLength'),
-    error: z
-      .string()
-      .optional()
-      .describe('Error message if the request failed'),
-    errorCode: z
-      .string()
-      .optional()
-      .describe('Error code if the request failed'),
   })
+  .merge(resourceFieldsSchema)
   .strict();
 
 export const fetchUrlsOutputSchema = z

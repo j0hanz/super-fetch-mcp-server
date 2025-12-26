@@ -3,7 +3,7 @@ import type { ToolContentBlock } from './runtime.js';
 interface RequestOptions {
   /** Custom HTTP headers for the request */
   customHeaders?: Record<string, string>;
-  /** Request timeout in milliseconds (1000-60000) */
+  /** Request timeout in milliseconds (1000-120000) */
   timeout?: number;
   /** Number of retry attempts (1-10) */
   retries?: number;

@@ -7,7 +7,10 @@ import {
 } from '../config/formatting.js';
 import type { MetadataBlock } from '../config/types.js';
 
-import { detectLanguageFromCode } from '../services/parser.js';
+import {
+  detectLanguageFromCode,
+  resolveLanguageFromAttributes,
+} from '../utils/code-language.js';
 
 let turndownInstance: TurndownService | null = null;
 
@@ -66,14 +69,8 @@ function formatFencedCodeBlock(node: TurndownService.Node): string {
 function resolveCodeLanguage(codeNode: HTMLElement, code: string): string {
   const className = codeNode.getAttribute('class') ?? '';
   const dataLang = codeNode.getAttribute('data-language') ?? '';
-
-  const languageMatch =
-    /language-(\w+)/.exec(className) ??
-    /lang-(\w+)/.exec(className) ??
-    /highlight-(\w+)/.exec(className) ??
-    /^(\w+)$/.exec(dataLang);
-
-  return languageMatch?.[1] ?? detectLanguageFromCode(code) ?? '';
+  const attributeLanguage = resolveLanguageFromAttributes(className, dataLang);
+  return attributeLanguage ?? detectLanguageFromCode(code) ?? '';
 }
 
 const YAML_SPECIAL_CHARS = /[:[\]{}"\r\t'|>&*!?,#]|\n/;

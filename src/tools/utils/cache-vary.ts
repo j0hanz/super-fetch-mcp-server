@@ -1,18 +1,13 @@
 import { config } from '../../config/index.js';
 
+import { normalizeHeaderRecord } from '../../utils/header-normalizer.js';
+
 function normalizeHeadersForCache(
   headers?: Record<string, string>
 ): Record<string, string> | undefined {
-  if (!headers || Object.keys(headers).length === 0) return undefined;
-
-  const normalized = buildNormalizedHeaders(
-    headers,
-    config.security.blockedHeaders
-  );
-  const iterator = normalized.keys();
-  if (iterator.next().done) return undefined;
-
-  return Object.fromEntries(normalized.entries());
+  return normalizeHeaderRecord(headers, config.security.blockedHeaders, {
+    trimValues: true,
+  });
 }
 
 export function appendHeaderVary(
@@ -20,35 +15,26 @@ export function appendHeaderVary(
   customHeaders?: Record<string, string>
 ): Record<string, unknown> | string | undefined {
   const headerVary = normalizeHeadersForCache(customHeaders);
+  return mergeCacheVary(cacheVary, headerVary);
+}
 
+function mergeCacheVary(
+  cacheVary: Record<string, unknown> | string | undefined,
+  headerVary: Record<string, string> | undefined
+): Record<string, unknown> | string | undefined {
   if (!cacheVary && !headerVary) return undefined;
-
   if (typeof cacheVary === 'string') {
     return buildStringVary(cacheVary, headerVary);
   }
+  return mergeObjectVary(cacheVary, headerVary);
+}
 
+function mergeObjectVary(
+  cacheVary: Record<string, unknown> | undefined,
+  headerVary: Record<string, string> | undefined
+): Record<string, unknown> | undefined {
   if (!headerVary) return cacheVary;
   return { ...(cacheVary ?? {}), headers: headerVary };
-}
-
-function buildNormalizedHeaders(
-  headers: Record<string, string>,
-  blockedHeaders: Set<string>
-): Headers {
-  const normalized = new Headers();
-  for (const [key, value] of Object.entries(headers)) {
-    if (blockedHeaders.has(key.toLowerCase())) continue;
-    setHeaderValue(normalized, key, value);
-  }
-  return normalized;
-}
-
-function setHeaderValue(headers: Headers, key: string, value: string): void {
-  try {
-    headers.set(key, value.trim());
-  } catch {
-    // Ignore invalid headers for cache keys
-  }
 }
 
 function buildStringVary(

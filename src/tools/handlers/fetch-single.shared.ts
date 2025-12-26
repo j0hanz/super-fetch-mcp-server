@@ -1,6 +1,11 @@
 import { config } from '../../config/index.js';
-import type { PipelineResult, ToolContentBlock } from '../../config/types.js';
+import type {
+  PipelineResult,
+  ToolContentBlock,
+  ToolResponseBase,
+} from '../../config/types.js';
 
+import { createToolErrorResponse } from '../../utils/tool-error-handler.js';
 import { appendHeaderVary } from '../utils/cache-vary.js';
 import { executeFetchPipeline } from '../utils/fetch-pipeline.js';
 import { applyInlineContentLimit } from '../utils/inline-content.js';
@@ -57,6 +62,33 @@ export async function performSharedFetch<T extends { content: string }>(
 }
 
 export type InlineResult = ReturnType<typeof applyInlineContentLimit>;
+
+export function getInlineErrorResponse(
+  inlineResult: InlineResult,
+  url: string
+): ToolResponseBase | null {
+  if (!inlineResult.error) return null;
+  return createToolErrorResponse(inlineResult.error, url, 'INTERNAL_ERROR');
+}
+
+export function applyInlineResultToStructuredContent(
+  structuredContent: Record<string, unknown>,
+  inlineResult: InlineResult,
+  contentKey: string
+): void {
+  if (inlineResult.truncated) {
+    structuredContent.truncated = true;
+  }
+
+  if (typeof inlineResult.content === 'string') {
+    structuredContent[contentKey] = inlineResult.content;
+  }
+
+  if (inlineResult.resourceUri) {
+    structuredContent.resourceUri = inlineResult.resourceUri;
+    structuredContent.resourceMimeType = inlineResult.resourceMimeType;
+  }
+}
 
 function serializeStructuredContent(
   structuredContent: Record<string, unknown>,

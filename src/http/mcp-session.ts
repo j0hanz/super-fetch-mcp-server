@@ -11,107 +11,19 @@ import type { McpRequestBody } from '../config/types.js';
 import { logError, logInfo, logWarn } from '../services/logger.js';
 
 import { createMcpServer } from '../server.js';
+import {
+  createSlotTracker,
+  ensureSessionCapacity,
+  reserveSessionSlot,
+  respondBadRequest,
+  respondServerBusy,
+  type SlotTracker,
+} from './mcp-session-helpers.js';
 import { type SessionStore } from './sessions.js';
 
 export interface McpSessionOptions {
   readonly sessionStore: SessionStore;
   readonly maxSessions: number;
-}
-
-interface SlotTracker {
-  readonly releaseSlot: () => void;
-  readonly markInitialized: () => void;
-  readonly isInitialized: () => boolean;
-}
-
-let inFlightSessions = 0;
-
-function reserveSessionSlot(store: SessionStore, maxSessions: number): boolean {
-  if (store.size() + inFlightSessions >= maxSessions) {
-    return false;
-  }
-  inFlightSessions += 1;
-  return true;
-}
-
-function releaseSessionSlot(): void {
-  if (inFlightSessions > 0) {
-    inFlightSessions -= 1;
-  }
-}
-
-function sendJsonRpcError(
-  res: Response,
-  code: number,
-  message: string,
-  status = 503
-): void {
-  res.status(status).json({
-    jsonrpc: '2.0',
-    error: {
-      code,
-      message,
-    },
-    id: null,
-  });
-}
-
-function respondServerBusy(res: Response): void {
-  sendJsonRpcError(res, -32000, 'Server busy: maximum sessions reached', 503);
-}
-
-function respondBadRequest(res: Response): void {
-  sendJsonRpcError(
-    res,
-    -32000,
-    'Bad Request: Missing session ID or not an initialize request',
-    400
-  );
-}
-
-function isServerAtCapacity(options: McpSessionOptions): boolean {
-  const currentSize = options.sessionStore.size();
-  return currentSize + inFlightSessions >= options.maxSessions;
-}
-
-function tryEvictSlot(options: McpSessionOptions): boolean {
-  const currentSize = options.sessionStore.size();
-  const canFreeSlot =
-    currentSize >= options.maxSessions &&
-    currentSize - 1 + inFlightSessions < options.maxSessions;
-  return canFreeSlot && evictOldestSession(options.sessionStore);
-}
-
-function ensureSessionCapacity(
-  options: McpSessionOptions,
-  res: Response
-): boolean {
-  if (!isServerAtCapacity(options)) {
-    return true;
-  }
-
-  if (tryEvictSlot(options) && !isServerAtCapacity(options)) {
-    return true;
-  }
-
-  respondServerBusy(res);
-  return false;
-}
-
-function createSlotTracker(): SlotTracker {
-  let slotReleased = false;
-  let initialized = false;
-  return {
-    releaseSlot: (): void => {
-      if (slotReleased) return;
-      slotReleased = true;
-      releaseSessionSlot();
-    },
-    markInitialized: (): void => {
-      initialized = true;
-    },
-    isInitialized: (): boolean => initialized,
-  };
 }
 
 function startSessionInitTimeout(
@@ -248,7 +160,14 @@ async function createAndConnectTransport(
   options: McpSessionOptions,
   res: Response
 ): Promise<StreamableHTTPServerTransport | null> {
-  if (!ensureSessionCapacity(options, res)) {
+  if (
+    !ensureSessionCapacity(
+      options.sessionStore,
+      options.maxSessions,
+      res,
+      evictOldestSession
+    )
+  ) {
     return null;
   }
 

@@ -66,6 +66,20 @@ function isBlockedByList(ip: string, ipType: 4 | 6): boolean {
 }
 
 export function validateAndNormalizeUrl(urlString: string): string {
+  const trimmedUrl = requireTrimmedUrl(urlString);
+  assertUrlLength(trimmedUrl);
+
+  const url = parseUrl(trimmedUrl);
+  assertHttpProtocol(url);
+  assertNoCredentials(url);
+
+  const hostname = normalizeHostname(url);
+  assertHostnameAllowed(hostname);
+
+  return url.href;
+}
+
+function requireTrimmedUrl(urlString: string): string {
   if (!urlString || typeof urlString !== 'string') {
     throw new Error('URL is required');
   }
@@ -75,32 +89,46 @@ export function validateAndNormalizeUrl(urlString: string): string {
     throw new Error('URL cannot be empty');
   }
 
-  if (trimmedUrl.length > config.constants.maxUrlLength) {
-    throw new Error(
-      `URL exceeds maximum length of ${config.constants.maxUrlLength} characters`
-    );
-  }
+  return trimmedUrl;
+}
 
-  if (!URL.canParse(trimmedUrl)) {
+function assertUrlLength(url: string): void {
+  if (url.length <= config.constants.maxUrlLength) return;
+  throw new Error(
+    `URL exceeds maximum length of ${config.constants.maxUrlLength} characters`
+  );
+}
+
+function parseUrl(urlString: string): URL {
+  if (!URL.canParse(urlString)) {
     throw new Error('Invalid URL format');
   }
-  const url = new URL(trimmedUrl);
+  return new URL(urlString);
+}
 
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-    throw new Error(
-      `Invalid protocol: ${url.protocol}. Only http: and https: are allowed`
-    );
-  }
+function assertHttpProtocol(url: URL): void {
+  if (url.protocol === 'http:' || url.protocol === 'https:') return;
+  throw new Error(
+    `Invalid protocol: ${url.protocol}. Only http: and https: are allowed`
+  );
+}
 
-  if (url.username || url.password) {
-    throw new Error('URLs with embedded credentials are not allowed');
-  }
+function assertNoCredentials(url: URL): void {
+  if (!url.username && !url.password) return;
+  throw new Error('URLs with embedded credentials are not allowed');
+}
 
+function normalizeHostname(url: URL): string {
   const hostname = url.hostname.toLowerCase();
   if (!hostname) {
     throw new Error('URL must have a valid hostname');
   }
+  return hostname;
+}
 
+const BLOCKED_HOST_SUFFIXES = ['.local', '.internal'] as const;
+
+function assertHostnameAllowed(hostname: string): void {
   if (config.security.blockedHosts.has(hostname)) {
     throw new Error(
       `Blocked host: ${hostname}. Internal hosts are not allowed`
@@ -113,13 +141,15 @@ export function validateAndNormalizeUrl(urlString: string): string {
     );
   }
 
-  if (hostname.endsWith('.local') || hostname.endsWith('.internal')) {
+  if (matchesBlockedSuffix(hostname)) {
     throw new Error(
       `Blocked hostname pattern: ${hostname}. Internal domain suffixes are not allowed`
     );
   }
+}
 
-  return url.href;
+function matchesBlockedSuffix(hostname: string): boolean {
+  return BLOCKED_HOST_SUFFIXES.some((suffix) => hostname.endsWith(suffix));
 }
 
 export function isInternalUrl(url: string, baseUrl: string): boolean {

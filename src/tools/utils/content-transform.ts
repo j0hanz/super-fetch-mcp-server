@@ -35,6 +35,12 @@ interface MarkdownOptions extends ExtractionOptions, ContentLengthOptions {
   readonly generateToc?: boolean;
 }
 
+interface TransformContext {
+  readonly sourceHtml: string;
+  readonly title: string | undefined;
+  readonly metadata: ReturnType<typeof createContentMetadataBlock>;
+}
+
 function resolveContentSource(
   html: string,
   url: string,
@@ -62,27 +68,60 @@ function resolveContentSource(
   return { sourceHtml, title, metadata };
 }
 
-export function transformHtmlToJsonl(
+function buildTransformContext(
   html: string,
   url: string,
-  options: ExtractionOptions & ContentLengthOptions
-): JsonlTransformResult {
-  const { sourceHtml, title, metadata } = resolveContentSource(
-    html,
-    url,
-    options
-  );
-  const contentBlocks = parseHtml(sourceHtml);
+  options: ExtractionOptions
+): TransformContext {
+  return resolveContentSource(html, url, options);
+}
 
+function buildJsonlPayload(
+  context: TransformContext,
+  maxContentLength?: number
+): { content: string; contentBlocks: number; truncated: boolean } {
+  const contentBlocks = parseHtml(context.sourceHtml);
   const { content, truncated } = truncateContent(
-    toJsonl(contentBlocks, metadata),
-    options.maxContentLength
+    toJsonl(contentBlocks, context.metadata),
+    maxContentLength
   );
 
   return {
     content,
     contentBlocks: contentBlocks.length,
-    title,
+    truncated,
+  };
+}
+
+function buildMarkdownPayload(
+  context: TransformContext,
+  maxContentLength?: number
+): { content: string; truncated: boolean } {
+  const markdown = htmlToMarkdown(context.sourceHtml, context.metadata);
+  const { content, truncated } = truncateContent(
+    markdown,
+    maxContentLength,
+    TRUNCATION_MARKER
+  );
+
+  return { content, truncated };
+}
+
+export function transformHtmlToJsonl(
+  html: string,
+  url: string,
+  options: ExtractionOptions & ContentLengthOptions
+): JsonlTransformResult {
+  const context = buildTransformContext(html, url, options);
+  const { content, contentBlocks, truncated } = buildJsonlPayload(
+    context,
+    options.maxContentLength
+  );
+
+  return {
+    content,
+    contentBlocks,
+    title: context.title,
     ...(truncated && { truncated }),
   };
 }
@@ -92,22 +131,15 @@ export function transformHtmlToMarkdown(
   url: string,
   options: MarkdownOptions
 ): MarkdownTransformResult {
-  const { sourceHtml, title, metadata } = resolveContentSource(
-    html,
-    url,
-    options
-  );
-
-  const markdown = htmlToMarkdown(sourceHtml, metadata);
-  const { content, truncated } = truncateContent(
-    markdown,
-    options.maxContentLength,
-    TRUNCATION_MARKER
+  const context = buildTransformContext(html, url, options);
+  const { content, truncated } = buildMarkdownPayload(
+    context,
+    options.maxContentLength
   );
 
   return {
     markdown: content,
-    title,
+    title: context.title,
     truncated,
   };
 }
@@ -117,22 +149,17 @@ export function transformHtmlToMarkdownWithBlocks(
   url: string,
   options: ExtractionOptions & ContentLengthOptions
 ): JsonlTransformResult {
-  const { sourceHtml, title, metadata } = resolveContentSource(
-    html,
-    url,
-    options
-  );
-  const contentBlocks = parseHtml(sourceHtml);
-  const { content, truncated } = truncateContent(
-    htmlToMarkdown(sourceHtml, metadata),
-    options.maxContentLength,
-    TRUNCATION_MARKER
+  const context = buildTransformContext(html, url, options);
+  const contentBlocks = parseHtml(context.sourceHtml);
+  const { content, truncated } = buildMarkdownPayload(
+    context,
+    options.maxContentLength
   );
 
   return {
     content,
     contentBlocks: contentBlocks.length,
-    title,
+    title: context.title,
     ...(truncated && { truncated }),
   };
 }

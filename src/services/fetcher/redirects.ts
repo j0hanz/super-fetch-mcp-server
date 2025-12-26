@@ -25,25 +25,33 @@ async function performFetchCycle(
     return { response };
   }
 
-  if (redirectCount >= redirectLimit) {
-    void response.body?.cancel();
-    throw new FetchError('Too many redirects', currentUrl);
-  }
-
-  const location = response.headers.get('location');
-  if (!location) {
-    void response.body?.cancel();
-    throw new FetchError(
-      'Redirect response missing Location header',
-      currentUrl
-    );
-  }
+  assertRedirectWithinLimit(response, currentUrl, redirectLimit, redirectCount);
+  const location = getRedirectLocation(response, currentUrl);
 
   void response.body?.cancel();
   return {
     response,
     nextUrl: resolveRedirectTarget(currentUrl, location),
   };
+}
+
+function assertRedirectWithinLimit(
+  response: Response,
+  currentUrl: string,
+  redirectLimit: number,
+  redirectCount: number
+): void {
+  if (redirectCount < redirectLimit) return;
+  void response.body?.cancel();
+  throw new FetchError('Too many redirects', currentUrl);
+}
+
+function getRedirectLocation(response: Response, currentUrl: string): string {
+  const location = response.headers.get('location');
+  if (location) return location;
+
+  void response.body?.cancel();
+  throw new FetchError('Redirect response missing Location header', currentUrl);
 }
 
 function annotateRedirectError(error: unknown, url: string): void {

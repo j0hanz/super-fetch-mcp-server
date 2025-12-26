@@ -313,15 +313,15 @@ node dist/index.js --stdio
 
 Fetches a webpage and converts it to AI-readable JSONL format with semantic content blocks.
 
-| Parameter            | Type    | Default    | Description                                  |
-| -------------------- | ------- | ---------- | -------------------------------------------- |
-| `url`                | string  | _required_ | URL to fetch                                 |
-| `extractMainContent` | boolean | `true`     | Use Readability to extract main content      |
-| `includeMetadata`    | boolean | `true`     | Include page metadata (title, description)   |
-| `maxContentLength`   | number  | –          | Maximum content length in characters         |
-| `customHeaders`      | object  | –          | Custom HTTP headers for the request          |
-| `timeout`            | number  | `30000`    | Request timeout in milliseconds (1000-60000) |
-| `retries`            | number  | `3`        | Number of retry attempts (1-10)              |
+| Parameter            | Type    | Default    | Description                                   |
+| -------------------- | ------- | ---------- | --------------------------------------------- |
+| `url`                | string  | _required_ | URL to fetch                                  |
+| `extractMainContent` | boolean | `true`     | Use Readability to extract main content       |
+| `includeMetadata`    | boolean | `true`     | Include page metadata (title, description)    |
+| `maxContentLength`   | number  | –          | Maximum content length in characters          |
+| `customHeaders`      | object  | –          | Custom HTTP headers for the request           |
+| `timeout`            | number  | `30000`    | Request timeout in milliseconds (1000-120000) |
+| `retries`            | number  | `3`        | Number of retry attempts (1-10)               |
 
 **Example Response:**
 
@@ -355,17 +355,17 @@ Fetches a webpage and converts it to AI-readable JSONL format with semantic cont
 
 Extracts hyperlinks from a webpage with classification. Supports filtering, image links, and link limits.
 
-| Parameter         | Type    | Default    | Description                                  |
-| ----------------- | ------- | ---------- | -------------------------------------------- |
-| `url`             | string  | _required_ | URL to extract links from                    |
-| `includeExternal` | boolean | `true`     | Include external links                       |
-| `includeInternal` | boolean | `true`     | Include internal links                       |
-| `includeImages`   | boolean | `false`    | Include image links (img src attributes)     |
-| `maxLinks`        | number  | –          | Maximum number of links to return (1-1000)   |
-| `filterPattern`   | string  | –          | Regex pattern to filter links (matches href) |
-| `customHeaders`   | object  | –          | Custom HTTP headers for the request          |
-| `timeout`         | number  | `30000`    | Request timeout in milliseconds (1000-60000) |
-| `retries`         | number  | `3`        | Number of retry attempts (1-10)              |
+| Parameter         | Type    | Default    | Description                                   |
+| ----------------- | ------- | ---------- | --------------------------------------------- |
+| `url`             | string  | _required_ | URL to extract links from                     |
+| `includeExternal` | boolean | `true`     | Include external links                        |
+| `includeInternal` | boolean | `true`     | Include internal links                        |
+| `includeImages`   | boolean | `false`    | Include image links (img src attributes)      |
+| `maxLinks`        | number  | –          | Maximum number of links to return (1-1000)    |
+| `filterPattern`   | string  | –          | Regex pattern to filter links (matches href)  |
+| `customHeaders`   | object  | –          | Custom HTTP headers for the request           |
+| `timeout`         | number  | `30000`    | Request timeout in milliseconds (1000-120000) |
+| `retries`         | number  | `3`        | Number of retry attempts (1-10)               |
 
 **Example Response:**
 
@@ -395,16 +395,16 @@ Extracts hyperlinks from a webpage with classification. Supports filtering, imag
 
 Fetches a webpage and converts it to clean Markdown with optional table of contents.
 
-| Parameter            | Type    | Default    | Description                                  |
-| -------------------- | ------- | ---------- | -------------------------------------------- |
-| `url`                | string  | _required_ | URL to fetch                                 |
-| `extractMainContent` | boolean | `true`     | Extract main content only                    |
-| `includeMetadata`    | boolean | `true`     | Include YAML frontmatter                     |
-| `maxContentLength`   | number  | –          | Maximum content length in characters         |
-| `generateToc`        | boolean | `false`    | Generate table of contents from headings     |
-| `customHeaders`      | object  | –          | Custom HTTP headers for the request          |
-| `timeout`            | number  | `30000`    | Request timeout in milliseconds (1000-60000) |
-| `retries`            | number  | `3`        | Number of retry attempts (1-10)              |
+| Parameter            | Type    | Default    | Description                                   |
+| -------------------- | ------- | ---------- | --------------------------------------------- |
+| `url`                | string  | _required_ | URL to fetch                                  |
+| `extractMainContent` | boolean | `true`     | Extract main content only                     |
+| `includeMetadata`    | boolean | `true`     | Include YAML frontmatter                      |
+| `maxContentLength`   | number  | –          | Maximum content length in characters          |
+| `generateToc`        | boolean | `false`    | Generate table of contents from headings      |
+| `customHeaders`      | object  | –          | Custom HTTP headers for the request           |
+| `timeout`            | number  | `30000`    | Request timeout in milliseconds (1000-120000) |
+| `retries`            | number  | `3`        | Number of retry attempts (1-10)               |
 
 **Example Response:**
 
@@ -427,18 +427,18 @@ Fetches a webpage and converts it to clean Markdown with optional table of conte
 
 Fetches multiple URLs in parallel with concurrency control. Ideal for comparing content or processing multiple pages efficiently.
 
-| Parameter            | Type     | Default    | Description                                  |
-| -------------------- | -------- | ---------- | -------------------------------------------- |
-| `urls`               | string[] | _required_ | Array of URLs to fetch (1-10 URLs)           |
-| `extractMainContent` | boolean  | `true`     | Use Readability to extract main content      |
-| `includeMetadata`    | boolean  | `true`     | Include page metadata                        |
-| `maxContentLength`   | number   | –          | Maximum content length per URL in characters |
-| `format`             | string   | `'jsonl'`  | Output format: `'jsonl'` or `'markdown'`     |
-| `concurrency`        | number   | `3`        | Maximum concurrent requests (1-5)            |
-| `continueOnError`    | boolean  | `true`     | Continue processing if some URLs fail        |
-| `customHeaders`      | object   | –          | Custom HTTP headers for all requests         |
-| `timeout`            | number   | `30000`    | Request timeout in milliseconds (1000-60000) |
-| `retries`            | number   | `3`        | Number of retry attempts (1-10)              |
+| Parameter            | Type     | Default    | Description                                   |
+| -------------------- | -------- | ---------- | --------------------------------------------- |
+| `urls`               | string[] | _required_ | Array of URLs to fetch (1-10 URLs)            |
+| `extractMainContent` | boolean  | `true`     | Use Readability to extract main content       |
+| `includeMetadata`    | boolean  | `true`     | Include page metadata                         |
+| `maxContentLength`   | number   | –          | Maximum content length per URL in characters  |
+| `format`             | string   | `'jsonl'`  | Output format: `'jsonl'` or `'markdown'`      |
+| `concurrency`        | number   | `3`        | Maximum concurrent requests (1-5)             |
+| `continueOnError`    | boolean  | `true`     | Continue processing if some URLs fail         |
+| `customHeaders`      | object   | –          | Custom HTTP headers for all requests          |
+| `timeout`            | number   | `30000`    | Request timeout in milliseconds (1000-120000) |
+| `retries`            | number   | `3`        | Number of retry attempts (1-10)               |
 
 **Example Output:**
 

@@ -124,21 +124,24 @@ function extractMetadata(document: Document): ExtractedMetadata {
   };
 }
 
-function extractArticle(document: Document): ExtractedArticle | null {
+function hasDocumentElement(document: unknown): document is Document {
+  if (!document || typeof document !== 'object') return false;
+  if (!('documentElement' in document)) return false;
+  return Boolean((document as { documentElement?: unknown }).documentElement);
+}
+
+function extractArticle(document: unknown): ExtractedArticle | null {
+  if (!hasDocumentElement(document)) return null;
+  const parsed = parseReadabilityArticle(document);
+  return parsed ? mapReadabilityResult(parsed) : null;
+}
+
+function parseReadabilityArticle(
+  document: Document
+): ReturnType<Readability['parse']> | null {
   try {
     const reader = new Readability(document as unknown as Document);
-    const parsed = reader.parse();
-
-    if (!parsed) return null;
-
-    return {
-      title: parsed.title ?? undefined,
-      byline: parsed.byline ?? undefined,
-      content: parsed.content ?? '',
-      textContent: parsed.textContent ?? '',
-      excerpt: parsed.excerpt ?? undefined,
-      siteName: parsed.siteName ?? undefined,
-    };
+    return reader.parse();
   } catch (error) {
     logError(
       'Failed to extract article with Readability',
@@ -146,6 +149,23 @@ function extractArticle(document: Document): ExtractedArticle | null {
     );
     return null;
   }
+}
+
+function mapReadabilityResult(
+  parsed: NonNullable<ReturnType<Readability['parse']>>
+): ExtractedArticle {
+  return {
+    title: toOptional(parsed.title),
+    byline: toOptional(parsed.byline),
+    content: parsed.content ?? '',
+    textContent: parsed.textContent ?? '',
+    excerpt: toOptional(parsed.excerpt),
+    siteName: toOptional(parsed.siteName),
+  };
+}
+
+function toOptional(value: string | null | undefined): string | undefined {
+  return value ?? undefined;
 }
 
 export function extractContent(
@@ -157,6 +177,14 @@ export function extractContent(
     return { article: null, metadata: {} };
   }
 
+  return tryExtractContent(html, url, options);
+}
+
+function tryExtractContent(
+  html: string,
+  url: string,
+  options: { extractArticle?: boolean }
+): ExtractionResult {
   try {
     const processedHtml = truncateHtml(html);
     const { document } = parseHTML(processedHtml);

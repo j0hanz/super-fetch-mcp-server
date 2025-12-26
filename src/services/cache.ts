@@ -153,18 +153,10 @@ function emitCacheUpdate(cacheKey: string): void {
 }
 
 export function get(cacheKey: string | null): CacheEntry | undefined {
-  if (!config.cache.enabled || !cacheKey) {
-    return undefined;
-  }
+  if (!isCacheReadable(cacheKey)) return undefined;
 
   try {
-    const item = contentCache.get(cacheKey);
-    if (!item) return undefined;
-    if (Date.now() > item.expiresAt) {
-      contentCache.delete(cacheKey);
-      return undefined;
-    }
-    return item.entry;
+    return readCacheEntry(cacheKey);
   } catch (error) {
     logWarn('Cache get error', {
       key: cacheKey.substring(0, 100),
@@ -172,6 +164,26 @@ export function get(cacheKey: string | null): CacheEntry | undefined {
     });
     return undefined;
   }
+}
+
+function isCacheReadable(cacheKey: string | null): cacheKey is string {
+  return config.cache.enabled && Boolean(cacheKey);
+}
+
+function readCacheEntry(cacheKey: string): CacheEntry | undefined {
+  const item = contentCache.get(cacheKey);
+  if (!item) return undefined;
+
+  if (isExpired(item)) {
+    contentCache.delete(cacheKey);
+    return undefined;
+  }
+
+  return item.entry;
+}
+
+function isExpired(item: CacheItem): boolean {
+  return Date.now() > item.expiresAt;
 }
 
 export function set(cacheKey: string | null, content: string): void {

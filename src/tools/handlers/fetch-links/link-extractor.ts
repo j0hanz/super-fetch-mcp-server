@@ -161,8 +161,8 @@ function resolveImageLink(
   el: Element,
   baseUrl: string
 ): ExtractedLink | null {
-  const src = $(el).attr('src');
-  if (!src || src.startsWith('data:')) return null;
+  const src = getImageSrc($, el);
+  if (!src) return null;
 
   const url = tryResolveUrl(src, baseUrl);
   if (!url) return null;
@@ -174,17 +174,29 @@ function resolveImageLink(
   };
 }
 
-function collectAnchorLinks(
+function getImageSrc($: cheerio.CheerioAPI, el: Element): string | null {
+  const src = $(el).attr('src');
+  if (!src || src.startsWith('data:')) return null;
+  return src;
+}
+
+type LinkResolver = (
   $: cheerio.CheerioAPI,
-  baseUrl: string,
+  el: Element
+) => ExtractedLink | null;
+
+function collectLinks(
+  $: cheerio.CheerioAPI,
+  selector: string,
+  resolveLink: LinkResolver,
   options: ExtractLinksOptions,
   seen: Set<string>,
   links: ExtractedLink[]
 ): number {
   let filtered = 0;
 
-  $('a[href]').each((_, el) => {
-    const link = resolveAnchorLink($, el, baseUrl);
+  $(selector).each((_, el) => {
+    const link = resolveLink($, el as Element);
     if (!link) return;
 
     const result = evaluateLink(link, options, seen);
@@ -198,6 +210,23 @@ function collectAnchorLinks(
   return filtered;
 }
 
+function collectAnchorLinks(
+  $: cheerio.CheerioAPI,
+  baseUrl: string,
+  options: ExtractLinksOptions,
+  seen: Set<string>,
+  links: ExtractedLink[]
+): number {
+  return collectLinks(
+    $,
+    'a[href]',
+    (instance, el) => resolveAnchorLink(instance, el, baseUrl),
+    options,
+    seen,
+    links
+  );
+}
+
 function collectImageLinks(
   $: cheerio.CheerioAPI,
   baseUrl: string,
@@ -207,20 +236,14 @@ function collectImageLinks(
 ): number {
   if (!options.includeImages) return 0;
 
-  let filtered = 0;
-  $('img[src]').each((_, el) => {
-    const link = resolveImageLink($, el, baseUrl);
-    if (!link) return;
-
-    const result = evaluateLink(link, options, seen);
-    if (result.filtered) filtered += 1;
-    if (!result.accepted) return;
-
-    seen.add(link.href);
-    links.push(link);
-  });
-
-  return filtered;
+  return collectLinks(
+    $,
+    'img[src]',
+    (instance, el) => resolveImageLink(instance, el, baseUrl),
+    options,
+    seen,
+    links
+  );
 }
 
 export function extractLinks(

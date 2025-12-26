@@ -17,7 +17,9 @@ import {
 } from '../utils/content-transform.js';
 
 import {
+  applyInlineResultToStructuredContent,
   buildToolContentBlocks,
+  getInlineErrorResponse,
   type InlineResult,
   performSharedFetch,
 } from './fetch-single.shared.js';
@@ -74,24 +76,13 @@ function buildFetchUrlStructuredContent(
     structuredContent.truncated = true;
   }
 
-  if (typeof inlineResult.content === 'string') {
-    structuredContent.content = inlineResult.content;
-  }
-
-  if (inlineResult.resourceUri) {
-    structuredContent.resourceUri = inlineResult.resourceUri;
-    structuredContent.resourceMimeType = inlineResult.resourceMimeType;
-  }
+  applyInlineResultToStructuredContent(
+    structuredContent,
+    inlineResult,
+    'content'
+  );
 
   return structuredContent;
-}
-
-function getInlineErrorResponse(
-  inlineResult: InlineResult,
-  url: string
-): ToolResponseBase | null {
-  if (!inlineResult.error) return null;
-  return createToolErrorResponse(inlineResult.error, url, 'INTERNAL_ERROR');
 }
 
 function logFetchUrlStart(url: string, options: FetchUrlOptions): void {

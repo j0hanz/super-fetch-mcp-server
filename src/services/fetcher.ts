@@ -116,17 +116,33 @@ export async function fetchUrlWithRetry(
   maxRetries = 3
 ): Promise<string> {
   const normalizedUrl = validateAndNormalizeUrl(url);
-  const timeoutMs = options?.timeout ?? config.fetcher.timeout;
-  const headers = buildHeaders(options?.customHeaders);
+  const context = buildRequestContext(options);
 
   return executeWithRetry(
     normalizedUrl,
     maxRetries,
-    async () => {
-      const signal = buildRequestSignal(timeoutMs, options?.signal);
-      const requestInit = buildRequestInit(headers, signal);
-      return fetchWithTelemetry(normalizedUrl, requestInit, timeoutMs);
-    },
-    options?.signal
+    async () => runFetch(normalizedUrl, context),
+    context.signal
   );
+}
+
+function buildRequestContext(options?: FetchOptions): {
+  timeoutMs: number;
+  headers: Headers;
+  signal?: AbortSignal;
+} {
+  return {
+    timeoutMs: options?.timeout ?? config.fetcher.timeout,
+    headers: buildHeaders(options?.customHeaders),
+    signal: options?.signal,
+  };
+}
+
+async function runFetch(
+  normalizedUrl: string,
+  context: { timeoutMs: number; headers: Headers; signal?: AbortSignal }
+): Promise<string> {
+  const signal = buildRequestSignal(context.timeoutMs, context.signal);
+  const requestInit = buildRequestInit(context.headers, signal);
+  return fetchWithTelemetry(normalizedUrl, requestInit, context.timeoutMs);
 }
