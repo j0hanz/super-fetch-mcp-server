@@ -56,6 +56,14 @@ export async function startStdioServer(): Promise<void> {
       });
   });
 
-  await server.connect(transport);
-  logInfo('superFetch MCP server running on stdio');
+  try {
+    await server.connect(transport);
+    logInfo('superFetch MCP server running on stdio');
+  } catch (error) {
+    logError(
+      'Failed to start stdio server',
+      error instanceof Error ? error : undefined
+    );
+    process.exit(1);
+  }
 }

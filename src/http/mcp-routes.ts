@@ -7,7 +7,7 @@ import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 
 import type { McpRequestBody } from '../config/types.js';
 
-import { logInfo, logWarn } from '../services/logger.js';
+import { logError, logInfo, logWarn } from '../services/logger.js';
 
 import { createMcpServer } from '../server.js';
 import { getSessionId, type SessionStore } from './sessions.js';
@@ -15,6 +15,22 @@ import { getSessionId, type SessionStore } from './sessions.js';
 interface McpRouteOptions {
   readonly sessionStore: SessionStore;
   readonly maxSessions: number;
+}
+
+let inFlightSessions = 0;
+
+function reserveSessionSlot(store: SessionStore, maxSessions: number): boolean {
+  if (store.size() + inFlightSessions >= maxSessions) {
+    return false;
+  }
+  inFlightSessions += 1;
+  return true;
+}
+
+function releaseSessionSlot(): void {
+  if (inFlightSessions > 0) {
+    inFlightSessions -= 1;
+  }
 }
 
 function isMcpRequestBody(body: unknown): body is McpRequestBody {
@@ -94,10 +110,25 @@ async function handlePost(
   } else if (!sessionId && isInitializeRequest(body)) {
     evictExpiredSessions(options.sessionStore);
 
-    if (
-      options.sessionStore.size() >= options.maxSessions &&
-      !evictOldestSession(options.sessionStore)
-    ) {
+    const currentSize = options.sessionStore.size();
+    if (currentSize + inFlightSessions >= options.maxSessions) {
+      const canFreeSlot =
+        currentSize >= options.maxSessions &&
+        currentSize - 1 + inFlightSessions < options.maxSessions;
+      if (!canFreeSlot || !evictOldestSession(options.sessionStore)) {
+        res.status(503).json({
+          jsonrpc: '2.0',
+          error: {
+            code: -32000,
+            message: 'Server busy: maximum sessions reached',
+          },
+          id: null,
+        });
+        return;
+      }
+    }
+
+    if (!reserveSessionSlot(options.sessionStore, options.maxSessions)) {
       res.status(503).json({
         jsonrpc: '2.0',
         error: {
@@ -109,9 +140,20 @@ async function handlePost(
       return;
     }
 
+    let slotReleased = false;
+    const releaseSlot = (): void => {
+      if (slotReleased) return;
+      slotReleased = true;
+      releaseSessionSlot();
+    };
+
+    let initialized = false;
+
     transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
       onsessioninitialized: (id) => {
+        initialized = true;
+        releaseSlot();
         const now = Date.now();
         options.sessionStore.set(id, {
           transport,
@@ -127,13 +169,25 @@ async function handlePost(
     });
 
     transport.onclose = () => {
+      if (!initialized) {
+        releaseSlot();
+      }
       if (transport.sessionId) {
         options.sessionStore.remove(transport.sessionId);
       }
     };
 
     const mcpServer = createMcpServer();
-    await mcpServer.connect(transport);
+    try {
+      await mcpServer.connect(transport);
+    } catch (error) {
+      releaseSlot();
+      logError(
+        'Failed to initialize MCP session',
+        error instanceof Error ? error : undefined
+      );
+      throw error;
+    }
   } else {
     res.status(400).json({
       jsonrpc: '2.0',
@@ -146,7 +200,17 @@ async function handlePost(
     return;
   }
 
-  await transport.handleRequest(req, res, body);
+  try {
+    await transport.handleRequest(req, res, body);
+  } catch (error) {
+    logError(
+      'MCP request handling failed',
+      error instanceof Error ? error : undefined
+    );
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Internal Server Error' });
+    }
+  }
 }
 
 async function handleGet(
@@ -168,7 +232,17 @@ async function handleGet(
   }
 
   options.sessionStore.touch(sessionId);
-  await session.transport.handleRequest(req, res);
+  try {
+    await session.transport.handleRequest(req, res);
+  } catch (error) {
+    logError(
+      'MCP request handling failed',
+      error instanceof Error ? error : undefined
+    );
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Internal Server Error' });
+    }
+  }
 }
 
 async function handleDelete(
@@ -181,7 +255,17 @@ async function handleDelete(
 
   if (sessionId && session) {
     options.sessionStore.touch(sessionId);
-    await session.transport.handleRequest(req, res);
+    try {
+      await session.transport.handleRequest(req, res);
+    } catch (error) {
+      logError(
+        'MCP request handling failed',
+        error instanceof Error ? error : undefined
+      );
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'Internal Server Error' });
+      }
+    }
     return;
   }
 
