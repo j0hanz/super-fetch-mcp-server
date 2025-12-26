@@ -11,6 +11,7 @@ import { errorHandler } from '../middleware/error-handler.js';
 
 import { createAuthMiddleware } from './auth.js';
 import { createCorsMiddleware } from './cors.js';
+import { registerDownloadRoutes } from './download-routes.js';
 import { registerMcpRoutes } from './mcp-routes.js';
 import { createRateLimitMiddleware } from './rate-limit.js';
 import { attachBaseMiddleware, buildCorsOptions } from './server-middleware.js';
@@ -141,6 +142,7 @@ export async function startHttpServer(): Promise<{
     sessionStore,
     maxSessions: config.server.maxSessions,
   });
+  registerDownloadRoutes(app);
   app.use(errorHandler);
 
   const server = startListening(app);

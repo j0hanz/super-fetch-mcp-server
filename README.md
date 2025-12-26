@@ -372,9 +372,58 @@ Fetches a webpage and converts it to clean Markdown with optional table of conte
     { "level": 2, "text": "Installation", "slug": "installation" }
   ],
   "cached": false,
-  "truncated": false
+  "truncated": false,
+  "file": {
+    "downloadUrl": "/mcp/downloads/markdown/abc123def456",
+    "fileName": "documentation.md",
+    "expiresAt": "2025-12-11T11:30:00.000Z"
+  }
 }
 ````
+
+---
+
+## Download Endpoint (HTTP Mode)
+
+When running in HTTP mode, `fetch-markdown` responses include a `file` object only when the content is too large to inline (the response includes a `resource_link`/cloud icon). The download URL serves raw markdown.
+
+### Endpoint
+
+```text
+GET /mcp/downloads/:namespace/:hash
+```
+
+### Headers
+
+| Header          | Required | Description        |
+| --------------- | -------- | ------------------ |
+| `Authorization` | Yes      | `Bearer <API_KEY>` |
+
+### Response Headers
+
+| Header                | Value                              |
+| --------------------- | ---------------------------------- |
+| `Content-Type`        | `text/markdown; charset=utf-8`     |
+| `Content-Disposition` | `attachment; filename="<name>.md"` |
+| `Cache-Control`       | `private, max-age=3600`            |
+
+### Example Usage
+
+```bash
+curl -H "Authorization: Bearer $API_KEY" \
+  http://localhost:3000/mcp/downloads/markdown/abc123.def456 \
+  -o article.md
+```
+
+### Error Responses
+
+| Status | Code                  | Description                      |
+| ------ | --------------------- | -------------------------------- |
+| 400    | `BAD_REQUEST`         | Invalid namespace or hash format |
+| 404    | `NOT_FOUND`           | Content not found or expired     |
+| 503    | `SERVICE_UNAVAILABLE` | Download service disabled        |
+
+---
 
 ### Resources
 

@@ -63,6 +63,12 @@ const resourceFieldsSchema = z.object({
   errorCode: z.string().optional().describe('Error code if the request failed'),
 });
 
+const fileDownloadSchema = z.object({
+  downloadUrl: z.string().describe('Relative URL to download the .md file'),
+  fileName: z.string().describe('Suggested filename for download'),
+  expiresAt: z.string().describe('ISO timestamp when download expires'),
+});
+
 export const fetchUrlInputSchema = requestOptionsSchema
   .extend({
     url: z.string().min(1).describe('The URL to fetch'),
@@ -108,6 +114,9 @@ export const fetchMarkdownOutputSchema = z
       .string()
       .optional()
       .describe('The extracted content in Markdown format'),
+    file: fileDownloadSchema
+      .optional()
+      .describe('Download information when content is cached'),
   })
   .merge(resourceFieldsSchema)
   .strict();

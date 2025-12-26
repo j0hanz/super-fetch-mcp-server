@@ -1,5 +1,6 @@
 import type {
   FetchMarkdownInput,
+  FileDownloadInfo,
   MarkdownTransformResult,
   PipelineResult,
   ToolResponseBase,
@@ -17,6 +18,7 @@ import { transformHtmlToMarkdown } from '../utils/content-transform.js';
 import {
   applyInlineResultToStructuredContent,
   buildToolContentBlocks,
+  getFileDownloadInfo,
   getInlineErrorResponse,
   type InlineResult,
   performSharedFetch,
@@ -46,7 +48,8 @@ function resolveMarkdownOptions(input: FetchMarkdownInput): MarkdownOptions {
 
 function buildMarkdownStructuredContent(
   pipeline: PipelineResult<MarkdownPipelineResult>,
-  inlineResult: InlineResult
+  inlineResult: InlineResult,
+  fileDownload: FileDownloadInfo | null
 ): Record<string, unknown> {
   const structuredContent: Record<string, unknown> = {
     url: pipeline.url,
@@ -65,6 +68,10 @@ function buildMarkdownStructuredContent(
     inlineResult,
     'markdown'
   );
+
+  if (fileDownload) {
+    structuredContent.file = fileDownload;
+  }
 
   return structuredContent;
 }
@@ -104,11 +111,13 @@ async function fetchMarkdownPipeline(
 
 function buildMarkdownResponse(
   pipeline: PipelineResult<MarkdownPipelineResult>,
-  inlineResult: InlineResult
+  inlineResult: InlineResult,
+  fileDownload: FileDownloadInfo | null
 ): ToolResponseBase {
   const structuredContent = buildMarkdownStructuredContent(
     pipeline,
-    inlineResult
+    inlineResult,
+    fileDownload
   );
 
   return {
@@ -158,5 +167,14 @@ async function executeFetchMarkdown(
 
   const inlineError = getInlineErrorResponse(inlineResult, url);
   if (inlineError) return inlineError;
-  return buildMarkdownResponse(pipeline, inlineResult);
+
+  const fileDownload = inlineResult.resourceUri
+    ? getFileDownloadInfo({
+        cacheKey: pipeline.cacheKey ?? null,
+        url: pipeline.url,
+        title: pipeline.data.title,
+      })
+    : null;
+
+  return buildMarkdownResponse(pipeline, inlineResult, fileDownload);
 }

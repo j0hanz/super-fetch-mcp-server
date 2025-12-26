@@ -82,6 +82,7 @@ export interface ExtractedArticle {
 
 export interface CacheEntry {
   url: string;
+  title?: string;
   content: string;
   fetchedAt: string;
   expiresAt: string;

@@ -4,7 +4,9 @@ import type {
   ToolContentBlock,
   ToolResponseBase,
 } from '../../config/types.js';
+import type { FileDownloadInfo } from '../../config/types.js';
 
+import { buildFileDownloadInfo } from '../../utils/download-url.js';
 import { createToolErrorResponse } from '../../utils/tool-error-handler.js';
 import { appendHeaderVary } from '../utils/cache-vary.js';
 import { executeFetchPipeline } from '../utils/fetch-pipeline.js';
@@ -62,6 +64,22 @@ export async function performSharedFetch<T extends { content: string }>(
 }
 
 export type InlineResult = ReturnType<typeof applyInlineContentLimit>;
+
+export interface DownloadContext {
+  cacheKey: string | null;
+  url: string;
+  title?: string;
+}
+
+export function getFileDownloadInfo(
+  context: DownloadContext
+): FileDownloadInfo | null {
+  return buildFileDownloadInfo({
+    cacheKey: context.cacheKey,
+    url: context.url,
+    title: context.title,
+  });
+}
 
 export function getInlineErrorResponse(
   inlineResult: InlineResult,

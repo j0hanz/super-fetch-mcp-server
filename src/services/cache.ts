@@ -60,6 +60,11 @@ interface CacheUpdateEvent extends CacheKeyParts {
   cacheKey: string;
 }
 
+interface CacheEntryMetadata {
+  url: string;
+  title?: string;
+}
+
 type CacheUpdateListener = (event: CacheUpdateEvent) => void;
 
 const updateListeners = new Set<CacheUpdateListener>();
@@ -186,14 +191,18 @@ function isExpired(item: CacheItem): boolean {
   return Date.now() > item.expiresAt;
 }
 
-export function set(cacheKey: string | null, content: string): void {
+export function set(
+  cacheKey: string | null,
+  content: string,
+  metadata: CacheEntryMetadata
+): void {
   if (!config.cache.enabled) return;
   if (!cacheKey) return;
   if (!content) return;
 
   try {
     startCleanupLoop();
-    const entry = buildCacheEntry(cacheKey, content);
+    const entry = buildCacheEntry(cacheKey, content, metadata);
     persistCacheEntry(cacheKey, entry);
   } catch (error) {
     logWarn('Cache set error', {
@@ -207,9 +216,14 @@ export function keys(): string[] {
   return Array.from(contentCache.keys());
 }
 
-function buildCacheEntry(cacheKey: string, content: string): CacheEntry {
+function buildCacheEntry(
+  cacheKey: string,
+  content: string,
+  metadata: CacheEntryMetadata
+): CacheEntry {
   return {
-    url: cacheKey,
+    url: metadata.url,
+    title: metadata.title,
     content,
     fetchedAt: new Date().toISOString(),
     expiresAt: new Date(Date.now() + config.cache.ttl * 1000).toISOString(),

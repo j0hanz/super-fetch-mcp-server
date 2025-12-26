@@ -88,7 +88,7 @@ export async function executeFetchPipeline<T>(
     options.retries
   );
   const data = options.transform(html, normalizedUrl);
-  persistCache(cacheKey, data, options.serialize);
+  persistCache(cacheKey, data, options.serialize, normalizedUrl);
 
   return buildPipelineResult(normalizedUrl, data, cacheKey);
 }
@@ -112,11 +112,22 @@ function buildFetchOptions<T>(options: FetchPipelineOptions<T>): FetchOptions {
 function persistCache<T>(
   cacheKey: string | null,
   data: T,
-  serialize: ((result: T) => string) | undefined
+  serialize: ((result: T) => string) | undefined,
+  normalizedUrl: string
 ): void {
   if (!cacheKey) return;
   const serializer = serialize ?? JSON.stringify;
-  cache.set(cacheKey, serializer(data));
+  cache.set(cacheKey, serializer(data), {
+    url: normalizedUrl,
+    title: extractTitle(data),
+  });
+}
+
+function extractTitle(value: unknown): string | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  if (!('title' in value)) return undefined;
+  const { title } = value as { title?: unknown };
+  return typeof title === 'string' ? title : undefined;
 }
 
 function buildPipelineResult<T>(

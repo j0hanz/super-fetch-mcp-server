@@ -24,6 +24,12 @@ export interface FetchMarkdownInput extends RequestOptions {
   maxContentLength?: number;
 }
 
+export interface FileDownloadInfo {
+  downloadUrl: string;
+  fileName: string;
+  expiresAt: string;
+}
+
 export interface ErrorResponse {
   error: {
     message: string;
