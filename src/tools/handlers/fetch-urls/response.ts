@@ -23,17 +23,16 @@ export function createBatchResponse(
 ): ToolResponse<BatchResponseContent> {
   const normalizedResults = normalizeBatchResults(results);
   const summary = buildBatchSummary(normalizedResults);
-  const resultsMetadata = normalizedResults.map((result) => {
-    if (!result.success || !result.content) return result;
-    const { content: _, ...rest } = result;
-    return rest;
-  });
-
   const structuredContent: BatchResponseContent = {
     results: normalizedResults,
     summary,
     fetchedAt: new Date().toISOString(),
   };
+  const resultsMetadata = normalizedResults.map((result) => {
+    if (!result.success || !result.content) return result;
+    const { content: _, ...rest } = result;
+    return rest;
+  });
 
   const contentBlocks = buildContentBlocks(
     normalizedResults,
