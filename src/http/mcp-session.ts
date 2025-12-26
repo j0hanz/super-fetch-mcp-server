@@ -309,7 +309,7 @@ export function evictExpiredSessions(store: SessionStore): number {
   return evicted.length;
 }
 
-export function evictOldestSession(store: SessionStore): boolean {
+function evictOldestSession(store: SessionStore): boolean {
   const session = store.evictOldest();
   if (!session) return false;
   void session.transport.close().catch((error: unknown) => {

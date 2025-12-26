@@ -197,4 +197,4 @@ export function registerMcpRoutes(
   );
 }
 
-export { evictExpiredSessions, evictOldestSession } from './mcp-session.js';
+export { evictExpiredSessions } from './mcp-session.js';

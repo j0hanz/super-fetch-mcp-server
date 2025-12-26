@@ -33,12 +33,6 @@ export interface FetchOptions {
   timeout?: number;
 }
 
-// Content transformation types
-export interface ContentTransformOptions {
-  readonly extractMainContent: boolean;
-  readonly includeMetadata: boolean;
-}
-
 export interface TruncationResult {
   readonly content: string;
   readonly truncated: boolean;

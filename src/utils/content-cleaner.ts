@@ -83,10 +83,6 @@ export function cleanCodeBlock(code: string): string | null {
   return trimmed;
 }
 
-export function stripMarkdownLinks(text: string): string {
-  return text.replace(/\[([^\]]+)\]\([^)]*\)/g, '$1');
-}
-
 export function removeInlineTimestamps(text: string): string {
   return text
     .replace(

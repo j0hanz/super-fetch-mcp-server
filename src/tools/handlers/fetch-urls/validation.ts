@@ -5,7 +5,7 @@ import type {
 
 import { createToolErrorResponse } from '../../../utils/tool-error-handler.js';
 
-export const MAX_URLS_PER_BATCH = 10;
+const MAX_URLS_PER_BATCH = 10;
 export const DEFAULT_CONCURRENCY = 3;
 export const MAX_CONCURRENCY = 5;
 

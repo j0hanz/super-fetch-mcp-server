@@ -17,7 +17,7 @@ import {
 } from './fetcher/interceptors.js';
 import { fetchWithRedirects } from './fetcher/redirects.js';
 import { readResponseText } from './fetcher/response.js';
-import { RetryPolicy } from './fetcher/retry-policy.js';
+import { executeWithRetry } from './fetcher/retry-policy.js';
 
 export { destroyAgents };
 
@@ -116,13 +116,17 @@ export async function fetchUrlWithRetry(
   maxRetries = 3
 ): Promise<string> {
   const normalizedUrl = validateAndNormalizeUrl(url);
-  const policy = new RetryPolicy(maxRetries, normalizedUrl);
   const timeoutMs = options?.timeout ?? config.fetcher.timeout;
   const headers = buildHeaders(options?.customHeaders);
 
-  return policy.execute(async () => {
-    const signal = buildRequestSignal(timeoutMs, options?.signal);
-    const requestInit = buildRequestInit(headers, signal);
-    return fetchWithTelemetry(normalizedUrl, requestInit, timeoutMs);
-  }, options?.signal);
+  return executeWithRetry(
+    normalizedUrl,
+    maxRetries,
+    async () => {
+      const signal = buildRequestSignal(timeoutMs, options?.signal);
+      const requestInit = buildRequestInit(headers, signal);
+      return fetchWithTelemetry(normalizedUrl, requestInit, timeoutMs);
+    },
+    options?.signal
+  );
 }

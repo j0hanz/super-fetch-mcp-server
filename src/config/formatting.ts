@@ -1,4 +1,4 @@
-export const LINE_BREAK = '\n';
+const LINE_BREAK = '\n';
 
 export const TRUNCATION_MARKER = '...[truncated]';
 

@@ -51,7 +51,7 @@ function enforceMaxKeys(): void {
   }
 }
 
-export interface CacheKeyParts {
+interface CacheKeyParts {
   namespace: string;
   urlHash: string;
 }

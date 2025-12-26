@@ -51,10 +51,7 @@ function annotateRedirectError(error: unknown, url: string): void {
   (error as { requestUrl?: string }).requestUrl = url;
 }
 
-export function resolveRedirectTarget(
-  baseUrl: string,
-  location: string
-): string {
+function resolveRedirectTarget(baseUrl: string, location: string): string {
   if (!URL.canParse(location, baseUrl)) {
     const error = new Error('Invalid redirect target') as NodeJS.ErrnoException;
     error.code = 'EBADREDIRECT';

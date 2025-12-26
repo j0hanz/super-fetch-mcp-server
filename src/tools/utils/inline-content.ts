@@ -3,9 +3,9 @@ import { config } from '../../config/index.js';
 
 import * as cache from '../../services/cache.js';
 
-export type InlineContentFormat = 'jsonl' | 'markdown';
+type InlineContentFormat = 'jsonl' | 'markdown';
 
-export interface InlineContentResult {
+interface InlineContentResult {
   content?: string;
   contentSize: number;
   resourceUri?: string;

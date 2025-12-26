@@ -6,7 +6,7 @@ import { logDebug, logError, logWarn } from '../logger.js';
 
 const fetchChannel = diagnosticsChannel.channel('superfetch.fetch');
 
-export interface FetchTelemetryContext {
+interface FetchTelemetryContext {
   requestId: string;
   startTime: number;
   url: string;

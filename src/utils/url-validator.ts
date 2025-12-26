@@ -65,93 +65,59 @@ function isBlockedByList(ip: string, ipType: 4 | 6): boolean {
   return BLOCK_LIST.check(ip, 'ipv6');
 }
 
-function assertUrlProvided(urlString: string): void {
+export function validateAndNormalizeUrl(urlString: string): string {
   if (!urlString || typeof urlString !== 'string') {
     throw new Error('URL is required');
   }
-}
 
-function assertUrlNotEmpty(trimmedUrl: string): void {
+  const trimmedUrl = urlString.trim();
   if (!trimmedUrl) {
     throw new Error('URL cannot be empty');
   }
-}
 
-function assertUrlLength(trimmedUrl: string): void {
   if (trimmedUrl.length > config.constants.maxUrlLength) {
     throw new Error(
       `URL exceeds maximum length of ${config.constants.maxUrlLength} characters`
     );
   }
-}
 
-function parseUrl(trimmedUrl: string): URL {
   if (!URL.canParse(trimmedUrl)) {
     throw new Error('Invalid URL format');
   }
-  return new URL(trimmedUrl);
-}
+  const url = new URL(trimmedUrl);
 
-function assertProtocolAllowed(url: URL): void {
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
     throw new Error(
       `Invalid protocol: ${url.protocol}. Only http: and https: are allowed`
     );
   }
-}
 
-function assertNoCredentials(url: URL): void {
   if (url.username || url.password) {
     throw new Error('URLs with embedded credentials are not allowed');
   }
-}
 
-function assertHostnamePresent(hostname: string): void {
+  const hostname = url.hostname.toLowerCase();
   if (!hostname) {
     throw new Error('URL must have a valid hostname');
   }
-}
 
-function assertHostnameAllowed(hostname: string): void {
   if (config.security.blockedHosts.has(hostname)) {
     throw new Error(
       `Blocked host: ${hostname}. Internal hosts are not allowed`
     );
   }
-}
 
-function assertHostnameNotIpBlocked(hostname: string): void {
   if (isBlockedIp(hostname)) {
     throw new Error(
       `Blocked IP range: ${hostname}. Private IPs are not allowed`
     );
   }
-}
 
-function assertHostnameSuffixAllowed(hostname: string): void {
   if (hostname.endsWith('.local') || hostname.endsWith('.internal')) {
     throw new Error(
       `Blocked hostname pattern: ${hostname}. Internal domain suffixes are not allowed`
     );
   }
-}
-
-export function validateAndNormalizeUrl(urlString: string): string {
-  assertUrlProvided(urlString);
-
-  const trimmedUrl = urlString.trim();
-  assertUrlNotEmpty(trimmedUrl);
-  assertUrlLength(trimmedUrl);
-
-  const url = parseUrl(trimmedUrl);
-  assertProtocolAllowed(url);
-  assertNoCredentials(url);
-
-  const hostname = url.hostname.toLowerCase();
-  assertHostnamePresent(hostname);
-  assertHostnameAllowed(hostname);
-  assertHostnameNotIpBlocked(hostname);
-  assertHostnameSuffixAllowed(hostname);
 
   return url.href;
 }

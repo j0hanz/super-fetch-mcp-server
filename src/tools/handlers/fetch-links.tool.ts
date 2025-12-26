@@ -30,8 +30,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isToolResponseBase(value: unknown): value is ToolResponseBase {
   if (!isRecord(value)) return false;
-  if (!('content' in value)) return false;
-  return Array.isArray((value as ToolResponseBase).content);
+  return Array.isArray(value.content);
 }
 
 function logFetchLinksStart(

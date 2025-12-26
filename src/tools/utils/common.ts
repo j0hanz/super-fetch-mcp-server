@@ -1,13 +1,10 @@
 import { TRUNCATION_MARKER } from '../../config/formatting.js';
 import type {
-  ContentTransformOptions,
   ExtractedArticle,
   ExtractedMetadata,
   MetadataBlock,
   TruncationResult,
 } from '../../config/types.js';
-
-export type { ContentTransformOptions };
 
 export function determineContentExtractionSource(
   extractMainContent: boolean,

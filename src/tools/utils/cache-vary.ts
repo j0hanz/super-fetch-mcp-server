@@ -1,6 +1,6 @@
 import { config } from '../../config/index.js';
 
-export function normalizeHeadersForCache(
+function normalizeHeadersForCache(
   headers?: Record<string, string>
 ): Record<string, string> | undefined {
   if (!headers || Object.keys(headers).length === 0) return undefined;
