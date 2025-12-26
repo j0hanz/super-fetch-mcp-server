@@ -72,6 +72,12 @@ export const config = {
       60 * 1000,
       24 * 60 * 60 * 1000
     ),
+    sessionInitTimeoutMs: parseInteger(
+      process.env.SESSION_INIT_TIMEOUT_MS,
+      10000,
+      1000,
+      60000
+    ),
     maxSessions: parseInteger(process.env.MAX_SESSIONS, 200, 10, 10000),
   },
   fetcher: {

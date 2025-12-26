@@ -689,14 +689,15 @@ npx -y @j0hanz/superfetch@latest
 
 #### HTTP-Specific Environment Variables
 
-| Variable          | Default     | Description                                      |
-| ----------------- | ----------- | ------------------------------------------------ |
-| `PORT`            | `3000`      | HTTP server port                                 |
-| `HOST`            | `127.0.0.1` | HTTP server host (`0.0.0.0` for Docker/K8s)      |
-| `ALLOWED_ORIGINS` | `[]`        | Comma-separated CORS origins                     |
-| `CORS_ALLOW_ALL`  | `false`     | Allow all CORS origins (dev only, security risk) |
-| `SESSION_TTL_MS`  | `1800000`   | Session time-to-live in milliseconds (30 mins)   |
-| `MAX_SESSIONS`    | `200`       | Maximum number of active sessions                |
+| Variable                  | Default     | Description                                      |
+| ------------------------- | ----------- | ------------------------------------------------ |
+| `PORT`                    | `3000`      | HTTP server port                                 |
+| `HOST`                    | `127.0.0.1` | HTTP server host (`0.0.0.0` for Docker/K8s)      |
+| `ALLOWED_ORIGINS`         | `[]`        | Comma-separated CORS origins                     |
+| `CORS_ALLOW_ALL`          | `false`     | Allow all CORS origins (dev only, security risk) |
+| `SESSION_TTL_MS`          | `1800000`   | Session time-to-live in milliseconds (30 mins)   |
+| `SESSION_INIT_TIMEOUT_MS` | `10000`     | Time allowed for session initialization (ms)     |
+| `MAX_SESSIONS`            | `200`       | Maximum number of active sessions                |
 
 #### VS Code HTTP Mode Setup
 

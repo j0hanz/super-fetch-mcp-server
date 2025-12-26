@@ -67,7 +67,11 @@ function buildFetchUrlStructuredContent(
   };
 
   if (pipeline.data.truncated) {
-    structuredContent.truncated = pipeline.data.truncated;
+    structuredContent.truncated = true;
+  }
+
+  if (inlineResult.truncated) {
+    structuredContent.truncated = true;
   }
 
   if (typeof inlineResult.content === 'string') {
@@ -115,6 +119,7 @@ async function fetchUrlPipeline(
     maxContentLength: options.maxContentLength,
     customHeaders: input.customHeaders,
     retries: input.retries,
+    timeout: input.timeout,
     transform: buildFetchUrlTransform(options),
   });
 }

@@ -60,8 +60,8 @@ function buildMarkdownStructuredContent(
     structuredContent.toc = pipeline.data.toc;
   }
 
-  if (pipeline.data.truncated) {
-    structuredContent.truncated = pipeline.data.truncated;
+  if (pipeline.data.truncated || inlineResult.truncated) {
+    structuredContent.truncated = true;
   }
 
   if (typeof inlineResult.content === 'string') {
@@ -112,6 +112,7 @@ async function fetchMarkdownPipeline(
     maxContentLength: options.maxContentLength,
     customHeaders: input.customHeaders,
     retries: input.retries,
+    timeout: input.timeout,
     transform: buildMarkdownTransform(transformOptions),
   });
 }

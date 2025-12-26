@@ -55,6 +55,7 @@ const batchResultSchema = z
       .optional()
       .describe('Number of content blocks (JSONL only)'),
     cached: z.boolean().optional().describe('Whether served from cache'),
+    truncated: z.boolean().optional().describe('Whether content was truncated'),
     error: z.string().optional().describe('Error message if failed'),
     errorCode: z.string().optional().describe('Error code if failed'),
   })

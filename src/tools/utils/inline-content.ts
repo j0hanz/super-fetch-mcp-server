@@ -10,6 +10,7 @@ export interface InlineContentResult {
   resourceUri?: string;
   resourceMimeType?: string;
   error?: string;
+  truncated?: boolean;
 }
 
 export function applyInlineContentLimit(
@@ -26,7 +27,7 @@ export function applyInlineContentLimit(
 
   const resourceUri = resolveResourceUri(cacheKey);
   if (!resourceUri) {
-    return buildCacheError(contentSize, inlineLimit);
+    return buildTruncatedFallback(content, contentSize, inlineLimit);
   }
 
   return {
@@ -45,12 +46,25 @@ function resolveResourceMimeType(format: InlineContentFormat): string {
   return format === 'markdown' ? 'text/markdown' : 'application/jsonl';
 }
 
-function buildCacheError(
+const INLINE_TRUNCATION_SUFFIX = '\n...[truncated]';
+
+function buildTruncatedFallback(
+  content: string,
   contentSize: number,
   inlineLimit: number
 ): InlineContentResult {
+  const maxContentLength = Math.max(
+    0,
+    inlineLimit - INLINE_TRUNCATION_SUFFIX.length
+  );
+  const truncatedContent =
+    content.length > inlineLimit
+      ? `${content.substring(0, maxContentLength)}${INLINE_TRUNCATION_SUFFIX}`
+      : content;
+
   return {
+    content: truncatedContent,
     contentSize,
-    error: `Content exceeds inline limit (${inlineLimit} chars) and cannot be cached`,
+    truncated: true,
   };
 }

@@ -5,6 +5,7 @@ import type { Request, Response } from 'express';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 
+import { config } from '../config/index.js';
 import type { McpRequestBody } from '../config/types.js';
 
 import { logError, logInfo, logWarn } from '../services/logger.js';
@@ -113,12 +114,39 @@ function createSlotTracker(): SlotTracker {
   };
 }
 
+function startSessionInitTimeout(
+  transport: StreamableHTTPServerTransport,
+  tracker: SlotTracker,
+  clearInitTimeout: () => void,
+  timeoutMs: number
+): NodeJS.Timeout | null {
+  if (timeoutMs <= 0) return null;
+
+  const timeout = setTimeout(() => {
+    clearInitTimeout();
+    if (tracker.isInitialized()) return;
+
+    tracker.releaseSlot();
+    void transport.close().catch((error: unknown) => {
+      logWarn('Failed to close stalled session', {
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
+    });
+    logWarn('Session initialization timed out', { timeoutMs });
+  }, timeoutMs);
+
+  timeout.unref();
+  return timeout;
+}
+
 function handleSessionInitialized(
   id: string,
   transport: StreamableHTTPServerTransport,
   options: McpSessionOptions,
-  tracker: SlotTracker
+  tracker: SlotTracker,
+  clearInitTimeout: () => void
 ): void {
+  clearInitTimeout();
   tracker.markInitialized();
   tracker.releaseSlot();
   const now = Date.now();
@@ -138,8 +166,10 @@ function handleSessionClosed(id: string, options: McpSessionOptions): void {
 function handleTransportClose(
   transport: StreamableHTTPServerTransport,
   options: McpSessionOptions,
-  tracker: SlotTracker
+  tracker: SlotTracker,
+  clearInitTimeout: () => void
 ): void {
+  clearInitTimeout();
   if (!tracker.isInitialized()) {
     tracker.releaseSlot();
   }
@@ -151,12 +181,25 @@ function handleTransportClose(
 function createTransportForNewSession(options: McpSessionOptions): {
   transport: StreamableHTTPServerTransport;
   releaseSlot: () => void;
+  clearInitTimeout: () => void;
 } {
   const tracker = createSlotTracker();
+  let initTimeout: NodeJS.Timeout | null = null;
+  const clearInitTimeout = (): void => {
+    if (!initTimeout) return;
+    clearTimeout(initTimeout);
+    initTimeout = null;
+  };
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: () => randomUUID(),
     onsessioninitialized: (id) => {
-      handleSessionInitialized(id, transport, options, tracker);
+      handleSessionInitialized(
+        id,
+        transport,
+        options,
+        tracker,
+        clearInitTimeout
+      );
     },
     onsessionclosed: (id) => {
       handleSessionClosed(id, options);
@@ -164,10 +207,17 @@ function createTransportForNewSession(options: McpSessionOptions): {
   });
 
   transport.onclose = () => {
-    handleTransportClose(transport, options, tracker);
+    handleTransportClose(transport, options, tracker, clearInitTimeout);
   };
 
-  return { transport, releaseSlot: tracker.releaseSlot };
+  initTimeout = startSessionInitTimeout(
+    transport,
+    tracker,
+    clearInitTimeout,
+    config.server.sessionInitTimeoutMs
+  );
+
+  return { transport, releaseSlot: tracker.releaseSlot, clearInitTimeout };
 }
 
 function findExistingTransport(
@@ -207,12 +257,14 @@ async function createAndConnectTransport(
     return null;
   }
 
-  const { transport, releaseSlot } = createTransportForNewSession(options);
+  const { transport, releaseSlot, clearInitTimeout } =
+    createTransportForNewSession(options);
   const mcpServer = createMcpServer();
 
   try {
     await mcpServer.connect(transport);
   } catch (error) {
+    clearInitTimeout();
     releaseSlot();
     logError(
       'Failed to initialize MCP session',

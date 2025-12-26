@@ -104,7 +104,8 @@ async function executeFetchUrls(
   const results = await collectBatchResults(
     validUrls,
     processOptions,
-    batchConfig.concurrency
+    batchConfig.concurrency,
+    batchConfig.continueOnError
   );
 
   if (!batchConfig.continueOnError) {
@@ -167,7 +168,8 @@ function mapSettledResults(
 async function collectBatchResults(
   validUrls: string[],
   processOptions: SingleUrlProcessOptions,
-  concurrency: number
+  concurrency: number,
+  continueOnError: boolean
 ): Promise<BatchUrlResult[]> {
   const results: BatchUrlResult[] = [];
   const batchSize = Math.min(concurrency, validUrls.length);
@@ -182,7 +184,12 @@ async function collectBatchResults(
       validUrls.length
     );
 
-    results.push(...mapSettledResults(batch, settledResults));
+    const mapped = mapSettledResults(batch, settledResults);
+    results.push(...mapped);
+
+    if (!continueOnError && mapped.some((result) => !result.success)) {
+      break;
+    }
   }
 
   return results;

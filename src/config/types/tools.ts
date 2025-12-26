@@ -70,6 +70,7 @@ export interface BatchUrlResult {
   resourceUri?: string;
   resourceMimeType?: string;
   cached?: boolean;
+  truncated?: boolean;
   error?: string;
   errorCode?: string;
 }

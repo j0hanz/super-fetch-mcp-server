@@ -15,6 +15,7 @@ interface SharedFetchOptions<T extends { content: string }> {
   readonly maxContentLength?: number;
   readonly customHeaders?: Record<string, string>;
   readonly retries?: number;
+  readonly timeout?: number;
   readonly transform: (html: string, normalizedUrl: string) => T;
 }
 
@@ -41,6 +42,7 @@ export async function performSharedFetch<T extends { content: string }>(
     cacheNamespace,
     customHeaders: options.customHeaders,
     retries: options.retries,
+    timeout: options.timeout,
     cacheVary,
     transform: options.transform,
   });

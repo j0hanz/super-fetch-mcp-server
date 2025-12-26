@@ -56,6 +56,7 @@ async function fetchLinksPipeline(
     cacheNamespace: 'links',
     customHeaders: input.customHeaders,
     retries: input.retries,
+    timeout: input.timeout,
     cacheVary: appendHeaderVary(
       {
         includeInternal: options.includeInternal,

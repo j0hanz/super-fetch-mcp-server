@@ -186,6 +186,7 @@ function mapInlineSuccess(
   result: PipelineResult<CachedUrlEntry>,
   inlineResult: ReturnType<typeof applyInlineContentLimit>
 ): BatchUrlResult {
+  const truncated = result.data.truncated ?? inlineResult.truncated;
   return {
     url: result.url,
     success: true,
@@ -196,6 +197,7 @@ function mapInlineSuccess(
     resourceMimeType: inlineResult.resourceMimeType,
     contentBlocks: result.data.contentBlocks,
     cached: result.fromCache,
+    ...(truncated ? { truncated: true } : {}),
   };
 }
 
