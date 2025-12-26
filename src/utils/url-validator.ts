@@ -17,7 +17,6 @@ const BLOCKED_IPV4_SUBNETS = [
 const BLOCKED_IPV6_SUBNETS = [
   { subnet: '::', prefix: 128 },
   { subnet: '::1', prefix: 128 },
-  { subnet: '::ffff:0:0', prefix: 96 },
   { subnet: '64:ff9b::', prefix: 96 },
   { subnet: '64:ff9b:1::', prefix: 48 },
   { subnet: '2001::', prefix: 32 },
