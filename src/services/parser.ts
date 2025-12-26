@@ -27,7 +27,7 @@ import { sanitizeText } from '../utils/sanitizer.js';
 
 import { logWarn } from './logger.js';
 
-function detectLanguageFromCode(code: string): string | undefined {
+export function detectLanguageFromCode(code: string): string | undefined {
   // Common language patterns for code block detection
   const patterns: readonly [RegExp, string][] = [
     [

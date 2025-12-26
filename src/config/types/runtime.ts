@@ -44,17 +44,6 @@ export interface TruncationResult {
   readonly truncated: boolean;
 }
 
-// Concurrency types
-export type ConcurrencyLimitedExecutor = <T>(
-  task: () => Promise<T>
-) => Promise<T>;
-
-export type ProgressCallback = (completed: number, total: number) => void;
-
-export interface ConcurrencyExecutionOptions {
-  readonly onProgress?: ProgressCallback;
-}
-
 export interface SessionEntry {
   readonly transport: StreamableHTTPServerTransport;
   createdAt: number;

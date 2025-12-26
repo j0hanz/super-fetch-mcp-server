@@ -5,7 +5,7 @@ import type { Express, NextFunction, Request, Response } from 'express';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 
-import type { McpRequestBody, SessionEntry } from '../config/types.js';
+import type { McpRequestBody } from '../config/types.js';
 
 import { logInfo, logWarn } from '../services/logger.js';
 
@@ -28,22 +28,6 @@ function isMcpRequestBody(body: unknown): body is McpRequestBody {
     (obj.jsonrpc === undefined || obj.jsonrpc === '2.0') &&
     (obj.params === undefined || typeof obj.params === 'object')
   );
-}
-
-async function closeSession(
-  session: SessionEntry | undefined,
-  sessionId: string,
-  reason: string
-): Promise<void> {
-  if (!session) return;
-  try {
-    await session.transport.close();
-  } catch (error: unknown) {
-    logWarn(`Failed to close ${reason} session`, {
-      sessionId,
-      error: error instanceof Error ? error.message : 'Unknown error',
-    });
-  }
 }
 
 function evictExpiredSessions(store: SessionStore): number {
@@ -228,4 +212,4 @@ export function registerMcpRoutes(
   );
 }
 
-export { evictExpiredSessions, evictOldestSession, closeSession };
+export { evictExpiredSessions, evictOldestSession };

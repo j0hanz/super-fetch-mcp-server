@@ -21,113 +21,80 @@ interface MetaCollectorState {
   author: Partial<Record<MetaSource, string>>;
 }
 
-class MetadataCollector {
-  private readonly state: MetaCollectorState = {
+function resolveMetaField(
+  state: MetaCollectorState,
+  field: MetaField
+): string | undefined {
+  const sources = state[field];
+  return sources.og ?? sources.twitter ?? sources.standard;
+}
+
+function extractMetadata(document: Document): ExtractedMetadata {
+  const state: MetaCollectorState = {
     title: {},
     description: {},
     author: {},
   };
 
-  constructor(private readonly document: Document) {}
-
-  extract(): ExtractedMetadata {
-    this.scanMetaTags();
-    this.scanTitleTag();
-
-    return {
-      title: this.resolveField('title'),
-      description: this.resolveField('description'),
-      author: this.resolveField('author'),
-    };
-  }
-
-  private scanMetaTags(): void {
-    const metaTags = this.document.querySelectorAll('meta');
-
-    for (const tag of metaTags) {
-      this.processMetaTag(tag);
-    }
-  }
-
-  private processMetaTag(tag: Element): void {
+  // Scan meta tags
+  const metaTags = document.querySelectorAll('meta');
+  for (const tag of metaTags) {
     const name = tag.getAttribute('name');
     const property = tag.getAttribute('property');
     const content = tag.getAttribute('content')?.trim();
 
-    if (!content) return;
+    if (!content) continue;
 
     if (property?.startsWith('og:')) {
-      this.processOpenGraph(property, content);
-      return;
-    }
-
-    if (name?.startsWith('twitter:')) {
-      this.processTwitter(name, content);
-      return;
-    }
-
-    if (name) {
-      this.processStandard(name, content);
-    }
-  }
-
-  private scanTitleTag(): void {
-    if (!this.state.title.standard) {
-      const titleEl = this.document.querySelector('title');
-      if (titleEl?.textContent) {
-        this.state.title.standard = titleEl.textContent.trim();
-      }
+      const key = property.replace('og:', '');
+      if (key === 'title') state.title.og = content;
+      if (key === 'description') state.description.og = content;
+    } else if (name?.startsWith('twitter:')) {
+      const key = name.replace('twitter:', '');
+      if (key === 'title') state.title.twitter = content;
+      if (key === 'description') state.description.twitter = content;
+    } else if (name) {
+      if (name === 'description') state.description.standard = content;
+      if (name === 'author') state.author.standard = content;
     }
   }
 
-  private processOpenGraph(property: string, content: string): void {
-    const key = property.replace('og:', '');
-    if (key === 'title') this.state.title.og = content;
-    if (key === 'description') this.state.description.og = content;
+  // Scan title tag as fallback
+  if (!state.title.standard) {
+    const titleEl = document.querySelector('title');
+    if (titleEl?.textContent) {
+      state.title.standard = titleEl.textContent.trim();
+    }
   }
 
-  private processTwitter(name: string, content: string): void {
-    const key = name.replace('twitter:', '');
-    if (key === 'title') this.state.title.twitter = content;
-    if (key === 'description') this.state.description.twitter = content;
-  }
-
-  private processStandard(name: string, content: string): void {
-    if (name === 'description') this.state.description.standard = content;
-    if (name === 'author') this.state.author.standard = content;
-  }
-
-  private resolveField(field: MetaField): string | undefined {
-    const sources = this.state[field];
-    return sources.og ?? sources.twitter ?? sources.standard;
-  }
+  return {
+    title: resolveMetaField(state, 'title'),
+    description: resolveMetaField(state, 'description'),
+    author: resolveMetaField(state, 'author'),
+  };
 }
 
-class ArticleExtractor {
-  constructor(private readonly document: Document) {}
+function extractArticle(document: Document): ExtractedArticle | null {
+  try {
+    const reader = new Readability(document as unknown as Document);
+    const parsed = reader.parse();
 
-  extract(): ExtractedArticle | null {
-    try {
-      const reader = new Readability(this.document as unknown as Document);
-      const parsed = reader.parse();
+    if (!parsed) return null;
 
-      if (!parsed) return null;
-
-      return {
-        title: parsed.title ?? undefined,
-        byline: parsed.byline ?? undefined,
-        content: parsed.content ?? '',
-        textContent: parsed.textContent ?? '',
-        excerpt: parsed.excerpt ?? undefined,
-        siteName: parsed.siteName ?? undefined,
-      };
-    } catch (error) {
-      logError(
-        'Failed to extract article with Readability',
-        error instanceof Error ? error : undefined
-      );
-      return null;
-    }
+    return {
+      title: parsed.title ?? undefined,
+      byline: parsed.byline ?? undefined,
+      content: parsed.content ?? '',
+      textContent: parsed.textContent ?? '',
+      excerpt: parsed.excerpt ?? undefined,
+      siteName: parsed.siteName ?? undefined,
+    };
+  } catch (error) {
+    logError(
+      'Failed to extract article with Readability',
+      error instanceof Error ? error : undefined
+    );
+    return null;
   }
 }
 
@@ -146,10 +113,9 @@ export function extractContent(
 
     applyBaseUri(document, url);
 
-    const collector = new MetadataCollector(document as unknown as Document);
-    const metadata = collector.extract();
+    const metadata = extractMetadata(document as unknown as Document);
     const article = options.extractArticle
-      ? new ArticleExtractor(document as unknown as Document).extract()
+      ? extractArticle(document as unknown as Document)
       : null;
 
     return { article, metadata };
