@@ -1,8 +1,8 @@
-# 🚀 superFetch MCP Server
+# superFetch MCP Server
 
 <img src="docs/logo.png" alt="SuperFetch MCP Logo" width="200">
 
-[![npm version](https://img.shields.io/npm/v/@j0hanz/superfetch.svg)](https://www.npmjs.com/package/@j0hanz/superfetch) [![Node.js](https://img.shields.io/badge/Node.js-≥20.0.0-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/) [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![npm version](https://img.shields.io/npm/v/@j0hanz/superfetch.svg)](https://www.npmjs.com/package/@j0hanz/superfetch) [![Node.js](https://img.shields.io/badge/Node.js-%3E=20.12-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/) [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 
 ## One-Click Install
 
@@ -10,64 +10,64 @@
 
 [![Install in Cursor](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/install-mcp?name=superfetch&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIkBqMGhhbnovc3VwZXJmZXRjaEBsYXRlc3QiLCItLXN0ZGlvIl19)
 
-A [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server that fetches, extracts, and transforms web content into AI-optimized formats using Mozilla Readability.
+A [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server that fetches web pages, extracts readable content with Mozilla Readability, and returns AI-friendly JSONL or Markdown.
 
-[Quick Start](#quick-start) · [How to Choose a Tool](#-how-to-choose-a-tool) · [Tools](#available-tools) · [Configuration](#configuration) · [Contributing](#contributing)
+[Quick Start](#quick-start) | [How to Choose a Tool](#how-to-choose-a-tool) | [Tools](#available-tools) | [Resources](#resources) | [Configuration](#configuration) | [Security](#security) | [Development](#development)
 
-> 📦 **Published to [MCP Registry](https://registry.modelcontextprotocol.io/)** — Search for `io.github.j0hanz/superfetch`
+> **Published to [MCP Registry](https://registry.modelcontextprotocol.io/)** - Search for `io.github.j0hanz/superfetch`
 
 ---
 
 > [!CAUTION]
 > This server can access URLs on behalf of AI assistants. Built-in SSRF protection blocks private IP ranges and cloud metadata endpoints, but exercise caution when deploying in sensitive environments.
 
-## ✨ Features
+## Features
 
-| Feature                   | Description                                                   |
-| ------------------------- | ------------------------------------------------------------- |
-| 🧠 **Smart Extraction**   | Mozilla Readability removes ads, navigation, and boilerplate  |
-| 📄 **Multiple Formats**   | JSONL semantic blocks or clean Markdown with YAML frontmatter |
-| 🔗 **Link Discovery**     | Extract and classify internal/external links                  |
-| ⚡ **Built-in Caching**   | Configurable TTL and max entries                              |
-| 🛡️ **Security First**     | SSRF protection, URL validation, header sanitization          |
-| 🔄 **Resilient Fetching** | Exponential backoff with jitter                               |
-| 📊 **Monitoring**         | Stats resource for cache performance and health               |
+| Feature            | Description                                                               |
+| ------------------ | ------------------------------------------------------------------------- |
+| Smart extraction   | Mozilla Readability removes ads, navigation, and boilerplate when enabled |
+| JSONL + Markdown   | JSONL semantic blocks or clean Markdown with frontmatter                  |
+| Structured blocks  | Headings, paragraphs, lists, code, tables, images, blockquotes            |
+| Built-in caching   | In-memory cache with TTL, max keys, and resource subscriptions            |
+| Resilient fetching | Redirect handling plus retry with exponential backoff + jitter            |
+| Security first     | URL validation, SSRF/DNS/IP blocklists, header sanitization               |
+| HTTP mode          | API key auth, session management, rate limiting, CORS                     |
 
 ---
 
-## 🎯 How to Choose a Tool
+## How to Choose a Tool
 
-Use this guide to select the right tool for your web content extraction needs:
+Use this guide to select the right tool for your web content extraction needs.
 
 ### Decision Tree
 
 ```text
 Need web content for AI?
-└─ Single URL?
-    ├─ Need structured semantic blocks → fetch-url (JSONL)
-    └─ Need readable markdown → fetch-markdown
+- Want structured JSONL blocks -> fetch-url (format: jsonl)
+- Want clean Markdown -> fetch-markdown
+- Want Markdown but also need contentBlocks count -> fetch-url (format: markdown)
 ```
 
 ### Quick Reference Table
 
-| Tool             | Best For                         | Output Format         | Use When                                    |
-| ---------------- | -------------------------------- | --------------------- | ------------------------------------------- |
-| `fetch-url`      | Single page → structured content | JSONL semantic blocks | AI analysis, RAG pipelines, content parsing |
-| `fetch-markdown` | Single page → readable format    | Clean Markdown + TOC  | Documentation, human-readable output        |
+| Tool             | Best For                           | Output Format                    | Use When                                  |
+| ---------------- | ---------------------------------- | -------------------------------- | ----------------------------------------- |
+| `fetch-url`      | Single page with structured blocks | JSONL (or Markdown via `format`) | RAG pipelines, content parsing, analytics |
+| `fetch-markdown` | Single page in readable format     | Markdown + frontmatter           | Documentation, summaries, human review    |
 
 ### Common Use Cases
 
 | Task                     | Recommended Tool                         | Why                                                  |
 | ------------------------ | ---------------------------------------- | ---------------------------------------------------- |
 | Parse a blog post for AI | `fetch-url`                              | Returns semantic blocks (headings, paragraphs, code) |
-| Generate documentation   | `fetch-markdown`                         | Clean markdown with optional TOC                     |
+| Generate documentation   | `fetch-markdown`                         | Clean markdown with frontmatter                      |
 | Extract article for RAG  | `fetch-url` + `extractMainContent: true` | Removes ads/nav, keeps main content                  |
 
 ---
 
 ## Quick Start
 
-Add superFetch to your MCP client configuration — no installation required!
+Add superFetch to your MCP client configuration - no installation required.
 
 ### Claude Desktop
 
@@ -119,7 +119,7 @@ Configure SuperFetch behavior by adding environment variables to the `env` prope
 }
 ```
 
-See [Configuration](#configuration) section below for all available options and presets.
+See [Configuration](#configuration) for all available options.
 
 ### Cursor
 
@@ -139,7 +139,7 @@ See [Configuration](#configuration) section below for all available options and 
 }
 ```
 
-> **Tip:** On Windows, if you encounter issues, try: `cmd /c "npx -y @j0hanz/superfetch@latest --stdio"`
+> **Tip (Windows):** If you encounter issues, try: `cmd /c "npx -y @j0hanz/superfetch@latest --stdio"`
 
 <details>
 <summary><strong>Codex IDE</strong></summary>
@@ -163,7 +163,7 @@ args = ["-y", "@j0hanz/superfetch@latest", "--stdio"]
 env = { CACHE_TTL = "7200", LOG_LEVEL = "debug", FETCH_TIMEOUT = "60000" }
 ```
 
-> **Access config file:** Click the gear icon → "Codex Settings &gt; Open config.toml"
+> **Access config file:** Click the gear icon -> "Codex Settings > Open config.toml"
 >
 > **Documentation:** [Codex MCP Guide](https://codex.com/docs/mcp)
 
@@ -254,7 +254,7 @@ npm install -g @j0hanz/superfetch
 # Run in stdio mode
 superfetch --stdio
 
-# Run HTTP server
+# Run HTTP server (requires API_KEY)
 superfetch
 ```
 
@@ -270,24 +270,6 @@ npm run build
 ### Running the Server
 
 <details>
-<summary><strong>HTTP Mode</strong> (default)</summary>
-
-```bash
-# Development with hot reload
-npm run dev
-
-# Production
-npm start
-```
-
-Server runs at `http://127.0.0.1:3000`:
-
-- Health check: `GET /health`
-- MCP endpoint: `POST /mcp`
-
-</details>
-
-<details>
 <summary><strong>stdio Mode</strong> (direct MCP integration)</summary>
 
 ```bash
@@ -296,81 +278,108 @@ node dist/index.js --stdio
 
 </details>
 
+<details>
+<summary><strong>HTTP Mode</strong> (default)</summary>
+
+HTTP mode requires `API_KEY` and only binds to loopback addresses unless `ALLOW_REMOTE=true`.
+
+```bash
+API_KEY=supersecret npx -y @j0hanz/superfetch@latest
+# Server runs at http://127.0.0.1:3000
+```
+
+**Windows (PowerShell):**
+
+```powershell
+$env:API_KEY = "supersecret"
+npx -y @j0hanz/superfetch@latest
+```
+
+Endpoints (all require `Authorization: Bearer <API_KEY>` or `X-API-Key: <API_KEY>`):
+
+- `GET /health`
+- `POST /mcp`
+- `GET /mcp` (SSE stream)
+- `DELETE /mcp`
+- `GET /mcp/downloads/:namespace/:hash`
+
+Sessions are managed via the `mcp-session-id` header (see [HTTP Mode Details](#http-mode-details)).
+
+</details>
+
 ---
 
 ## Available Tools
 
-> **Note:** If extracted content exceeds `MAX_INLINE_CONTENT_CHARS`, the tool response includes a `resourceUri` and a `resource_link` content block instead of embedding the full text.
+### Tool Response Notes
+
+Both tools return:
+
+- `structuredContent` for machine-readable fields
+- `content` blocks that include:
+  - a `text` block containing JSON of `structuredContent`
+  - a `resource` block with a `file:///...` URI containing the full content (stdio-friendly)
+  - a `resource_link` block when content exceeds `MAX_INLINE_CONTENT_CHARS` and cache is enabled
+
+If content is too large and cache is disabled, the server truncates output and appends `...[truncated]`.
+
+---
 
 ### `fetch-url`
 
-Fetches a webpage and converts it to AI-readable JSONL format with semantic content blocks.
+Fetches a webpage and converts it to AI-readable JSONL format with semantic content blocks. You can also request Markdown with `format: "markdown"`.
 
-| Parameter            | Type    | Default    | Description                                   |
-| -------------------- | ------- | ---------- | --------------------------------------------- |
-| `url`                | string  | _required_ | URL to fetch                                  |
-| `extractMainContent` | boolean | `true`     | Use Readability to extract main content       |
-| `includeMetadata`    | boolean | `true`     | Include page metadata (title, description)    |
-| `maxContentLength`   | number  | –          | Maximum content length in characters          |
-| `customHeaders`      | object  | –          | Custom HTTP headers for the request           |
-| `timeout`            | number  | `30000`    | Request timeout in milliseconds (1000-120000) |
-| `retries`            | number  | `3`        | Number of retry attempts (1-10)               |
+| Parameter            | Type                  | Default   | Description                                   |
+| -------------------- | --------------------- | --------- | --------------------------------------------- |
+| `url`                | string                | required  | URL to fetch                                  |
+| `format`             | "jsonl" \| "markdown" | `"jsonl"` | Output format                                 |
+| `extractMainContent` | boolean               | `true`    | Use Readability to extract main content       |
+| `includeMetadata`    | boolean               | `true`    | Include page metadata                         |
+| `maxContentLength`   | number                | -         | Maximum content length in characters          |
+| `customHeaders`      | object                | -         | Custom HTTP headers (sanitized)               |
+| `timeout`            | number                | `30000`   | Request timeout in milliseconds (1000-120000) |
+| `retries`            | number                | `3`       | Number of retry attempts (1-10)               |
 
-**Example Response:**
+**Example `structuredContent`:**
 
 ```json
 {
   "url": "https://example.com/article",
   "title": "Example Article",
+  "contentBlocks": 42,
   "fetchedAt": "2025-12-11T10:30:00.000Z",
-  "contentBlocks": [
-    {
-      "type": "metadata",
-      "title": "Example Article",
-      "description": "A sample article"
-    },
-    { "type": "heading", "level": 1, "text": "Introduction" },
-    {
-      "type": "paragraph",
-      "text": "This is the main content of the article..."
-    },
-    {
-      "type": "code",
-      "language": "javascript",
-      "content": "console.log('Hello');"
-    }
-  ],
-  "cached": false
+  "format": "jsonl",
+  "contentSize": 12345,
+  "cached": false,
+  "content": "{\"type\":\"metadata\",\"title\":\"Example Article\",\"url\":\"https://example.com/article\"}\n{\"type\":\"heading\",\"level\":1,\"text\":\"Introduction\"}"
 }
 ```
 
+---
+
 ### `fetch-markdown`
 
-Fetches a webpage and converts it to clean Markdown with optional table of contents.
+Fetches a webpage and converts it to clean Markdown with optional frontmatter.
 
-| Parameter            | Type    | Default    | Description                                   |
-| -------------------- | ------- | ---------- | --------------------------------------------- |
-| `url`                | string  | _required_ | URL to fetch                                  |
-| `extractMainContent` | boolean | `true`     | Extract main content only                     |
-| `includeMetadata`    | boolean | `true`     | Include YAML frontmatter                      |
-| `maxContentLength`   | number  | –          | Maximum content length in characters          |
-| `generateToc`        | boolean | `false`    | Generate table of contents from headings      |
-| `customHeaders`      | object  | –          | Custom HTTP headers for the request           |
-| `timeout`            | number  | `30000`    | Request timeout in milliseconds (1000-120000) |
-| `retries`            | number  | `3`        | Number of retry attempts (1-10)               |
+| Parameter            | Type    | Default  | Description                                   |
+| -------------------- | ------- | -------- | --------------------------------------------- |
+| `url`                | string  | required | URL to fetch                                  |
+| `extractMainContent` | boolean | `true`   | Extract main content only                     |
+| `includeMetadata`    | boolean | `true`   | Include YAML frontmatter                      |
+| `maxContentLength`   | number  | -        | Maximum content length in characters          |
+| `customHeaders`      | object  | -        | Custom HTTP headers (sanitized)               |
+| `timeout`            | number  | `30000`  | Request timeout in milliseconds (1000-120000) |
+| `retries`            | number  | `3`      | Number of retry attempts (1-10)               |
 
-**Example Response:**
+**Example `structuredContent`:**
 
-````json
+```json
 {
   "url": "https://example.com/docs",
   "title": "Documentation",
   "fetchedAt": "2025-12-11T10:30:00.000Z",
-  "markdown": "---\ntitle: Documentation\nsource: \"https://example.com/docs\"\n---\n\n# Getting Started\n\nWelcome to our documentation...\n\n## Installation\n\n```bash\nnpm install example\n```",
-  "toc": [
-    { "level": 1, "text": "Getting Started", "slug": "getting-started" },
-    { "level": 2, "text": "Installation", "slug": "installation" }
-  ],
+  "markdown": "---\ntitle: Documentation\nsource: \"https://example.com/docs\"\n---\n\n# Getting Started\n\nWelcome...",
+  "contentSize": 9876,
   "cached": false,
   "truncated": false,
   "file": {
@@ -379,13 +388,37 @@ Fetches a webpage and converts it to clean Markdown with optional table of conte
     "expiresAt": "2025-12-11T11:30:00.000Z"
   }
 }
-````
+```
+
+`file` is included only in HTTP mode when content is cached and too large to inline.
+
+---
+
+### Large Content Handling
+
+- Inline limit: `MAX_INLINE_CONTENT_CHARS` (default `20000`).
+- If content exceeds the limit and cache is enabled, responses include `resourceUri` and a `resource_link` block.
+- If cache is disabled, content is truncated with `...[truncated]`.
+- Use `maxContentLength` per request to enforce a lower limit.
+
+---
+
+## Resources
+
+| URI                                        | Description                                           |
+| ------------------------------------------ | ----------------------------------------------------- |
+| `superfetch://health`                      | Real-time server health and memory checks             |
+| `superfetch://stats`                       | Server stats and cache metrics                        |
+| `superfetch://cache/list`                  | List cached entries and their resource URIs           |
+| `superfetch://cache/{namespace}/{urlHash}` | Cached content entry (`namespace`: `url`, `markdown`) |
+
+Resource subscriptions notify clients when cache entries update.
 
 ---
 
 ## Download Endpoint (HTTP Mode)
 
-When running in HTTP mode, `fetch-markdown` responses include a `file` object only when the content is too large to inline (the response includes a `resource_link`/cloud icon). The download URL serves raw markdown.
+When running in HTTP mode, cached content can be downloaded directly.
 
 ### Endpoint
 
@@ -393,19 +426,16 @@ When running in HTTP mode, `fetch-markdown` responses include a `file` object on
 GET /mcp/downloads/:namespace/:hash
 ```
 
-### Headers
-
-| Header          | Required | Description        |
-| --------------- | -------- | ------------------ |
-| `Authorization` | Yes      | `Bearer <API_KEY>` |
+- `namespace`: `markdown` or `url`
+- Auth required (`Authorization: Bearer <API_KEY>` or `X-API-Key: <API_KEY>`)
 
 ### Response Headers
 
-| Header                | Value                              |
-| --------------------- | ---------------------------------- |
-| `Content-Type`        | `text/markdown; charset=utf-8`     |
-| `Content-Disposition` | `attachment; filename="<name>.md"` |
-| `Cache-Control`       | `private, max-age=3600`            |
+| Header                | Value                                                                   |
+| --------------------- | ----------------------------------------------------------------------- |
+| `Content-Type`        | `text/markdown; charset=utf-8` or `application/x-ndjson; charset=utf-8` |
+| `Content-Disposition` | `attachment; filename="<name>"`                                         |
+| `Cache-Control`       | `private, max-age=<CACHE_TTL>`                                          |
 
 ### Example Usage
 
@@ -425,22 +455,78 @@ curl -H "Authorization: Bearer $API_KEY" \
 
 ---
 
-### Resources
-
-| URI                   | Description                                         |
-| --------------------- | --------------------------------------------------- |
-| `superfetch://stats`  | Server statistics and cache metrics                 |
-| `superfetch://health` | Real-time server health and dependency status       |
-| Dynamic resources     | Cached content available via resource subscriptions |
-
----
-
 ## Configuration
+
+Configure SuperFetch behavior by adding environment variables to your MCP client configuration's `env` property.
+
+### Fetcher Settings
+
+| Variable        | Default              | Valid Values         | Description                     |
+| --------------- | -------------------- | -------------------- | ------------------------------- |
+| `FETCH_TIMEOUT` | `30000`              | `5000`-`120000`      | Request timeout in milliseconds |
+| `USER_AGENT`    | `superFetch-MCP/1.0` | Any valid user agent | Custom user agent               |
+
+### Cache Settings
+
+| Variable         | Default | Valid Values     | Description               |
+| ---------------- | ------- | ---------------- | ------------------------- |
+| `CACHE_ENABLED`  | `true`  | `true` / `false` | Enable response caching   |
+| `CACHE_TTL`      | `3600`  | `60`-`86400`     | Cache lifetime in seconds |
+| `CACHE_MAX_KEYS` | `100`   | `10`-`1000`      | Maximum cached entries    |
+
+### Output Settings
+
+| Variable                   | Default | Valid Values    | Description                               |
+| -------------------------- | ------- | --------------- | ----------------------------------------- |
+| `MAX_INLINE_CONTENT_CHARS` | `20000` | `1000`-`200000` | Inline content limit before resource_link |
+
+### Logging Settings
+
+| Variable         | Default | Valid Values                        | Description            |
+| ---------------- | ------- | ----------------------------------- | ---------------------- |
+| `LOG_LEVEL`      | `info`  | `debug` / `info` / `warn` / `error` | Logging verbosity      |
+| `ENABLE_LOGGING` | `true`  | `true` / `false`                    | Enable/disable logging |
+
+### Extraction Settings
+
+| Variable               | Default | Valid Values     | Description                             |
+| ---------------------- | ------- | ---------------- | --------------------------------------- |
+| `EXTRACT_MAIN_CONTENT` | `true`  | `true` / `false` | Use Readability to extract main content |
+| `INCLUDE_METADATA`     | `true`  | `true` / `false` | Include metadata/frontmatter            |
+
+### HTTP Server Settings
+
+| Variable                  | Default     | Description                                  |
+| ------------------------- | ----------- | -------------------------------------------- |
+| `API_KEY`                 | -           | **Required for HTTP mode**                   |
+| `HOST`                    | `127.0.0.1` | HTTP server host                             |
+| `PORT`                    | `3000`      | HTTP server port                             |
+| `ALLOW_REMOTE`            | `false`     | Allow binding to non-loopback interfaces     |
+| `TRUST_PROXY`             | `false`     | Trust proxy headers for client IP resolution |
+| `SESSION_TTL_MS`          | `1800000`   | Session TTL in milliseconds (30 min)         |
+| `SESSION_INIT_TIMEOUT_MS` | `10000`     | Time allowed for session initialization      |
+| `MAX_SESSIONS`            | `200`       | Maximum active sessions                      |
+
+### CORS Settings
+
+| Variable          | Default | Description                             |
+| ----------------- | ------- | --------------------------------------- |
+| `ALLOWED_ORIGINS` | `[]`    | Comma-separated list of allowed origins |
+| `CORS_ALLOW_ALL`  | `false` | Allow all origins (dev only)            |
+
+### Rate Limiting
+
+| Variable                | Default | Valid Values      | Description                          |
+| ----------------------- | ------- | ----------------- | ------------------------------------ |
+| `RATE_LIMIT_ENABLED`    | `true`  | `true` / `false`  | Enable/disable HTTP rate limiting    |
+| `RATE_LIMIT_MAX`        | `100`   | `1`-`10000`       | Max requests per window per IP       |
+| `RATE_LIMIT_WINDOW_MS`  | `60000` | `1000`-`3600000`  | Rate limit window in milliseconds    |
+| `RATE_LIMIT_CLEANUP_MS` | `60000` | `10000`-`3600000` | Cleanup interval for limiter entries |
 
 ### Configuration Presets
 
 <details open>
-<summary><strong>Default (Recommended)</strong> — No configuration needed</summary>
+<summary><strong>Default (Recommended)</strong> - No configuration needed</summary>
 
 ```json
 {
@@ -456,9 +542,7 @@ curl -H "Authorization: Bearer $API_KEY" \
 </details>
 
 <details>
-<summary><strong>Debug Mode</strong> — Verbose logging and no cache</summary>
-
-**VS Code** (`.vscode/mcp.json`):
+<summary><strong>Debug Mode</strong> - Verbose logging and no cache</summary>
 
 ```json
 {
@@ -475,44 +559,10 @@ curl -H "Authorization: Bearer $API_KEY" \
 }
 ```
 
-**Claude Desktop** (`claude_desktop_config.json`):
-
-```json
-{
-  "mcpServers": {
-    "superFetch": {
-      "command": "npx",
-      "args": ["-y", "@j0hanz/superfetch@latest", "--stdio"],
-      "env": {
-        "LOG_LEVEL": "debug",
-        "CACHE_ENABLED": "false"
-      }
-    }
-  }
-}
-```
-
-**Cursor** (MCP settings):
-
-```json
-{
-  "mcpServers": {
-    "superFetch": {
-      "command": "npx",
-      "args": ["-y", "@j0hanz/superfetch@latest", "--stdio"],
-      "env": {
-        "LOG_LEVEL": "debug",
-        "CACHE_ENABLED": "false"
-      }
-    }
-  }
-}
-```
-
 </details>
 
 <details>
-<summary><strong>Performance Mode</strong> — Aggressive caching for speed</summary>
+<summary><strong>Performance Mode</strong> - Aggressive caching for speed</summary>
 
 ```json
 {
@@ -533,7 +583,7 @@ curl -H "Authorization: Bearer $API_KEY" \
 </details>
 
 <details>
-<summary><strong>Custom User Agent</strong> — For sites that block bots</summary>
+<summary><strong>Custom User Agent</strong> - For sites that block bots</summary>
 
 ```json
 {
@@ -552,7 +602,7 @@ curl -H "Authorization: Bearer $API_KEY" \
 </details>
 
 <details>
-<summary><strong>Slow Networks / CI/CD</strong> — Extended timeouts</summary>
+<summary><strong>Slow Networks / CI</strong> - Extended timeouts</summary>
 
 ```json
 {
@@ -572,120 +622,17 @@ curl -H "Authorization: Bearer $API_KEY" \
 
 </details>
 
-### Available Environment Variables
+---
 
-Configure SuperFetch behavior by adding environment variables to your MCP client configuration's `env` property.
+## HTTP Mode Details
 
-#### 🌐 Fetcher Settings
+HTTP mode uses the MCP Streamable HTTP transport. The workflow is:
 
-| Variable        | Default              | Valid Values         | Description                                                     |
-| --------------- | -------------------- | -------------------- | --------------------------------------------------------------- |
-| `FETCH_TIMEOUT` | `30000`              | `5000`-`120000`      | Request timeout in milliseconds (5s-2min)                       |
-| `USER_AGENT`    | `superFetch-MCP/1.0` | Any valid user agent | Custom user agent for requests (useful for sites blocking bots) |
+1. `POST /mcp` with an `initialize` request and **no** `mcp-session-id` header.
+2. The server returns `mcp-session-id` in the response headers.
+3. Use that header for subsequent `POST /mcp`, `GET /mcp`, and `DELETE /mcp` requests.
 
-#### 💾 Cache Settings
-
-| Variable         | Default | Valid Values     | Description                            |
-| ---------------- | ------- | ---------------- | -------------------------------------- |
-| `CACHE_ENABLED`  | `true`  | `true` / `false` | Enable response caching                |
-| `CACHE_TTL`      | `3600`  | `60`-`86400`     | Cache lifetime in seconds (1min-24hrs) |
-| `CACHE_MAX_KEYS` | `100`   | `10`-`1000`      | Maximum number of cached entries       |
-
-#### 📦 Output Settings
-
-| Variable                   | Default | Valid Values    | Description                                                     |
-| -------------------------- | ------- | --------------- | --------------------------------------------------------------- |
-| `MAX_INLINE_CONTENT_CHARS` | `20000` | `1000`-`200000` | Inline content limit before returning a `resource_link` instead |
-
-#### 📝 Logging Settings
-
-| Variable         | Default | Valid Values                        | Description                |
-| ---------------- | ------- | ----------------------------------- | -------------------------- |
-| `LOG_LEVEL`      | `info`  | `debug` / `info` / `warn` / `error` | Logging verbosity level    |
-| `ENABLE_LOGGING` | `true`  | `true` / `false`                    | Enable/disable all logging |
-
-#### 🔍 Extraction Settings
-
-| Variable               | Default | Valid Values     | Description                                        |
-| ---------------------- | ------- | ---------------- | -------------------------------------------------- |
-| `EXTRACT_MAIN_CONTENT` | `true`  | `true` / `false` | Use Mozilla Readability to extract main content    |
-| `INCLUDE_METADATA`     | `true`  | `true` / `false` | Include page metadata (title, description, author) |
-
-#### 🛡️ Security Settings
-
-| Variable       | Default | Description                                              |
-| -------------- | ------- | -------------------------------------------------------- |
-| `API_KEY`      | -       | API Key for HTTP authentication (required for HTTP mode) |
-| `ALLOW_REMOTE` | `false` | Allow binding to non-loopback interfaces                 |
-| `TRUST_PROXY`  | `false` | Trust proxy headers for client IP resolution             |
-
-#### Rate Limiting
-
-| Variable                | Default | Valid Values      | Description                          |
-| ----------------------- | ------- | ----------------- | ------------------------------------ |
-| `RATE_LIMIT_ENABLED`    | `true`  | `true` / `false`  | Enable/disable HTTP rate limiting    |
-| `RATE_LIMIT_MAX`        | `100`   | `1`-`10000`       | Max requests per window per IP       |
-| `RATE_LIMIT_WINDOW_MS`  | `60000` | `1000`-`3600000`  | Rate limit window in milliseconds    |
-| `RATE_LIMIT_CLEANUP_MS` | `60000` | `10000`-`3600000` | Cleanup interval for limiter entries |
-
-### HTTP Mode Configuration
-
-<details>
-<summary><strong>HTTP Mode</strong> (Advanced) — For running as a standalone HTTP server</summary>
-
-SuperFetch can run as an HTTP server for custom integrations. HTTP mode requires additional configuration and an `API_KEY` for authenticated access (send `Authorization: Bearer <key>` or `X-API-Key: <key>`).
-
-#### Start HTTP Server
-
-```bash
-npx -y @j0hanz/superfetch@latest
-# Server runs at http://127.0.0.1:3000
-```
-
-#### HTTP-Specific Environment Variables
-
-| Variable                  | Default     | Description                                      |
-| ------------------------- | ----------- | ------------------------------------------------ |
-| `PORT`                    | `3000`      | HTTP server port                                 |
-| `HOST`                    | `127.0.0.1` | HTTP server host (`0.0.0.0` for Docker/K8s)      |
-| `ALLOWED_ORIGINS`         | `[]`        | Comma-separated CORS origins                     |
-| `CORS_ALLOW_ALL`          | `false`     | Allow all CORS origins (dev only, security risk) |
-| `TRUST_PROXY`             | `false`     | Trust proxy headers for client IP resolution     |
-| `SESSION_TTL_MS`          | `1800000`   | Session time-to-live in milliseconds (30 mins)   |
-| `SESSION_INIT_TIMEOUT_MS` | `10000`     | Time allowed for session initialization (ms)     |
-| `MAX_SESSIONS`            | `200`       | Maximum number of active sessions                |
-
-#### VS Code HTTP Mode Setup
-
-```json
-{
-  "servers": {
-    "superFetch": {
-      "type": "http",
-      "url": "http://127.0.0.1:3000/mcp"
-    }
-  }
-}
-```
-
-#### Docker/Kubernetes Example
-
-```bash
-PORT=8080 HOST=0.0.0.0 ALLOWED_ORIGINS=https://myapp.com npx @j0hanz/superfetch@latest
-```
-
-</details>
-
-### Configuration Cookbook
-
-| Use Case                     | Configuration                                                  |
-| ---------------------------- | -------------------------------------------------------------- |
-| 🐛 **Debugging issues**      | `LOG_LEVEL=debug`, `CACHE_ENABLED=false`                       |
-| 🚀 **Maximum performance**   | `CACHE_TTL=7200`, `CACHE_MAX_KEYS=500`, `LOG_LEVEL=error`      |
-| 🌐 **Slow target sites**     | `FETCH_TIMEOUT=60000`                                          |
-| 🤖 **Bypass bot detection**  | `USER_AGENT="Mozilla/5.0 (compatible; MyBot/1.0)"`             |
-| 🔄 **CI/CD (always fresh)**  | `CACHE_ENABLED=false`, `FETCH_TIMEOUT=60000`, `LOG_LEVEL=warn` |
-| 📊 **Production monitoring** | `LOG_LEVEL=warn` or `error`                                    |
+If `MAX_SESSIONS` is reached, the server evicts the oldest session when possible, otherwise returns a 503.
 
 ---
 
@@ -693,15 +640,16 @@ PORT=8080 HOST=0.0.0.0 ALLOWED_ORIGINS=https://myapp.com npx @j0hanz/superfetch@
 
 JSONL output includes semantic content blocks:
 
-| Type        | Description                                     |
-| ----------- | ----------------------------------------------- |
-| `metadata`  | Page title, description, author, URL, timestamp |
-| `heading`   | Headings (h1-h6) with level indicator           |
-| `paragraph` | Text paragraphs                                 |
-| `list`      | Ordered/unordered lists                         |
-| `code`      | Code blocks with language                       |
-| `table`     | Tables with headers and rows                    |
-| `image`     | Images with src and alt text                    |
+| Type         | Description                              |
+| ------------ | ---------------------------------------- |
+| `metadata`   | Minimal page metadata (type, title, url) |
+| `heading`    | Headings (h1-h6) with level indicator    |
+| `paragraph`  | Text paragraphs                          |
+| `list`       | Ordered/unordered lists                  |
+| `code`       | Code blocks with optional language       |
+| `table`      | Tables with headers and rows             |
+| `image`      | Images with src and alt text             |
+| `blockquote` | Block quote text                         |
 
 ---
 
@@ -709,12 +657,19 @@ JSONL output includes semantic content blocks:
 
 ### SSRF Protection
 
-Blocked destinations:
+Blocked destinations include:
 
 - Localhost and loopback addresses
 - Private IP ranges (`10.x.x.x`, `172.16-31.x.x`, `192.168.x.x`)
 - Cloud metadata endpoints (AWS, GCP, Azure)
 - IPv6 link-local and unique local addresses
+- Internal suffixes such as `.local` and `.internal`
+
+### URL Validation
+
+- Only `http` and `https` URLs
+- No embedded credentials in URLs
+- Max URL length: 2048 characters
 
 ### Header Sanitization
 
@@ -722,21 +677,7 @@ Blocked headers: `host`, `authorization`, `cookie`, `x-forwarded-for`, `x-real-i
 
 ### Rate Limiting
 
-Default: **100 requests/minute** per IP. Configure with `RATE_LIMIT_MAX` and
-`RATE_LIMIT_WINDOW_MS`.
-
-### HTTP Mode Endpoints
-
-When running without `--stdio`, the following endpoints are available:
-
-| Endpoint  | Method | Description                             |
-| --------- | ------ | --------------------------------------- |
-| `/health` | GET    | Health check with uptime and version    |
-| `/mcp`    | POST   | MCP request handling (requires session) |
-| `/mcp`    | GET    | SSE stream for notifications            |
-| `/mcp`    | DELETE | Close session                           |
-
-Sessions are managed via `mcp-session-id` header with 30-minute TTL.
+Default: **100 requests/minute** per IP (HTTP mode only). Configure with `RATE_LIMIT_MAX` and `RATE_LIMIT_WINDOW_MS`.
 
 ---
 
@@ -763,14 +704,13 @@ Sessions are managed via `mcp-session-id` header with 30-minute TTL.
 
 | Category           | Technology                        |
 | ------------------ | --------------------------------- |
-| Runtime            | Node.js ≥20.0.0                   |
+| Runtime            | Node.js >=20.12                   |
 | Language           | TypeScript 5.9                    |
 | MCP SDK            | @modelcontextprotocol/sdk ^1.25.1 |
 | Content Extraction | @mozilla/readability ^0.6.0       |
 | HTML Parsing       | Cheerio ^1.1.2, LinkeDOM ^0.18.12 |
 | Markdown           | Turndown ^7.2.2                   |
-| HTTP               | Express ^5.2.1, Axios ^1.7.9      |
-| Caching            | node-cache ^5.1.2                 |
+| HTTP               | Express ^5.2.1, undici ^6.22.0    |
 | Validation         | Zod ^3.24.1                       |
 
 ---
