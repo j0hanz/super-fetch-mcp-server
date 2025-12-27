@@ -14,6 +14,10 @@ interface DownloadInfoOptions {
 export function buildFileDownloadInfo(
   options: DownloadInfoOptions
 ): FileDownloadInfo | null {
+  if (!config.runtime.httpMode) {
+    return null;
+  }
+
   if (!config.cache.enabled || !options.cacheKey) {
     return null;
   }

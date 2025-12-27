@@ -24,6 +24,14 @@ export type ToolContentBlock =
       title?: string;
       description?: string;
       mimeType?: string;
+    }
+  | {
+      type: 'resource';
+      resource: {
+        uri: string;
+        mimeType?: string;
+        text: string;
+      };
     };
 
 // Fetcher types

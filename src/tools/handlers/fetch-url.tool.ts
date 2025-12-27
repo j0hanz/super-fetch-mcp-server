@@ -131,7 +131,12 @@ function buildFetchUrlResponse(
       structuredContent,
       pipeline.fromCache,
       inlineResult,
-      'Fetched content'
+      'Fetched content',
+      pipeline.cacheKey,
+      pipeline.data.content,
+      format,
+      pipeline.url,
+      pipeline.data.title
     ),
     structuredContent,
   };

@@ -2,7 +2,7 @@ import { styleText } from 'node:util';
 
 import type { Express, RequestHandler } from 'express';
 
-import { config } from '../config/index.js';
+import { config, enableHttpMode } from '../config/index.js';
 
 import { destroyAgents } from '../services/fetcher.js';
 import { logError, logInfo, logWarn } from '../services/logger.js';
@@ -119,6 +119,8 @@ function registerSignalHandlers(
 export async function startHttpServer(): Promise<{
   shutdown: (signal: string) => Promise<void>;
 }> {
+  enableHttpMode();
+
   const { app, jsonParser } = await createExpressApp();
   const corsOptions = buildCorsOptions();
   const { middleware: rateLimitMiddleware, stop: stopRateLimitCleanup } =

@@ -125,7 +125,12 @@ function buildMarkdownResponse(
       structuredContent,
       pipeline.fromCache,
       inlineResult,
-      'Fetched markdown'
+      'Fetched markdown',
+      pipeline.cacheKey,
+      pipeline.data.content,
+      'markdown',
+      pipeline.url,
+      pipeline.data.title
     ),
     structuredContent,
   };

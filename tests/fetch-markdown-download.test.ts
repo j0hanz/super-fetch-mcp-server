@@ -33,6 +33,7 @@ vi.mock('../src/config/index.js', () => ({
     constants: { maxInlineContentChars: 10 },
     fetcher: { timeout: 30000 },
     logging: { enabled: true, level: 'info' },
+    runtime: { httpMode: true },
   },
 }));
 

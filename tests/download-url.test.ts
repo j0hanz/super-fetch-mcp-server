@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockCacheGet = vi.fn();
+const mockConfig = {
+  cache: { enabled: true, ttl: 3600 },
+  runtime: { httpMode: true },
+};
 
 vi.mock('../src/config/index.js', () => ({
-  config: {
-    cache: { enabled: true, ttl: 3600 },
-  },
+  config: mockConfig,
 }));
 
 vi.mock('../src/services/cache.js', () => ({
@@ -19,6 +21,9 @@ vi.mock('../src/services/cache.js', () => ({
 describe('buildFileDownloadInfo', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Reset config to defaults
+    mockConfig.cache.enabled = true;
+    mockConfig.runtime.httpMode = true;
     mockCacheGet.mockReturnValue({
       url: 'https://example.com/article',
       title: 'Test Article',
@@ -82,19 +87,27 @@ describe('buildFileDownloadInfo', () => {
   });
 
   it('returns null when cache is disabled', async () => {
-    vi.doMock('../src/config/index.js', () => ({
-      config: {
-        cache: { enabled: false, ttl: 3600 },
-      },
-    }));
+    mockConfig.cache.enabled = false;
 
-    // Re-import to get mocked version
-    vi.resetModules();
     const { buildFileDownloadInfo } =
       await import('../src/utils/download-url.js');
 
     const result = buildFileDownloadInfo({
       cacheKey: 'markdown:abc123',
+      url: 'https://example.com',
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it('returns null when not in HTTP mode', async () => {
+    mockConfig.runtime.httpMode = false;
+
+    const { buildFileDownloadInfo } =
+      await import('../src/utils/download-url.js');
+
+    const result = buildFileDownloadInfo({
+      cacheKey: 'markdown:abc123def456',
       url: 'https://example.com',
     });
 

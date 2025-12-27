@@ -7,6 +7,7 @@ import type {
 import type { FileDownloadInfo } from '../../config/types.js';
 
 import { buildFileDownloadInfo } from '../../utils/download-url.js';
+import { generateSafeFilename } from '../../utils/filename-generator.js';
 import { createToolErrorResponse } from '../../utils/tool-error-handler.js';
 import { appendHeaderVary } from '../utils/cache-vary.js';
 import { executeFetchPipeline } from '../utils/fetch-pipeline.js';
@@ -136,17 +137,72 @@ function buildResourceLink(
   };
 }
 
+function buildEmbeddedResource(
+  content: string,
+  mimeType: string,
+  url: string,
+  title?: string
+): ToolContentBlock | null {
+  if (!content) {
+    return null;
+  }
+
+  // Generate a proper filename with extension
+  const extension = mimeType === 'text/markdown' ? '.md' : '.jsonl';
+  const filename = generateSafeFilename(url, title, undefined, extension);
+
+  // Use file: URI scheme with filename for better VS Code integration
+  const uri = `file:///${filename}`;
+
+  return {
+    type: 'resource',
+    resource: {
+      uri,
+      mimeType,
+      text: content,
+    },
+  };
+}
+
 export function buildToolContentBlocks(
   structuredContent: Record<string, unknown>,
   fromCache: boolean,
   inlineResult: InlineResult,
-  resourceName: string
+  resourceName: string,
+  cacheKey?: string | null,
+  fullContent?: string,
+  format?: SharedFetchFormat,
+  url?: string,
+  title?: string
 ): ToolContentBlock[] {
   const textBlock: ToolContentBlock = {
     type: 'text',
     text: serializeStructuredContent(structuredContent, fromCache),
   };
 
+  const blocks: ToolContentBlock[] = [textBlock];
+
+  // Always add embedded resource for saveable content (works in stdio mode)
+  const mimeType =
+    format === 'markdown' ? 'text/markdown' : 'application/jsonl';
+  const contentToEmbed = fullContent ?? inlineResult.content;
+  if (contentToEmbed && url) {
+    const embeddedResource = buildEmbeddedResource(
+      contentToEmbed,
+      mimeType,
+      url,
+      title
+    );
+    if (embeddedResource) {
+      blocks.push(embeddedResource);
+    }
+  }
+
+  // Add resource link for HTTP mode downloads (only when truncated)
   const resourceLink = buildResourceLink(inlineResult, resourceName);
-  return resourceLink ? [textBlock, resourceLink] : [textBlock];
+  if (resourceLink) {
+    blocks.push(resourceLink);
+  }
+
+  return blocks;
 }

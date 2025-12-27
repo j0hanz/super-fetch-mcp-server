@@ -61,6 +61,14 @@ const host = process.env.HOST ?? '127.0.0.1';
 const isLoopbackHost =
   host === '127.0.0.1' || host === '::1' || host === 'localhost';
 
+interface RuntimeState {
+  httpMode: boolean;
+}
+
+const runtimeState: RuntimeState = {
+  httpMode: false,
+};
+
 export const config = {
   server: {
     name: 'superFetch',
@@ -176,4 +184,9 @@ export const config = {
       3600000
     ),
   },
+  runtime: runtimeState,
 } as const;
+
+export function enableHttpMode(): void {
+  runtimeState.httpMode = true;
+}
