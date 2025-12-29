@@ -2,9 +2,11 @@ import { config } from '../../config/index.js';
 import type {
   PipelineResult,
   ToolContentBlock,
+} from '../../config/types/runtime.js';
+import type {
+  FileDownloadInfo,
   ToolResponseBase,
-} from '../../config/types.js';
-import type { FileDownloadInfo } from '../../config/types.js';
+} from '../../config/types/tools.js';
 
 import { buildFileDownloadInfo } from '../../utils/download-url.js';
 import { generateSafeFilename } from '../../utils/filename-generator.js';

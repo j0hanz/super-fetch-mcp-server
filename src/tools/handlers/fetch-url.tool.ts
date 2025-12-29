@@ -1,9 +1,9 @@
+import type { JsonlTransformResult } from '../../config/types/content.js';
+import type { PipelineResult } from '../../config/types/runtime.js';
 import type {
   FetchUrlInput,
-  JsonlTransformResult,
-  PipelineResult,
   ToolResponseBase,
-} from '../../config/types.js';
+} from '../../config/types/tools.js';
 
 import { logDebug, logError } from '../../services/logger.js';
 

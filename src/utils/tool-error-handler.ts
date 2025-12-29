@@ -1,6 +1,6 @@
 import { ErrorCode } from '@modelcontextprotocol/sdk/types.js';
 
-import type { ToolErrorResponse } from '../config/types.js';
+import type { ToolErrorResponse } from '../config/types/tools.js';
 
 import { FetchError } from '../errors/app-error.js';
 

@@ -1,11 +1,13 @@
 import type {
+  MarkdownTransformResult,
+  TransformOptions,
+} from '../../config/types/content.js';
+import type { PipelineResult } from '../../config/types/runtime.js';
+import type {
   FetchMarkdownInput,
   FileDownloadInfo,
-  MarkdownTransformResult,
-  PipelineResult,
   ToolResponseBase,
-  TransformOptions,
-} from '../../config/types.js';
+} from '../../config/types/tools.js';
 
 import { logDebug, logError } from '../../services/logger.js';
 

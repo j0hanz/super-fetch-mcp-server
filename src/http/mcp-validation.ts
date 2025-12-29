@@ -1,4 +1,4 @@
-import type { McpRequestBody } from '../config/types.js';
+import type { McpRequestBody } from '../config/types/runtime.js';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object';

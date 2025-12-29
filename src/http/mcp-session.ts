@@ -6,7 +6,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 
 import { config } from '../config/index.js';
-import type { McpRequestBody } from '../config/types.js';
+import type { McpRequestBody } from '../config/types/runtime.js';
 
 import { logError, logInfo, logWarn } from '../services/logger.js';
 

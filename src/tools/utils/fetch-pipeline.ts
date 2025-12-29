@@ -2,7 +2,7 @@ import type {
   FetchOptions,
   FetchPipelineOptions,
   PipelineResult,
-} from '../../config/types.js';
+} from '../../config/types/runtime.js';
 
 import * as cache from '../../services/cache.js';
 import { fetchUrlWithRetry } from '../../services/fetcher.js';

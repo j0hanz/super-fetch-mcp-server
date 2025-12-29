@@ -3,8 +3,8 @@ import type {
   ExtractedArticle,
   ExtractedMetadata,
   MetadataBlock,
-  TruncationResult,
-} from '../../config/types.js';
+} from '../../config/types/content.js';
+import type { TruncationResult } from '../../config/types/runtime.js';
 
 export function determineContentExtractionSource(
   extractMainContent: boolean,
@@ -38,13 +38,6 @@ export function createContentMetadataBlock(
         url,
         fetchedAt: now,
       };
-}
-
-export function enforceContentLengthLimit(
-  content: string,
-  maxLength?: number
-): TruncationResult {
-  return truncateContent(content, maxLength);
 }
 
 export function truncateContent(

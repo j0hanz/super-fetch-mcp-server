@@ -13,7 +13,7 @@ import type {
   ParagraphBlock,
   ParseableTagName,
   TableBlock,
-} from '../config/types.js';
+} from '../config/types/content.js';
 
 import {
   detectLanguageFromCode,

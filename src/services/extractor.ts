@@ -6,7 +6,7 @@ import type {
   ExtractedArticle,
   ExtractedMetadata,
   ExtractionResult,
-} from '../config/types.js';
+} from '../config/types/content.js';
 
 import { getErrorMessage } from '../utils/error-utils.js';
 import { truncateHtml } from '../utils/html-truncator.js';

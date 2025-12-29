@@ -1,6 +1,6 @@
 import type { NextFunction, Request, Response } from 'express';
 
-import type { ErrorResponse } from '../config/types.js';
+import type { ErrorResponse } from '../config/types/tools.js';
 
 import { FetchError } from '../errors/app-error.js';
 

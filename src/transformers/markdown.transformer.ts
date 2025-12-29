@@ -5,7 +5,7 @@ import {
   FRONTMATTER_DELIMITER,
   joinLines,
 } from '../config/formatting.js';
-import type { MetadataBlock } from '../config/types.js';
+import type { MetadataBlock } from '../config/types/content.js';
 
 import {
   detectLanguageFromCode,

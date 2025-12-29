@@ -1,5 +1,5 @@
 import { config } from '../config/index.js';
-import type { LogLevel, LogMetadata } from '../config/types.js';
+import type { LogLevel, LogMetadata } from '../config/types/runtime.js';
 
 import { getRequestId, getSessionId } from './context.js';
 

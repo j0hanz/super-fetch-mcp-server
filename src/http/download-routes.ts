@@ -1,7 +1,7 @@
 import type { Express, NextFunction, Request, Response } from 'express';
 
 import { config } from '../config/index.js';
-import type { CacheEntry } from '../config/types.js';
+import type { CacheEntry } from '../config/types/content.js';
 
 import * as cache from '../services/cache.js';
 import { logDebug } from '../services/logger.js';

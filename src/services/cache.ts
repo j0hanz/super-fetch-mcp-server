@@ -2,7 +2,7 @@ import { setInterval as setIntervalPromise } from 'node:timers/promises';
 
 import { CACHE_HASH } from '../config/constants.js';
 import { config } from '../config/index.js';
-import type { CacheEntry } from '../config/types.js';
+import type { CacheEntry } from '../config/types/content.js';
 
 import { sha256Hex } from '../utils/crypto.js';
 import { getErrorMessage } from '../utils/error-utils.js';

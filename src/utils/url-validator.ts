@@ -159,12 +159,3 @@ function assertHostnameAllowed(hostname: string): void {
 function matchesBlockedSuffix(hostname: string): boolean {
   return BLOCKED_HOST_SUFFIXES.some((suffix) => hostname.endsWith(suffix));
 }
-
-export function isInternalUrl(url: string, baseUrl: string): boolean {
-  if (!URL.canParse(baseUrl) || !URL.canParse(url, baseUrl)) {
-    return false;
-  }
-  const urlObj = new URL(url, baseUrl);
-  const baseUrlObj = new URL(baseUrl);
-  return urlObj.hostname === baseUrlObj.hostname;
-}

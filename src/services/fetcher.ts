@@ -1,6 +1,7 @@
 import { config } from '../config/index.js';
-import type { FetchOptions } from '../config/types.js';
+import type { FetchOptions } from '../config/types/runtime.js';
 
+import { normalizeHeaderRecord } from '../utils/header-normalizer.js';
 import { validateAndNormalizeUrl } from '../utils/url-validator.js';
 
 import { destroyAgents, dispatcher } from './fetcher/agents.js';
@@ -9,7 +10,6 @@ import {
   createRateLimitError,
   mapFetchError,
 } from './fetcher/errors.js';
-import { sanitizeHeaders } from './fetcher/headers.js';
 import {
   recordFetchError,
   recordFetchResponse,
@@ -32,7 +32,10 @@ const DEFAULT_HEADERS = {
 
 function buildHeaders(customHeaders?: Record<string, string>): Headers {
   const headers = new Headers(DEFAULT_HEADERS);
-  const sanitized = sanitizeHeaders(customHeaders);
+  const sanitized = normalizeHeaderRecord(
+    customHeaders,
+    config.security.blockedHeaders
+  );
   if (sanitized) {
     for (const [key, value] of Object.entries(sanitized)) {
       headers.set(key, value);

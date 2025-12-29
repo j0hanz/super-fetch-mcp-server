@@ -2,7 +2,10 @@ import { setInterval as setIntervalPromise } from 'node:timers/promises';
 
 import type { NextFunction, Request, Response } from 'express';
 
-import type { RateLimitEntry, RateLimiterOptions } from '../config/types.js';
+import type {
+  RateLimitEntry,
+  RateLimiterOptions,
+} from '../config/types/runtime.js';
 
 interface RateLimitConfig extends RateLimiterOptions {
   enabled: boolean;

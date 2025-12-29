@@ -2,7 +2,7 @@ import { TRUNCATION_MARKER } from '../../config/formatting.js';
 import type {
   JsonlTransformResult,
   MarkdownTransformResult,
-} from '../../config/types.js';
+} from '../../config/types/content.js';
 
 import { extractContent } from '../../services/extractor.js';
 import { parseHtml } from '../../services/parser.js';
@@ -31,15 +31,7 @@ interface ContentLengthOptions {
   readonly maxContentLength?: number;
 }
 
-interface MarkdownOptions extends ExtractionOptions, ContentLengthOptions {
-  readonly generateToc?: boolean;
-}
-
-interface TransformContext {
-  readonly sourceHtml: string;
-  readonly title: string | undefined;
-  readonly metadata: ReturnType<typeof createContentMetadataBlock>;
-}
+interface MarkdownOptions extends ExtractionOptions, ContentLengthOptions {}
 
 function resolveContentSource(
   html: string,
@@ -68,16 +60,8 @@ function resolveContentSource(
   return { sourceHtml, title, metadata };
 }
 
-function buildTransformContext(
-  html: string,
-  url: string,
-  options: ExtractionOptions
-): TransformContext {
-  return resolveContentSource(html, url, options);
-}
-
 function buildJsonlPayload(
-  context: TransformContext,
+  context: ContentSource,
   maxContentLength?: number
 ): { content: string; contentBlocks: number; truncated: boolean } {
   const contentBlocks = parseHtml(context.sourceHtml);
@@ -94,7 +78,7 @@ function buildJsonlPayload(
 }
 
 function buildMarkdownPayload(
-  context: TransformContext,
+  context: ContentSource,
   maxContentLength?: number
 ): { content: string; truncated: boolean } {
   const markdown = htmlToMarkdown(context.sourceHtml, context.metadata);
@@ -112,7 +96,7 @@ export function transformHtmlToJsonl(
   url: string,
   options: ExtractionOptions & ContentLengthOptions
 ): JsonlTransformResult {
-  const context = buildTransformContext(html, url, options);
+  const context = resolveContentSource(html, url, options);
   const { content, contentBlocks, truncated } = buildJsonlPayload(
     context,
     options.maxContentLength
@@ -131,7 +115,7 @@ export function transformHtmlToMarkdown(
   url: string,
   options: MarkdownOptions
 ): MarkdownTransformResult {
-  const context = buildTransformContext(html, url, options);
+  const context = resolveContentSource(html, url, options);
   const { content, truncated } = buildMarkdownPayload(
     context,
     options.maxContentLength
@@ -149,7 +133,7 @@ export function transformHtmlToMarkdownWithBlocks(
   url: string,
   options: ExtractionOptions & ContentLengthOptions
 ): JsonlTransformResult {
-  const context = buildTransformContext(html, url, options);
+  const context = resolveContentSource(html, url, options);
   const contentBlocks = parseHtml(context.sourceHtml);
   const { content, truncated } = buildMarkdownPayload(
     context,

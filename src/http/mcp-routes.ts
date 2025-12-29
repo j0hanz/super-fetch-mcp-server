@@ -2,7 +2,7 @@ import type { Express, NextFunction, Request, Response } from 'express';
 
 import type { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 
-import type { McpRequestBody } from '../config/types.js';
+import type { McpRequestBody } from '../config/types/runtime.js';
 
 import { logError, logInfo } from '../services/logger.js';
 

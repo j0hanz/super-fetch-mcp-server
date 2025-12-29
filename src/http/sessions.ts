@@ -1,6 +1,6 @@
 import type { Request } from 'express';
 
-import type { SessionEntry } from '../config/types.js';
+import type { SessionEntry } from '../config/types/runtime.js';
 
 export interface SessionStore {
   get: (sessionId: string) => SessionEntry | undefined;

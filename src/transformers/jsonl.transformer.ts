@@ -1,6 +1,9 @@
 import { joinLines } from '../config/formatting.js';
 import { config } from '../config/index.js';
-import type { ContentBlockUnion, MetadataBlock } from '../config/types.js';
+import type {
+  ContentBlockUnion,
+  MetadataBlock,
+} from '../config/types/content.js';
 
 import { truncateText } from '../utils/sanitizer.js';
 

@@ -1,5 +1,5 @@
 import { config } from '../config/index.js';
-import type { FileDownloadInfo } from '../config/types.js';
+import type { FileDownloadInfo } from '../config/types/tools.js';
 
 import * as cache from '../services/cache.js';
 

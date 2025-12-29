@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createContentMetadataBlock,
   determineContentExtractionSource,
-  enforceContentLengthLimit,
+  truncateContent,
 } from '../src/tools/utils/common.js';
 
 describe('determineContentExtractionSource', () => {
@@ -42,15 +42,15 @@ describe('createContentMetadataBlock', () => {
   });
 });
 
-describe('enforceContentLengthLimit', () => {
+describe('truncateContent', () => {
   it('does not truncate when below the limit', () => {
-    const result = enforceContentLengthLimit('hello', 10);
+    const result = truncateContent('hello', 10);
     expect(result.truncated).toBe(false);
     expect(result.content).toBe('hello');
   });
 
   it('truncates when exceeding the limit', () => {
-    const result = enforceContentLengthLimit('hello world', 5);
+    const result = truncateContent('hello world', 5);
     expect(result.truncated).toBe(true);
     expect(result.content).toContain('...[truncated]');
   });
