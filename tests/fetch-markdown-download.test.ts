@@ -32,6 +32,7 @@ vi.mock('../src/config/index.js', () => ({
     cache: { enabled: true, ttl: 3600, maxKeys: 100 },
     constants: { maxInlineContentChars: 10 },
     fetcher: { timeout: 30000 },
+    extraction: { extractMainContent: true, includeMetadata: true },
     logging: { enabled: true, level: 'info' },
     runtime: { httpMode: true },
   },

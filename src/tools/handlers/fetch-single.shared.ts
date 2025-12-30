@@ -23,6 +23,7 @@ interface SharedFetchOptions<T extends { content: string }> {
   readonly extractMainContent: boolean;
   readonly includeMetadata: boolean;
   readonly maxContentLength?: number;
+  readonly cacheVariant?: string;
   readonly customHeaders?: Record<string, string>;
   readonly retries?: number;
   readonly timeout?: number;
@@ -44,6 +45,7 @@ export async function performSharedFetch<T extends { content: string }>(
       extractMainContent: options.extractMainContent,
       includeMetadata: options.includeMetadata,
       maxContentLength: options.maxContentLength,
+      ...(options.cacheVariant ? { variant: options.cacheVariant } : {}),
       ...(options.format === 'markdown' ? {} : { contentBlocks: true }),
     },
     options.customHeaders
@@ -188,11 +190,13 @@ export function buildToolContentBlocks(
 
   const blocks: ToolContentBlock[] = [textBlock];
 
-  // Always add embedded resource for saveable content (works in stdio mode)
+  // Embed full content in stdio mode; HTTP mode relies on inline content or links.
   const mimeType =
     format === 'markdown' ? 'text/markdown' : 'application/jsonl';
-  const contentToEmbed = fullContent ?? inlineResult.content;
-  if (contentToEmbed && url) {
+  const contentToEmbed = config.runtime.httpMode
+    ? inlineResult.content
+    : (fullContent ?? inlineResult.content);
+  if (typeof contentToEmbed === 'string' && url) {
     const embeddedResource = buildEmbeddedResource(
       contentToEmbed,
       mimeType,

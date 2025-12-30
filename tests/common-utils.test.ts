@@ -52,6 +52,7 @@ describe('truncateContent', () => {
   it('truncates when exceeding the limit', () => {
     const result = truncateContent('hello world', 5);
     expect(result.truncated).toBe(true);
-    expect(result.content).toContain('...[truncated]');
+    expect(result.content).toHaveLength(5);
+    expect(result.content.startsWith('...[')).toBe(true);
   });
 });

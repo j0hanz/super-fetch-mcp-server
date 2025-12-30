@@ -45,15 +45,20 @@ export function truncateContent(
   maxLength?: number,
   suffix = TRUNCATION_MARKER
 ): TruncationResult {
-  const shouldTruncate =
-    maxLength !== undefined && maxLength > 0 && content.length > maxLength;
-
-  if (!shouldTruncate) {
+  if (
+    maxLength === undefined ||
+    maxLength <= 0 ||
+    content.length <= maxLength
+  ) {
     return { content, truncated: false };
   }
 
+  const safeMax = Math.max(0, maxLength - suffix.length);
+  const marker =
+    suffix.length > maxLength ? suffix.substring(0, maxLength) : suffix;
+
   return {
-    content: `${content.substring(0, maxLength)}${suffix}`,
+    content: `${content.substring(0, safeMax)}${marker}`,
     truncated: true,
   };
 }

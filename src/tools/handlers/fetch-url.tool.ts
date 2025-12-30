@@ -1,3 +1,4 @@
+import { config } from '../../config/index.js';
 import type { JsonlTransformResult } from '../../config/types/content.js';
 import type { PipelineResult } from '../../config/types/runtime.js';
 import type {
@@ -73,8 +74,9 @@ function deserializeJsonlTransformResult(
 
 function resolveFetchUrlOptions(input: FetchUrlInput): FetchUrlOptions {
   return {
-    extractMainContent: input.extractMainContent ?? true,
-    includeMetadata: input.includeMetadata ?? true,
+    extractMainContent:
+      input.extractMainContent ?? config.extraction.extractMainContent,
+    includeMetadata: input.includeMetadata ?? config.extraction.includeMetadata,
     maxContentLength: input.maxContentLength,
     format: input.format ?? 'jsonl',
   };
@@ -145,6 +147,8 @@ async function fetchUrlPipeline(
     customHeaders: input.customHeaders,
     retries: input.retries,
     timeout: input.timeout,
+    cacheVariant:
+      options.format === 'markdown' ? 'markdown-with-blocks' : undefined,
     transform: buildFetchUrlTransform(options),
     deserialize: deserializeJsonlTransformResult,
   });

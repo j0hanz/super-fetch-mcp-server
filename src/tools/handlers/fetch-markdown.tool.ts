@@ -1,3 +1,4 @@
+import { config } from '../../config/index.js';
 import type {
   MarkdownTransformResult,
   TransformOptions,
@@ -74,8 +75,9 @@ function deserializeMarkdownPipelineResult(
 
 function resolveMarkdownOptions(input: FetchMarkdownInput): MarkdownOptions {
   return {
-    extractMainContent: input.extractMainContent ?? true,
-    includeMetadata: input.includeMetadata ?? true,
+    extractMainContent:
+      input.extractMainContent ?? config.extraction.extractMainContent,
+    includeMetadata: input.includeMetadata ?? config.extraction.includeMetadata,
     maxContentLength: input.maxContentLength,
   };
 }

@@ -93,11 +93,15 @@ function decodeHtmlEntities(value: string): string {
   return basicDecoded
     .replace(/&#(\d+);/g, (match: string, code: string) => {
       const parsed = Number.parseInt(code, 10);
-      return Number.isFinite(parsed) ? String.fromCharCode(parsed) : match;
+      return Number.isFinite(parsed) && parsed >= 0 && parsed <= 0x10ffff
+        ? String.fromCodePoint(parsed)
+        : match;
     })
     .replace(/&#x([0-9a-fA-F]+);/g, (match: string, code: string) => {
       const parsed = Number.parseInt(code, 16);
-      return Number.isFinite(parsed) ? String.fromCharCode(parsed) : match;
+      return Number.isFinite(parsed) && parsed >= 0 && parsed <= 0x10ffff
+        ? String.fromCodePoint(parsed)
+        : match;
     });
 }
 
