@@ -46,7 +46,7 @@ function deserializeJsonlTransformResult(
   cached: string
 ): JsonlTransformResult | undefined {
   try {
-    const parsed = JSON.parse(cached) as unknown;
+    const parsed: unknown = JSON.parse(cached);
     if (!isRecord(parsed)) return undefined;
 
     const { content, contentBlocks, title, truncated } = parsed;

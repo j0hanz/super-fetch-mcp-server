@@ -59,8 +59,19 @@ function isFencedCodeBlock(
   return firstChild.nodeName === 'CODE';
 }
 
+function isElement(node: unknown): node is HTMLElement {
+  return (
+    node !== null &&
+    typeof node === 'object' &&
+    'getAttribute' in node &&
+    typeof (node as HTMLElement).getAttribute === 'function'
+  );
+}
+
 function formatFencedCodeBlock(node: TurndownService.Node): string {
-  const codeNode = node.firstChild as HTMLElement;
+  const codeNode = node.firstChild;
+  if (!isElement(codeNode)) return '';
+
   const code = codeNode.textContent || '';
   const language = resolveCodeLanguage(codeNode, code);
   return CODE_BLOCK.format(code, language);

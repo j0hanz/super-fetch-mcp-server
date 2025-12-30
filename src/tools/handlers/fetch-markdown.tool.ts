@@ -49,7 +49,7 @@ function deserializeMarkdownPipelineResult(
   cached: string
 ): MarkdownPipelineResult | undefined {
   try {
-    const parsed = JSON.parse(cached) as unknown;
+    const parsed: unknown = JSON.parse(cached);
     if (!isRecord(parsed)) return undefined;
 
     const { content, markdown, title, truncated } = parsed;

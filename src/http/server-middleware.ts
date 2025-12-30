@@ -64,7 +64,7 @@ function buildAllowedHosts(): Set<string> {
   return allowedHosts;
 }
 
-export function createHostValidationMiddleware(): RequestHandler {
+function createHostValidationMiddleware(): RequestHandler {
   const allowedHosts = buildAllowedHosts();
 
   return (req: Request, res: Response, next: NextFunction): void => {
