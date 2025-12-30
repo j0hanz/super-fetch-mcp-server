@@ -231,6 +231,10 @@ export function keys(): string[] {
   return Array.from(contentCache.keys());
 }
 
+export function isEnabled(): boolean {
+  return config.cache.enabled;
+}
+
 function buildCacheEntry(
   cacheKey: string,
   content: string,

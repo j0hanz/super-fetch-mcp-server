@@ -120,9 +120,11 @@ export function resolveDownloadPayload(
   const content = resolvePayloadContent(payload, params.namespace);
   if (!content) return null;
 
+  const safeTitle =
+    typeof payload.title === 'string' ? payload.title : undefined;
   const fileName = generateSafeFilename(
     cacheEntry.url,
-    cacheEntry.title ?? payload.title,
+    cacheEntry.title ?? safeTitle,
     params.hash,
     resolveExtension(params.namespace)
   );

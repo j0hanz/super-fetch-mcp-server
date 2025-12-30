@@ -93,7 +93,9 @@ function lookupWithTimeout(
   });
 }
 
-async function assertResolvedAddressesAllowed(hostname: string): Promise<void> {
+export async function assertResolvedAddressesAllowed(
+  hostname: string
+): Promise<void> {
   try {
     const result = await lookupWithTimeout(hostname);
     const addresses = Array.isArray(result) ? result : [result];
@@ -120,9 +122,10 @@ async function assertResolvedAddressesAllowed(hostname: string): Promise<void> {
   }
 }
 
-export async function validateAndNormalizeUrl(
-  urlString: string
-): Promise<string> {
+export function normalizeUrl(urlString: string): {
+  normalizedUrl: string;
+  hostname: string;
+} {
   const trimmedUrl = requireTrimmedUrl(urlString);
   assertUrlLength(trimmedUrl);
 
@@ -132,9 +135,16 @@ export async function validateAndNormalizeUrl(
 
   const hostname = normalizeHostname(url);
   assertHostnameAllowed(hostname);
-  await assertResolvedAddressesAllowed(hostname);
 
-  return url.href;
+  return { normalizedUrl: url.href, hostname };
+}
+
+export async function validateAndNormalizeUrl(
+  urlString: string
+): Promise<string> {
+  const { normalizedUrl, hostname } = normalizeUrl(urlString);
+  await assertResolvedAddressesAllowed(hostname);
+  return normalizedUrl;
 }
 
 const VALIDATION_ERROR_CODE = 'VALIDATION_ERROR';

@@ -1,11 +1,12 @@
 import { TRUNCATION_MARKER } from '../../config/formatting.js';
 import type {
+  ContentBlockUnion,
   JsonlTransformResult,
   MarkdownTransformResult,
 } from '../../config/types/content.js';
 
 import { extractContent } from '../../services/extractor.js';
-import { parseHtml } from '../../services/parser.js';
+import { parseHtml, parseHtmlWithMetadata } from '../../services/parser.js';
 
 import { sanitizeText } from '../../utils/sanitizer.js';
 
@@ -110,8 +111,20 @@ function buildJsonlPayload(
   maxContentLength?: number
 ): { content: string; contentBlocks: number; truncated: boolean } {
   const contentBlocks = parseHtml(context.sourceHtml);
+  return buildJsonlPayloadFromBlocks(
+    contentBlocks,
+    context.metadata,
+    maxContentLength
+  );
+}
+
+function buildJsonlPayloadFromBlocks(
+  contentBlocks: ContentBlockUnion[],
+  metadata: ReturnType<typeof createContentMetadataBlock>,
+  maxContentLength?: number
+): { content: string; contentBlocks: number; truncated: boolean } {
   const { content, truncated } = truncateContent(
-    toJsonl(contentBlocks, context.metadata),
+    toJsonl(contentBlocks, metadata),
     maxContentLength
   );
 
@@ -141,6 +154,29 @@ export function transformHtmlToJsonl(
   url: string,
   options: ExtractionOptions & ContentLengthOptions
 ): JsonlTransformResult {
+  if (!options.extractMainContent && options.includeMetadata) {
+    const parsed = parseHtmlWithMetadata(html);
+    const metadataBlock = createContentMetadataBlock(
+      url,
+      null,
+      parsed.metadata,
+      false,
+      true
+    );
+    const { content, contentBlocks, truncated } = buildJsonlPayloadFromBlocks(
+      parsed.blocks,
+      metadataBlock,
+      options.maxContentLength
+    );
+
+    return {
+      content,
+      contentBlocks,
+      title: parsed.metadata.title,
+      ...(truncated && { truncated }),
+    };
+  }
+
   const context = resolveContentSource(html, url, options);
   const { content, contentBlocks, truncated } = buildJsonlPayload(
     context,
@@ -178,6 +214,32 @@ export function transformHtmlToMarkdownWithBlocks(
   url: string,
   options: ExtractionOptions & ContentLengthOptions
 ): JsonlTransformResult {
+  if (!options.extractMainContent && options.includeMetadata) {
+    const parsed = parseHtmlWithMetadata(html);
+    const context: ContentSource = {
+      sourceHtml: html,
+      title: parsed.metadata.title,
+      metadata: createContentMetadataBlock(
+        url,
+        null,
+        parsed.metadata,
+        false,
+        true
+      ),
+    };
+    const { content, truncated } = buildMarkdownPayload(
+      context,
+      options.maxContentLength
+    );
+
+    return {
+      content,
+      contentBlocks: parsed.blocks.length,
+      title: context.title,
+      ...(truncated && { truncated }),
+    };
+  }
+
   const context = resolveContentSource(html, url, options);
   const contentBlocks = parseHtml(context.sourceHtml);
   const { content, truncated } = buildMarkdownPayload(

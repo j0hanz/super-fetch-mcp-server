@@ -7,6 +7,7 @@ import type {
   BlockquoteBlock,
   CodeBlock,
   ContentBlockUnion,
+  ExtractedMetadata,
   HeadingBlock,
   ImageBlock,
   ListBlock,
@@ -34,6 +35,77 @@ import { logWarn } from './logger.js';
 
 const CONTENT_SELECTOR =
   'h1, h2, h3, h4, h5, h6, p, ul, ol, pre, code:not(pre code), table, img, blockquote';
+
+type MetaSource = 'og' | 'twitter' | 'standard';
+type MetaField = keyof ExtractedMetadata;
+
+interface MetaCollectorState {
+  title: Partial<Record<MetaSource, string>>;
+  description: Partial<Record<MetaSource, string>>;
+  author: Partial<Record<MetaSource, string>>;
+}
+
+function createMetaCollectorState(): MetaCollectorState {
+  return {
+    title: {},
+    description: {},
+    author: {},
+  };
+}
+
+function resolveMetaField(
+  state: MetaCollectorState,
+  field: MetaField
+): string | undefined {
+  const sources = state[field];
+  return sources.og ?? sources.twitter ?? sources.standard;
+}
+
+function extractMetadata($: CheerioAPI): ExtractedMetadata {
+  const state = createMetaCollectorState();
+
+  $('meta').each((_, element) => {
+    const content = $(element).attr('content')?.trim();
+    if (!content) return;
+
+    const property = $(element).attr('property');
+    if (property?.startsWith('og:')) {
+      const key = property.replace('og:', '');
+      if (key === 'title') state.title.og = content;
+      if (key === 'description') state.description.og = content;
+      return;
+    }
+
+    const name = $(element).attr('name');
+    if (name?.startsWith('twitter:')) {
+      const key = name.replace('twitter:', '');
+      if (key === 'title') state.title.twitter = content;
+      if (key === 'description') state.description.twitter = content;
+      return;
+    }
+
+    if (name === 'description') {
+      state.description.standard = content;
+    }
+
+    if (name === 'author') {
+      state.author.standard = content;
+    }
+  });
+
+  if (!state.title.standard) {
+    const titleText = $('title').first().text().trim();
+    if (titleText) {
+      state.title.standard = titleText;
+    }
+  }
+
+  return {
+    title: resolveMetaField(state, 'title'),
+    description: resolveMetaField(state, 'description'),
+    author: resolveMetaField(state, 'author'),
+  };
+}
 function parseHeading($: CheerioAPI, element: Element): HeadingBlock | null {
   const rawText = sanitizeText($(element).text());
   const text = cleanHeading(rawText);
@@ -229,6 +301,11 @@ function loadHtml(html: string): CheerioAPI | null {
   }
 }
 
+function prepareCheerio(html: string): CheerioAPI | null {
+  const processedHtml = truncateHtml(html);
+  return loadHtml(processedHtml);
+}
+
 function removeNoiseElements($: CheerioAPI): void {
   $('script, style, noscript, iframe, svg').remove();
 }
@@ -260,10 +337,29 @@ function safeParseElement(
 export function parseHtml(html: string): ContentBlockUnion[] {
   if (!html || typeof html !== 'string') return [];
 
-  const processedHtml = truncateHtml(html);
-  const $ = loadHtml(processedHtml);
+  const $ = prepareCheerio(html);
   if (!$) return [];
 
   removeNoiseElements($);
   return filterBlocks(collectBlocks($));
+}
+
+export function parseHtmlWithMetadata(html: string): {
+  blocks: ContentBlockUnion[];
+  metadata: ExtractedMetadata;
+} {
+  if (!html || typeof html !== 'string') {
+    return { blocks: [], metadata: {} };
+  }
+
+  const $ = prepareCheerio(html);
+  if (!$) {
+    return { blocks: [], metadata: {} };
+  }
+
+  const metadata = extractMetadata($);
+  removeNoiseElements($);
+  const blocks = filterBlocks(collectBlocks($));
+
+  return { blocks, metadata };
 }

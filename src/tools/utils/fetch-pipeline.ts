@@ -5,10 +5,13 @@ import type {
 } from '../../config/types/runtime.js';
 
 import * as cache from '../../services/cache.js';
-import { fetchUrlWithRetry } from '../../services/fetcher.js';
+import { fetchNormalizedUrlWithRetry } from '../../services/fetcher.js';
 import { logDebug } from '../../services/logger.js';
 
-import { validateAndNormalizeUrl } from '../../utils/url-validator.js';
+import {
+  assertResolvedAddressesAllowed,
+  normalizeUrl,
+} from '../../utils/url-validator.js';
 
 import { appendHeaderVary } from './cache-vary.js';
 
@@ -63,7 +66,7 @@ function attemptCacheRetrieval<T>(
 export async function executeFetchPipeline<T>(
   options: FetchPipelineOptions<T>
 ): Promise<PipelineResult<T>> {
-  const normalizedUrl = await validateAndNormalizeUrl(options.url);
+  const { normalizedUrl, hostname } = normalizeUrl(options.url);
   const cacheKey = resolveCacheKey(options, normalizedUrl);
 
   const cachedResult = attemptCacheRetrieval<T>(
@@ -74,16 +77,20 @@ export async function executeFetchPipeline<T>(
   );
   if (cachedResult) return cachedResult;
 
+  await assertResolvedAddressesAllowed(hostname);
+
   const fetchOptions = buildFetchOptions(options);
   logDebug('Fetching URL', { url: normalizedUrl, retries: options.retries });
 
-  const html = await fetchUrlWithRetry(
+  const html = await fetchNormalizedUrlWithRetry(
     normalizedUrl,
     fetchOptions,
     options.retries
   );
   const data = options.transform(html, normalizedUrl);
-  persistCache(cacheKey, data, options.serialize, normalizedUrl);
+  if (cache.isEnabled()) {
+    persistCache(cacheKey, data, options.serialize, normalizedUrl);
+  }
 
   return buildPipelineResult(normalizedUrl, data, cacheKey);
 }
