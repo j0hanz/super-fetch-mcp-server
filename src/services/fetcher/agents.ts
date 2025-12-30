@@ -6,6 +6,8 @@ import { Agent } from 'undici';
 import { createErrorWithCode } from '../../utils/error-utils.js';
 import { isBlockedIp } from '../../utils/url-validator.js';
 
+const DNS_LOOKUP_TIMEOUT_MS = 5000;
+
 function resolveDns(
   hostname: string,
   options: dns.LookupOptions,
@@ -18,10 +20,33 @@ function resolveDns(
   const { normalizedOptions, useAll, resolvedFamily } =
     buildLookupContext(options);
   const lookupOptions = buildLookupOptions(normalizedOptions);
+
+  let done = false;
+  const timer = setTimeout(() => {
+    if (done) return;
+    done = true;
+    callback(
+      createErrorWithCode(`DNS lookup timed out for ${hostname}`, 'ETIMEOUT'),
+      []
+    );
+  }, DNS_LOOKUP_TIMEOUT_MS);
+  timer.unref();
+
+  const safeCallback = (
+    err: NodeJS.ErrnoException | null,
+    address: string | dns.LookupAddress[],
+    family?: number
+  ): void => {
+    if (done) return;
+    done = true;
+    clearTimeout(timer);
+    callback(err, address, family);
+  };
+
   dns.lookup(
     hostname,
     lookupOptions,
-    createLookupCallback(hostname, resolvedFamily, useAll, callback)
+    createLookupCallback(hostname, resolvedFamily, useAll, safeCallback)
   );
 }
 

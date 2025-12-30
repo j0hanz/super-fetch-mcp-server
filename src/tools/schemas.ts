@@ -2,9 +2,22 @@ import { z } from 'zod';
 
 import { config } from '../config/index.js';
 
+const MAX_HEADER_NAME_LENGTH = 128;
+const MAX_HEADER_VALUE_LENGTH = 2048;
+const MAX_HEADER_COUNT = 50;
+const MAX_CONTENT_LENGTH = config.constants.maxContentSize;
+
+const customHeadersSchema = z
+  .record(
+    z.string().max(MAX_HEADER_NAME_LENGTH),
+    z.string().max(MAX_HEADER_VALUE_LENGTH)
+  )
+  .refine((headers) => Object.keys(headers).length <= MAX_HEADER_COUNT, {
+    message: `customHeaders must have at most ${MAX_HEADER_COUNT} entries`,
+  });
+
 const requestOptionsSchema = z.object({
-  customHeaders: z
-    .record(z.string())
+  customHeaders: customHeadersSchema
     .optional()
     .describe('Custom HTTP headers for the request'),
   timeout: z
@@ -33,6 +46,7 @@ const extractionOptionsSchema = z.object({
   maxContentLength: z
     .number()
     .positive()
+    .max(MAX_CONTENT_LENGTH)
     .optional()
     .describe('Maximum content length in characters'),
 });
@@ -71,7 +85,11 @@ const fileDownloadSchema = z.object({
 
 export const fetchUrlInputSchema = requestOptionsSchema
   .extend({
-    url: z.string().min(1).describe('The URL to fetch'),
+    url: z
+      .string()
+      .min(1)
+      .max(config.constants.maxUrlLength)
+      .describe('The URL to fetch'),
   })
   .merge(extractionOptionsSchema)
   .merge(formatOptionsSchema)
@@ -79,7 +97,11 @@ export const fetchUrlInputSchema = requestOptionsSchema
 
 export const fetchMarkdownInputSchema = requestOptionsSchema
   .extend({
-    url: z.string().min(1).describe('The URL to fetch'),
+    url: z
+      .string()
+      .min(1)
+      .max(config.constants.maxUrlLength)
+      .describe('The URL to fetch'),
   })
   .merge(extractionOptionsSchema)
   .strict();

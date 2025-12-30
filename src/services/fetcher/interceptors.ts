@@ -34,6 +34,19 @@ type FetchChannelEvent =
 
 const fetchChannel = diagnosticsChannel.channel('superfetch.fetch');
 
+function redactUrl(rawUrl: string): string {
+  try {
+    const url = new URL(rawUrl);
+    url.username = '';
+    url.password = '';
+    url.hash = '';
+    url.search = '';
+    return url.toString();
+  } catch {
+    return rawUrl;
+  }
+}
+
 function publishFetchEvent(event: FetchChannelEvent): void {
   if (!fetchChannel.hasSubscribers) return;
   try {
@@ -54,10 +67,11 @@ export function startFetchTelemetry(
   url: string,
   method: string
 ): FetchTelemetryContext {
+  const safeUrl = redactUrl(url);
   const context: FetchTelemetryContext = {
     requestId: randomUUID(),
     startTime: performance.now(),
-    url,
+    url: safeUrl,
     method: method.toUpperCase(),
   };
 
