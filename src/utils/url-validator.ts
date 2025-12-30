@@ -1,3 +1,5 @@
+import type { LookupAddress } from 'node:dns';
+import { lookup } from 'node:dns/promises';
 import { BlockList, isIP } from 'node:net';
 
 import { config } from '../config/index.js';
@@ -35,6 +37,8 @@ for (const entry of BLOCKED_IPV6_SUBNETS) {
   BLOCK_LIST.addSubnet(entry.subnet, entry.prefix, 'ipv6');
 }
 
+const DNS_LOOKUP_TIMEOUT_MS = 5000;
+
 function matchesBlockedIpPatterns(resolvedIp: string): boolean {
   for (const pattern of config.security.blockedIpPatterns) {
     if (pattern.test(resolvedIp)) {
@@ -67,7 +71,58 @@ function isBlockedByList(ip: string, ipType: 4 | 6): boolean {
   return BLOCK_LIST.check(ip, 'ipv6');
 }
 
-export function validateAndNormalizeUrl(urlString: string): string {
+function lookupWithTimeout(
+  hostname: string
+): Promise<LookupAddress[] | LookupAddress> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(createValidationError(`DNS lookup timed out for ${hostname}`));
+    }, DNS_LOOKUP_TIMEOUT_MS);
+
+    lookup(hostname, { all: true })
+      .then((result) => {
+        clearTimeout(timer);
+        resolve(result);
+      })
+      .catch((error: unknown) => {
+        clearTimeout(timer);
+        reject(
+          error instanceof Error ? error : createValidationError(String(error))
+        );
+      });
+  });
+}
+
+async function assertResolvedAddressesAllowed(hostname: string): Promise<void> {
+  try {
+    const result = await lookupWithTimeout(hostname);
+    const addresses = Array.isArray(result) ? result : [result];
+    if (addresses.length === 0) {
+      throw createValidationError(`Unable to resolve hostname: ${hostname}`);
+    }
+
+    for (const { address } of addresses) {
+      if (isBlockedIp(address.toLowerCase())) {
+        throw createValidationError(
+          `Blocked IP range resolved from hostname: ${hostname}`
+        );
+      }
+    }
+  } catch (error: unknown) {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') {
+      throw createValidationError(`Unable to resolve hostname: ${hostname}`);
+    }
+    if (error instanceof Error) {
+      throw error;
+    }
+    throw createValidationError(String(error));
+  }
+}
+
+export async function validateAndNormalizeUrl(
+  urlString: string
+): Promise<string> {
   const trimmedUrl = requireTrimmedUrl(urlString);
   assertUrlLength(trimmedUrl);
 
@@ -77,6 +132,7 @@ export function validateAndNormalizeUrl(urlString: string): string {
 
   const hostname = normalizeHostname(url);
   assertHostnameAllowed(hostname);
+  await assertResolvedAddressesAllowed(hostname);
 
   return url.href;
 }

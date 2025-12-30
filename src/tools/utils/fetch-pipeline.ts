@@ -63,7 +63,7 @@ function attemptCacheRetrieval<T>(
 export async function executeFetchPipeline<T>(
   options: FetchPipelineOptions<T>
 ): Promise<PipelineResult<T>> {
-  const normalizedUrl = validateAndNormalizeUrl(options.url);
+  const normalizedUrl = await validateAndNormalizeUrl(options.url);
   const cacheKey = resolveCacheKey(options, normalizedUrl);
 
   const cachedResult = attemptCacheRetrieval<T>(

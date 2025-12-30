@@ -118,7 +118,7 @@ export async function fetchUrlWithRetry(
   options?: FetchOptions,
   maxRetries = 3
 ): Promise<string> {
-  const normalizedUrl = validateAndNormalizeUrl(url);
+  const normalizedUrl = await validateAndNormalizeUrl(url);
   const context = buildRequestContext(options);
 
   return executeWithRetry(
