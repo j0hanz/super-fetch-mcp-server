@@ -68,7 +68,8 @@ function buildRequestInit(
 async function handleFetchResponse(
   response: Response,
   finalUrl: string,
-  telemetry: ReturnType<typeof startFetchTelemetry>
+  telemetry: ReturnType<typeof startFetchTelemetry>,
+  signal?: AbortSignal
 ): Promise<string> {
   if (response.status === 429) {
     void response.body?.cancel();
@@ -83,7 +84,8 @@ async function handleFetchResponse(
   const { text, size } = await readResponseText(
     response,
     finalUrl,
-    config.fetcher.maxContentLength
+    config.fetcher.maxContentLength,
+    signal
   );
   recordFetchResponse(telemetry, response, size);
   return text;
@@ -104,7 +106,12 @@ async function fetchWithTelemetry(
     );
 
     telemetry.url = finalUrl;
-    return await handleFetchResponse(response, finalUrl, telemetry);
+    return await handleFetchResponse(
+      response,
+      finalUrl,
+      telemetry,
+      requestInit.signal ?? undefined
+    );
   } catch (error) {
     const mapped = mapFetchError(error, normalizedUrl, timeoutMs);
     telemetry.url = mapped.url;

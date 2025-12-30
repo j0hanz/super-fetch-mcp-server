@@ -6,7 +6,42 @@ import { isSystemError } from '../../utils/error-utils.js';
 
 import { logDebug, logError, logWarn } from '../logger.js';
 
+type FetchChannelEvent =
+  | {
+      v: 1;
+      type: 'start';
+      requestId: string;
+      method: string;
+      url: string;
+    }
+  | {
+      v: 1;
+      type: 'end';
+      requestId: string;
+      status: number;
+      duration: number;
+    }
+  | {
+      v: 1;
+      type: 'error';
+      requestId: string;
+      url: string;
+      error: string;
+      code?: string;
+      status?: number;
+      duration: number;
+    };
+
 const fetchChannel = diagnosticsChannel.channel('superfetch.fetch');
+
+function publishFetchEvent(event: FetchChannelEvent): void {
+  if (!fetchChannel.hasSubscribers) return;
+  try {
+    fetchChannel.publish(event);
+  } catch {
+    // Avoid crashing the publisher if a subscriber throws.
+  }
+}
 
 interface FetchTelemetryContext {
   requestId: string;
@@ -26,14 +61,13 @@ export function startFetchTelemetry(
     method: method.toUpperCase(),
   };
 
-  if (fetchChannel.hasSubscribers) {
-    fetchChannel.publish({
-      type: 'start',
-      requestId: context.requestId,
-      method: context.method,
-      url: context.url,
-    });
-  }
+  publishFetchEvent({
+    v: 1,
+    type: 'start',
+    requestId: context.requestId,
+    method: context.method,
+    url: context.url,
+  });
 
   logDebug('HTTP Request', {
     requestId: context.requestId,
@@ -67,8 +101,8 @@ function publishFetchEnd(
   status: number,
   duration: number
 ): void {
-  if (!fetchChannel.hasSubscribers) return;
-  fetchChannel.publish({
+  publishFetchEvent({
+    v: 1,
     type: 'end',
     requestId: context.requestId,
     status,
@@ -113,17 +147,16 @@ export function recordFetchError(
   const err = error instanceof Error ? error : new Error(String(error));
   const code = isSystemError(err) ? err.code : undefined;
 
-  if (fetchChannel.hasSubscribers) {
-    fetchChannel.publish({
-      type: 'error',
-      requestId: context.requestId,
-      url: context.url,
-      error: err.message,
-      code,
-      status,
-      duration,
-    });
-  }
+  publishFetchEvent({
+    v: 1,
+    type: 'error',
+    requestId: context.requestId,
+    url: context.url,
+    error: err.message,
+    code,
+    status,
+    duration,
+  });
 
   const log = status === 429 ? logWarn : logError;
   log('HTTP Request Error', {

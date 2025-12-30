@@ -17,9 +17,10 @@ function resolveDns(
 ): void {
   const { normalizedOptions, useAll, resolvedFamily } =
     buildLookupContext(options);
+  const lookupOptions = buildLookupOptions(normalizedOptions);
   dns.lookup(
     hostname,
-    { ...normalizedOptions, all: true },
+    lookupOptions,
     createLookupCallback(hostname, resolvedFamily, useAll, callback)
   );
 }
@@ -41,6 +42,36 @@ function buildLookupContext(options: dns.LookupOptions | number): {
     useAll: Boolean(normalizedOptions.all),
     resolvedFamily: resolveFamily(normalizedOptions.family),
   };
+}
+
+const DEFAULT_DNS_ORDER: dns.LookupOptions['order'] = 'verbatim';
+
+function resolveResultOrder(
+  options: dns.LookupOptions
+): dns.LookupOptions['order'] {
+  if (options.order) return options.order;
+  const legacyVerbatim = getLegacyVerbatim(options);
+  if (legacyVerbatim !== undefined) {
+    return legacyVerbatim ? 'verbatim' : 'ipv4first';
+  }
+  return DEFAULT_DNS_ORDER;
+}
+
+function getLegacyVerbatim(options: dns.LookupOptions): boolean | undefined {
+  const legacy = (options as Record<string, unknown>).verbatim;
+  return typeof legacy === 'boolean' ? legacy : undefined;
+}
+
+function buildLookupOptions(
+  normalizedOptions: dns.LookupOptions
+): dns.LookupOptions {
+  const options: Record<string, unknown> = {
+    ...normalizedOptions,
+    order: resolveResultOrder(normalizedOptions),
+    all: true,
+  };
+  delete options.verbatim;
+  return options as dns.LookupOptions;
 }
 
 function createLookupCallback(
@@ -105,6 +136,12 @@ function handleLookupResult(
   }
 
   const list = normalizeLookupResults(addresses, resolvedFamily);
+  const invalidFamilyError = findInvalidFamilyError(list, hostname);
+  if (invalidFamilyError) {
+    callback(invalidFamilyError, list);
+    return;
+  }
+
   const blockedError = findBlockedIpError(list, hostname);
   if (blockedError) {
     callback(blockedError, list);
@@ -171,6 +208,22 @@ function findBlockedIpError(
     return createErrorWithCode(
       `Blocked IP detected for ${hostname}`,
       'EBLOCKED'
+    );
+  }
+
+  return null;
+}
+
+function findInvalidFamilyError(
+  list: dns.LookupAddress[],
+  hostname: string
+): NodeJS.ErrnoException | null {
+  for (const addr of list) {
+    const family = typeof addr === 'string' ? 0 : addr.family;
+    if (family === 4 || family === 6) continue;
+    return createErrorWithCode(
+      `Invalid address family returned for ${hostname}`,
+      'EINVAL'
     );
   }
 

@@ -18,41 +18,54 @@ function assertContentLengthWithinLimit(
   );
 }
 
+function throwIfReadAborted(url: string, signal?: AbortSignal): void {
+  if (!signal?.aborted) return;
+  throw new FetchError('Request was aborted during response read', url, 499, {
+    reason: 'aborted',
+  });
+}
+
 async function readStreamWithLimit(
   stream: ReadableStream<Uint8Array>,
   url: string,
-  maxBytes: number
+  maxBytes: number,
+  signal?: AbortSignal
 ): Promise<{ text: string; size: number }> {
   const reader = stream.getReader();
   const decoder = new TextDecoder();
   let total = 0;
   const chunks: string[] = [];
 
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
+  try {
+    for (;;) {
+      throwIfReadAborted(url, signal);
+      const { value, done } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
 
-    total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel();
+        throw new FetchError(
+          `Response exceeds maximum size of ${maxBytes} bytes`,
+          url
+        );
+      }
 
-    if (total > maxBytes) {
-      await reader.cancel();
-      throw new FetchError(
-        `Response exceeds maximum size of ${maxBytes} bytes`,
-        url
-      );
+      chunks.push(decoder.decode(value, { stream: true }));
     }
 
-    chunks.push(decoder.decode(value, { stream: true }));
+    chunks.push(decoder.decode());
+    return { text: chunks.join(''), size: total };
+  } finally {
+    reader.releaseLock();
   }
-
-  chunks.push(decoder.decode());
-  return { text: chunks.join(''), size: total };
 }
 
 export async function readResponseText(
   response: Response,
   url: string,
-  maxBytes: number
+  maxBytes: number,
+  signal?: AbortSignal
 ): Promise<{ text: string; size: number }> {
   assertContentLengthWithinLimit(response, url, maxBytes);
 
@@ -61,5 +74,5 @@ export async function readResponseText(
     return { text, size: Buffer.byteLength(text) };
   }
 
-  return readStreamWithLimit(response.body, url, maxBytes);
+  return readStreamWithLimit(response.body, url, maxBytes, signal);
 }
