@@ -47,20 +47,20 @@ env = { CACHE_TTL = "7200", LOG_LEVEL = "debug", FETCH_TIMEOUT = "60000" }
 
 ### HTTP Server
 
-| Variable                  | Default     | Valid Values          | Description                                                                                                                       |
-| ------------------------- | ----------- | --------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `API_KEY`                 | -           | -                     | Required for HTTP mode. Requests must include `Authorization: Bearer <API_KEY>` or `X-API-Key: <API_KEY>`.                        |
-| `HOST`                    | `127.0.0.1` | Any valid hostname/IP | HTTP server host. Non-loopback hosts require `ALLOW_REMOTE=true`.                                                                 |
-| `PORT`                    | `3000`      | `1024`-`65535`        | HTTP server port.                                                                                                                 |
-| `ALLOW_REMOTE`            | `false`     | `true` / `false`      | Allow binding to non-loopback interfaces.                                                                                         |
-| `ALLOWED_HOSTS`           | -           | Comma-separated list  | Allowed `Host` header values. Loopback hosts are always allowed; the configured `HOST` is allowed unless it is `0.0.0.0` or `::`. |
-| `TRUST_PROXY`             | `false`     | `true` / `false`      | Enable Express `trust proxy`.                                                                                                     |
-| `SESSION_TTL_MS`          | `1800000`   | `60000`-`86400000`    | Session TTL in milliseconds.                                                                                                      |
-| `SESSION_INIT_TIMEOUT_MS` | `10000`     | `1000`-`60000`        | Time allowed for session initialization.                                                                                          |
-| `MAX_SESSIONS`            | `200`       | `10`-`10000`          | Maximum active sessions.                                                                                                          |
-| `REQUIRE_AUTH`            | `false`\*   | `true` / `false`      | Reserved for future use (currently unused).                                                                                       |
+| Variable                  | Default     | Valid Values          | Description                                                                                                                                                                      |
+| ------------------------- | ----------- | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `API_KEY`                 | -           | -                     | Required for HTTP mode. Requests must include `Authorization: Bearer <API_KEY>` or `X-API-Key: <API_KEY>`.                                                                       |
+| `HOST`                    | `127.0.0.1` | Any valid hostname/IP | HTTP server host. Non-loopback hosts require `ALLOW_REMOTE=true`.                                                                                                                |
+| `PORT`                    | `3000`      | `1024`-`65535`        | HTTP server port.                                                                                                                                                                |
+| `ALLOW_REMOTE`            | `false`     | `true` / `false`      | Allow binding to non-loopback interfaces.                                                                                                                                        |
+| `ALLOWED_HOSTS`           | -           | Comma-separated list  | Allowed `Host` header values. Loopback hosts are always allowed; the configured `HOST` is allowed unless it is `0.0.0.0` or `::`. Requests with other `Host` values receive 403. |
+| `TRUST_PROXY`             | `false`     | `true` / `false`      | Enable Express `trust proxy`.                                                                                                                                                    |
+| `SESSION_TTL_MS`          | `1800000`   | `60000`-`86400000`    | Session TTL in milliseconds.                                                                                                                                                     |
+| `SESSION_INIT_TIMEOUT_MS` | `10000`     | `1000`-`60000`        | Time allowed for session initialization.                                                                                                                                         |
+| `MAX_SESSIONS`            | `200`       | `10`-`10000`          | Maximum active sessions.                                                                                                                                                         |
+| `REQUIRE_AUTH`            | `false`\*   | `true` / `false`      | Parsed but currently unused (HTTP mode always requires `API_KEY`).                                                                                                               |
 
-\*Default for `REQUIRE_AUTH` is `false` on loopback hosts and `true` otherwise, but it is not applied yet.
+\*Default for `REQUIRE_AUTH` is `false` on loopback hosts and `true` otherwise, but it is not enforced.
 
 ### Fetcher
 
@@ -90,9 +90,9 @@ Notes:
 
 ### Output and Inline Limits
 
-| Variable                   | Default | Valid Values    | Description                                            |
-| -------------------------- | ------- | --------------- | ------------------------------------------------------ |
-| `MAX_INLINE_CONTENT_CHARS` | `20000` | `1000`-`200000` | Inline content limit before returning a resource link. |
+| Variable                   | Default | Valid Values    | Description                                                                                                           |
+| -------------------------- | ------- | --------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `MAX_INLINE_CONTENT_CHARS` | `20000` | `1000`-`200000` | Inline content limit before returning a cache resource link (requires cache enabled; otherwise content is truncated). |
 
 ### Logging
 
@@ -108,7 +108,7 @@ Notes:
 | `ALLOWED_ORIGINS` | `[]`    | Comma-separated list of allowed origins. |
 | `CORS_ALLOW_ALL`  | `false` | Allow all origins (dev only).            |
 
-If `ALLOWED_ORIGINS` is empty and `CORS_ALLOW_ALL` is `false`, no CORS headers are added.
+If an `Origin` header is present, it must be a valid URL and match `ALLOWED_ORIGINS` (or `CORS_ALLOW_ALL=true`), otherwise the request is rejected with 403. If no `Origin` header is present, the request proceeds without CORS headers.
 
 ### Rate Limiting (HTTP Mode)
 
@@ -232,8 +232,9 @@ Rate limiting is applied to `/mcp` and `/mcp/downloads` routes.
 Tool inputs can override several settings per request:
 
 - `timeout` and `retries` override fetch behavior.
-- `maxContentLength` caps the transformed output length (in characters).
+- `maxContentLength` caps the transformed output length (in characters, max 5,242,880).
 - `customHeaders` are sanitized to remove disallowed headers.
+- `includeContentBlocks` (fetch-url only) enables content block counting when `format: "markdown"`.
 
 See `README.md` for tool input schemas and examples.
 

@@ -291,13 +291,14 @@ Sessions are managed via the `mcp-session-id` header (see [HTTP Mode Details](#h
 
 Both tools return:
 
-- `structuredContent` for machine-readable fields (includes `contentSize`, `cached`, and optional `resourceUri`/`resourceMimeType`/`truncated`)
+- `structuredContent` for machine-readable fields (includes `contentSize`, `cached`, and optional `resourceUri`/`resourceMimeType`/`truncated`; Markdown responses may also include `file`)
 - `content` blocks that include:
   - a `text` block containing JSON of `structuredContent`
-  - in stdio mode, a `resource` block with a `file:///...` URI containing the full content
-  - in HTTP mode, a `resource` block when inline content is available; large payloads include a `resource_link` block when cache is enabled
+  - in stdio mode, a `resource` block with a `file:///...` URI embedding the full content
+  - in HTTP mode, a `resource` block when inline content is available
+  - when content exceeds `MAX_INLINE_CONTENT_CHARS` and cache is enabled, a `resource_link` block points to `superfetch://cache/...` and `structuredContent.resourceUri` is set
 
-If content exceeds `MAX_INLINE_CONTENT_CHARS` and cache is disabled, the server truncates output and appends `...[truncated]`.
+If content exceeds `MAX_INLINE_CONTENT_CHARS` and cache is disabled, the server truncates output, appends `...[truncated]`, and sets `truncated: true`.
 
 ---
 
@@ -305,16 +306,19 @@ If content exceeds `MAX_INLINE_CONTENT_CHARS` and cache is disabled, the server 
 
 Fetches a webpage and converts it to AI-readable JSONL format with semantic content blocks. You can also request Markdown with `format: "markdown"`.
 
-| Parameter            | Type                  | Default   | Description                                   |
-| -------------------- | --------------------- | --------- | --------------------------------------------- |
-| `url`                | string                | required  | URL to fetch                                  |
-| `format`             | "jsonl" \| "markdown" | `"jsonl"` | Output format                                 |
-| `extractMainContent` | boolean               | `true`    | Use Readability to extract main content       |
-| `includeMetadata`    | boolean               | `true`    | Include page metadata                         |
-| `maxContentLength`   | number                | -         | Maximum content length in characters          |
-| `customHeaders`      | object                | -         | Custom HTTP headers (sanitized)               |
-| `timeout`            | number                | `30000`   | Request timeout in milliseconds (1000-120000) |
-| `retries`            | number                | `3`       | Number of retry attempts (1-10)               |
+| Parameter              | Type                  | Default                            | Description                                            |
+| ---------------------- | --------------------- | ---------------------------------- | ------------------------------------------------------ |
+| `url`                  | string                | required                           | URL to fetch                                           |
+| `format`               | "jsonl" \| "markdown" | `"jsonl"`                          | Output format                                          |
+| `includeContentBlocks` | boolean               | `true` (jsonl), `false` (markdown) | Include content block counts when `format: "markdown"` |
+| `extractMainContent`   | boolean               | `true`                             | Use Readability to extract main content                |
+| `includeMetadata`      | boolean               | `true`                             | Include page metadata                                  |
+| `maxContentLength`     | number                | -                                  | Maximum content length in characters (max 5,242,880)   |
+| `customHeaders`        | object                | -                                  | Custom HTTP headers (sanitized)                        |
+| `timeout`              | number                | `30000`                            | Request timeout in milliseconds (1000-120000)          |
+| `retries`              | number                | `3`                                | Number of retry attempts (1-10)                        |
+
+When `format: "markdown"` and `includeContentBlocks` is `false`, `contentBlocks` will be `0`.
 
 **Example `structuredContent`:**
 
@@ -337,15 +341,15 @@ Fetches a webpage and converts it to AI-readable JSONL format with semantic cont
 
 Fetches a webpage and converts it to clean Markdown with optional frontmatter.
 
-| Parameter            | Type    | Default  | Description                                   |
-| -------------------- | ------- | -------- | --------------------------------------------- |
-| `url`                | string  | required | URL to fetch                                  |
-| `extractMainContent` | boolean | `true`   | Extract main content only                     |
-| `includeMetadata`    | boolean | `true`   | Include YAML frontmatter                      |
-| `maxContentLength`   | number  | -        | Maximum content length in characters          |
-| `customHeaders`      | object  | -        | Custom HTTP headers (sanitized)               |
-| `timeout`            | number  | `30000`  | Request timeout in milliseconds (1000-120000) |
-| `retries`            | number  | `3`      | Number of retry attempts (1-10)               |
+| Parameter            | Type    | Default  | Description                                          |
+| -------------------- | ------- | -------- | ---------------------------------------------------- |
+| `url`                | string  | required | URL to fetch                                         |
+| `extractMainContent` | boolean | `true`   | Extract main content only                            |
+| `includeMetadata`    | boolean | `true`   | Include YAML frontmatter                             |
+| `maxContentLength`   | number  | -        | Maximum content length in characters (max 5,242,880) |
+| `customHeaders`      | object  | -        | Custom HTTP headers (sanitized)                      |
+| `timeout`            | number  | `30000`  | Request timeout in milliseconds (1000-120000)        |
+| `retries`            | number  | `3`      | Number of retry attempts (1-10)                      |
 
 **Example `structuredContent`:**
 
@@ -373,9 +377,9 @@ Fetches a webpage and converts it to clean Markdown with optional frontmatter.
 ### Large Content Handling
 
 - Inline limit is configurable via `MAX_INLINE_CONTENT_CHARS` (see `CONFIGURATION.md`).
-- If content exceeds the limit and cache is enabled, responses include `resourceUri` and a `resource_link` block.
-- If cache is disabled, content is truncated with `...[truncated]`.
-- Use `maxContentLength` per request to enforce a lower limit.
+- If content exceeds the limit and cache is enabled, responses include `resourceUri`/`resourceMimeType` and a `resource_link` block.
+- If cache is disabled, content is truncated with `...[truncated]` and `truncated: true`.
+- Use `maxContentLength` per request to enforce a lower limit (hard cap: 5,242,880 characters).
 - Upstream fetch size is capped at 10 MB of HTML; larger responses fail.
 
 ---
@@ -446,7 +450,11 @@ HTTP mode uses the MCP Streamable HTTP transport. The workflow is:
 2. The server returns `mcp-session-id` in the response headers.
 3. Use that header for subsequent `POST /mcp`, `GET /mcp`, and `DELETE /mcp` requests.
 
+`GET /mcp` and `DELETE /mcp` require `mcp-session-id`. `POST /mcp` without an `initialize` request will return 400.
+
 If `MAX_SESSIONS` is reached, the server evicts the oldest session when possible, otherwise returns a 503.
+
+Host header validation is always enforced in HTTP mode. When binding to `0.0.0.0` or `::`, set `ALLOWED_HOSTS` to the hostnames clients will send. If an `Origin` header is present, it must be allowed by `ALLOWED_ORIGINS` or `CORS_ALLOW_ALL`.
 
 ---
 
@@ -473,17 +481,22 @@ JSONL output includes semantic content blocks:
 
 Blocked destinations include:
 
-- Localhost and loopback addresses
-- Private IP ranges (`10.x.x.x`, `172.16-31.x.x`, `192.168.x.x`)
-- Cloud metadata endpoints (AWS, GCP, Azure)
-- IPv6 link-local and unique local addresses
+- Loopback and unspecified addresses (`127.0.0.0/8`, `::1`, `0.0.0.0`, `::`)
+- Private/ULA ranges (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `fc00::/7`)
+- Link-local and shared address space (`169.254.0.0/16`, `100.64.0.0/10`, `fe80::/10`)
+- Multicast/reserved ranges (`224.0.0.0/4`, `240.0.0.0/4`, `ff00::/8`)
+- IPv6 transition ranges (`64:ff9b::/96`, `64:ff9b:1::/48`, `2001::/32`, `2002::/16`)
+- Cloud metadata endpoints (AWS/GCP/Azure/Alibaba) like `169.254.169.254`, `metadata.google.internal`, `metadata.azure.com`, `100.100.100.200`, `instance-data`
 - Internal suffixes such as `.local` and `.internal`
+
+DNS resolution is performed and blocked if any resolved IP matches a blocked range.
 
 ### URL Validation
 
 - Only `http` and `https` URLs
 - No embedded credentials in URLs
 - Max URL length: 2048 characters
+- Hostnames ending in `.local` or `.internal` are rejected
 
 ### Header Sanitization
 
@@ -491,7 +504,7 @@ Blocked headers: `host`, `authorization`, `cookie`, `x-forwarded-for`, `x-real-i
 
 ### Rate Limiting
 
-Rate limiting thresholds are configurable via `RATE_LIMIT_MAX` and `RATE_LIMIT_WINDOW_MS` (see `CONFIGURATION.md`).
+Rate limiting applies to `/mcp` and `/mcp/downloads` and is configurable via `RATE_LIMIT_ENABLED`, `RATE_LIMIT_MAX`, `RATE_LIMIT_WINDOW_MS`, and `RATE_LIMIT_CLEANUP_MS` (see `CONFIGURATION.md`).
 
 ---
 
