@@ -1,4 +1,5 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 
 import {
   FETCH_MARKDOWN_TOOL_DESCRIPTION,
@@ -17,7 +18,15 @@ import {
   fetchUrlOutputSchema,
 } from './schemas.js';
 
-const TOOL_DEFINITIONS = [
+const TOOL_DEFINITIONS: readonly {
+  name: string;
+  title: string;
+  description: string;
+  inputSchema: typeof fetchUrlInputSchema | typeof fetchMarkdownInputSchema;
+  outputSchema: typeof fetchUrlOutputSchema | typeof fetchMarkdownOutputSchema;
+  handler: typeof fetchUrlToolHandler | typeof fetchMarkdownToolHandler;
+  annotations: ToolAnnotations;
+}[] = [
   {
     name: FETCH_URL_TOOL_NAME,
     title: 'Fetch URL',
@@ -25,6 +34,12 @@ const TOOL_DEFINITIONS = [
     inputSchema: fetchUrlInputSchema,
     outputSchema: fetchUrlOutputSchema,
     handler: fetchUrlToolHandler,
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
   },
   {
     name: FETCH_MARKDOWN_TOOL_NAME,
@@ -33,8 +48,14 @@ const TOOL_DEFINITIONS = [
     inputSchema: fetchMarkdownInputSchema,
     outputSchema: fetchMarkdownOutputSchema,
     handler: fetchMarkdownToolHandler,
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
   },
-] as const;
+];
 
 export function registerTools(server: McpServer): void {
   for (const tool of TOOL_DEFINITIONS) {
@@ -45,6 +66,7 @@ export function registerTools(server: McpServer): void {
         description: tool.description,
         inputSchema: tool.inputSchema,
         outputSchema: tool.outputSchema,
+        annotations: tool.annotations,
       },
       tool.handler
     );
