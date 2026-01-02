@@ -540,7 +540,7 @@ Rate limiting applies to `/mcp` and `/mcp/downloads` and is configurable via `RA
 | HTML Parsing       | Cheerio ^1.1.2, LinkeDOM ^0.18.12 |
 | Markdown           | Turndown ^7.2.2                   |
 | HTTP               | Express ^5.2.1, undici ^6.22.0    |
-| Validation         | Zod ^3.24.1                       |
+| Validation         | Zod ^4.3.4                        |
 
 ---
 

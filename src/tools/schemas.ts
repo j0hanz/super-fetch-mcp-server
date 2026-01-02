@@ -13,7 +13,7 @@ const customHeadersSchema = z
     z.string().max(MAX_HEADER_VALUE_LENGTH)
   )
   .refine((headers) => Object.keys(headers).length <= MAX_HEADER_COUNT, {
-    message: `customHeaders must have at most ${MAX_HEADER_COUNT} entries`,
+    error: `customHeaders must have at most ${MAX_HEADER_COUNT} entries`,
   });
 
 const requestOptionsSchema = z.object({
@@ -87,62 +87,56 @@ const fileDownloadSchema = z.object({
   expiresAt: z.string().describe('ISO timestamp when download expires'),
 });
 
-export const fetchUrlInputSchema = requestOptionsSchema
-  .extend({
-    url: z
-      .string()
-      .min(1)
-      .max(config.constants.maxUrlLength)
-      .describe('The URL to fetch'),
-  })
-  .merge(extractionOptionsSchema)
-  .merge(formatOptionsSchema)
-  .strict();
+export const fetchUrlInputSchema = z.strictObject({
+  ...requestOptionsSchema.shape,
+  url: z
+    .string()
+    .min(1)
+    .max(config.constants.maxUrlLength)
+    .describe('The URL to fetch'),
+  ...extractionOptionsSchema.shape,
+  ...formatOptionsSchema.shape,
+});
 
-export const fetchMarkdownInputSchema = requestOptionsSchema
-  .extend({
-    url: z
-      .string()
-      .min(1)
-      .max(config.constants.maxUrlLength)
-      .describe('The URL to fetch'),
-  })
-  .merge(extractionOptionsSchema)
-  .strict();
+export const fetchMarkdownInputSchema = z.strictObject({
+  ...requestOptionsSchema.shape,
+  url: z
+    .string()
+    .min(1)
+    .max(config.constants.maxUrlLength)
+    .describe('The URL to fetch'),
+  ...extractionOptionsSchema.shape,
+});
 
-export const fetchUrlOutputSchema = z
-  .object({
-    url: z.string().describe('The fetched URL'),
-    title: z.string().optional().describe('Page title'),
-    contentBlocks: z
-      .number()
-      .describe('Number of content blocks extracted (JSONL only)'),
-    fetchedAt: z
-      .string()
-      .describe('ISO timestamp of when the content was fetched'),
-    format: z.enum(['jsonl', 'markdown']).describe('Output format used'),
-    content: z
-      .string()
-      .optional()
-      .describe('The extracted content in JSONL or Markdown format'),
-  })
-  .merge(resourceFieldsSchema)
-  .strict();
+export const fetchUrlOutputSchema = z.strictObject({
+  url: z.string().describe('The fetched URL'),
+  title: z.string().optional().describe('Page title'),
+  contentBlocks: z
+    .number()
+    .describe('Number of content blocks extracted (JSONL only)'),
+  fetchedAt: z
+    .string()
+    .describe('ISO timestamp of when the content was fetched'),
+  format: z.enum(['jsonl', 'markdown']).describe('Output format used'),
+  content: z
+    .string()
+    .optional()
+    .describe('The extracted content in JSONL or Markdown format'),
+  ...resourceFieldsSchema.shape,
+});
 
-export const fetchMarkdownOutputSchema = z
-  .object({
-    url: z.string().describe('The fetched URL'),
-    title: z.string().optional().describe('Page title'),
-    fetchedAt: z
-      .string()
-      .describe('ISO timestamp of when the content was fetched'),
-    markdown: z
-      .string()
-      .optional()
-      .describe('The extracted content in Markdown format'),
-    file: fileDownloadSchema
-      .optional()
-      .describe('Download information when content is cached'),
-  })
-  .merge(resourceFieldsSchema)
-  .strict();
+export const fetchMarkdownOutputSchema = z.strictObject({
+  url: z.string().describe('The fetched URL'),
+  title: z.string().optional().describe('Page title'),
+  fetchedAt: z
+    .string()
+    .describe('ISO timestamp of when the content was fetched'),
+  markdown: z
+    .string()
+    .optional()
+    .describe('The extracted content in Markdown format'),
+  file: fileDownloadSchema
+    .optional()
+    .describe('Download information when content is cached'),
+  ...resourceFieldsSchema.shape,
+});
