@@ -2,26 +2,27 @@ import type { ToolContentBlock } from './runtime.js';
 
 interface RequestOptions {
   /** Custom HTTP headers for the request */
-  customHeaders?: Record<string, string>;
+  customHeaders?: Record<string, string> | undefined;
   /** Request timeout in milliseconds (1000-120000) */
-  timeout?: number;
+  timeout?: number | undefined;
   /** Number of retry attempts (1-10) */
-  retries?: number;
+  retries?: number | undefined;
 }
 
 export interface FetchUrlInput extends RequestOptions {
   url: string;
-  extractMainContent?: boolean;
-  includeMetadata?: boolean;
-  maxContentLength?: number;
-  format?: 'jsonl' | 'markdown';
+  extractMainContent?: boolean | undefined;
+  includeMetadata?: boolean | undefined;
+  maxContentLength?: number | undefined;
+  format?: 'jsonl' | 'markdown' | undefined;
+  includeContentBlocks?: boolean | undefined;
 }
 
 export interface FetchMarkdownInput extends RequestOptions {
   url: string;
-  extractMainContent?: boolean;
-  includeMetadata?: boolean;
-  maxContentLength?: number;
+  extractMainContent?: boolean | undefined;
+  includeMetadata?: boolean | undefined;
+  maxContentLength?: number | undefined;
 }
 
 export interface FileDownloadInfo {

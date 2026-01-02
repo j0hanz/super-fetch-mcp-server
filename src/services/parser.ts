@@ -100,11 +100,16 @@ function extractMetadata($: CheerioAPI): ExtractedMetadata {
     }
   }
 
-  return {
-    title: resolveMetaField(state, 'title'),
-    description: resolveMetaField(state, 'description'),
-    author: resolveMetaField(state, 'author'),
-  };
+  const metadata: ExtractedMetadata = {};
+  const title = resolveMetaField(state, 'title');
+  const description = resolveMetaField(state, 'description');
+  const author = resolveMetaField(state, 'author');
+
+  if (title !== undefined) metadata.title = title;
+  if (description !== undefined) metadata.description = description;
+  if (author !== undefined) metadata.author = author;
+
+  return metadata;
 }
 function parseHeading($: CheerioAPI, element: Element): HeadingBlock | null {
   const rawText = sanitizeText($(element).text());
@@ -160,11 +165,16 @@ function parseCode($: CheerioAPI, element: Element): CodeBlock | null {
     resolveLanguageFromAttributes(className, dataLang) ??
     detectLanguageFromCode(text);
 
-  return {
+  const block: CodeBlock = {
     type: 'code',
-    language,
     text,
   };
+
+  if (language !== undefined) {
+    block.language = language;
+  }
+
+  return block;
 }
 
 function parseTable($: CheerioAPI, element: Element): TableBlock | null {
@@ -201,22 +211,31 @@ function parseTable($: CheerioAPI, element: Element): TableBlock | null {
 
   if (rows.length === 0) return null;
 
-  return {
+  const table: TableBlock = {
     type: 'table',
-    headers: headers.length > 0 ? headers : undefined,
     rows,
   };
+
+  if (headers.length > 0) {
+    table.headers = headers;
+  }
+
+  return table;
 }
 
 function parseImage($: CheerioAPI, element: Element): ImageBlock | null {
   const src = $(element).attr('src');
   if (!src) return null;
 
-  return {
+  const alt = $(element).attr('alt');
+  const image: ImageBlock = {
     type: 'image',
     src,
-    alt: $(element).attr('alt') ?? undefined,
   };
+  if (alt !== undefined) {
+    image.alt = alt;
+  }
+  return image;
 }
 
 function parseBlockquote(

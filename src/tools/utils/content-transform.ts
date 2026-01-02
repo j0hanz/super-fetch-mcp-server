@@ -35,6 +35,10 @@ interface ContentLengthOptions {
 }
 
 interface MarkdownOptions extends ExtractionOptions, ContentLengthOptions {}
+interface MarkdownWithBlocksOptions
+  extends ExtractionOptions, ContentLengthOptions {
+  readonly includeContentBlocks?: boolean;
+}
 
 const TITLE_PATTERN = /<title[^>]*>([\s\S]*?)<\/title>/i;
 
@@ -212,9 +216,15 @@ export function transformHtmlToMarkdown(
 export function transformHtmlToMarkdownWithBlocks(
   html: string,
   url: string,
-  options: ExtractionOptions & ContentLengthOptions
+  options: MarkdownWithBlocksOptions
 ): JsonlTransformResult {
-  if (!options.extractMainContent && options.includeMetadata) {
+  const includeContentBlocks = options.includeContentBlocks ?? true;
+
+  if (
+    includeContentBlocks &&
+    !options.extractMainContent &&
+    options.includeMetadata
+  ) {
     const parsed = parseHtmlWithMetadata(html);
     const context: ContentSource = {
       sourceHtml: html,
@@ -241,7 +251,9 @@ export function transformHtmlToMarkdownWithBlocks(
   }
 
   const context = resolveContentSource(html, url, options);
-  const contentBlocks = parseHtml(context.sourceHtml);
+  const contentBlocks = includeContentBlocks
+    ? parseHtml(context.sourceHtml)
+    : [];
   const { content, truncated } = buildMarkdownPayload(
     context,
     options.maxContentLength

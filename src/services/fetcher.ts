@@ -149,11 +149,20 @@ function buildRequestContext(options?: FetchOptions): {
   headers: Headers;
   signal?: AbortSignal;
 } {
-  return {
+  const context: {
+    timeoutMs: number;
+    headers: Headers;
+    signal?: AbortSignal;
+  } = {
     timeoutMs: options?.timeout ?? config.fetcher.timeout,
     headers: buildHeaders(options?.customHeaders),
-    signal: options?.signal,
   };
+
+  if (options?.signal) {
+    context.signal = options.signal;
+  }
+
+  return context;
 }
 
 async function runFetch(

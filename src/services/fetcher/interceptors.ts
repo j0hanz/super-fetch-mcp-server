@@ -129,15 +129,23 @@ function buildResponseMeta(
   contentSize: number | undefined,
   duration: number
 ): { contentType?: string; duration: string; size?: string } {
-  const contentType = response.headers.get('content-type') ?? undefined;
   const contentLength =
     response.headers.get('content-length') ?? contentSize?.toString();
 
-  return {
-    contentType,
+  const meta: { contentType?: string; duration: string; size?: string } = {
     duration: `${Math.round(duration)}ms`,
-    size: contentLength,
   };
+
+  const contentType = response.headers.get('content-type');
+  if (contentType !== null) {
+    meta.contentType = contentType;
+  }
+
+  if (contentLength !== undefined) {
+    meta.size = contentLength;
+  }
+
+  return meta;
 }
 
 function logSlowRequestIfNeeded(
@@ -160,17 +168,24 @@ export function recordFetchError(
   const duration = performance.now() - context.startTime;
   const err = error instanceof Error ? error : new Error(String(error));
   const code = isSystemError(err) ? err.code : undefined;
-
-  publishFetchEvent({
+  const event: FetchChannelEvent = {
     v: 1,
     type: 'error',
     requestId: context.requestId,
     url: context.url,
     error: err.message,
-    code,
-    status,
     duration,
-  });
+  };
+
+  if (code !== undefined) {
+    event.code = code;
+  }
+
+  if (status !== undefined) {
+    event.status = status;
+  }
+
+  publishFetchEvent(event);
 
   const log = status === 429 ? logWarn : logError;
   log('HTTP Request Error', {

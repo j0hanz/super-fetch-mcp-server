@@ -1,5 +1,6 @@
 import { config } from '../../config/index.js';
 import type {
+  FetchPipelineOptions,
   PipelineResult,
   ToolContentBlock,
 } from '../../config/types/runtime.js';
@@ -23,6 +24,7 @@ interface SharedFetchOptions<T extends { content: string }> {
   readonly extractMainContent: boolean;
   readonly includeMetadata: boolean;
   readonly maxContentLength?: number;
+  readonly includeContentBlocks?: boolean;
   readonly cacheVariant?: string;
   readonly customHeaders?: Record<string, string>;
   readonly retries?: number;
@@ -46,22 +48,44 @@ export async function performSharedFetch<T extends { content: string }>(
       includeMetadata: options.includeMetadata,
       maxContentLength: options.maxContentLength,
       ...(options.cacheVariant ? { variant: options.cacheVariant } : {}),
-      ...(options.format === 'markdown' ? {} : { contentBlocks: true }),
+      ...(options.format === 'markdown'
+        ? { includeContentBlocks: options.includeContentBlocks }
+        : { contentBlocks: true }),
     },
     options.customHeaders
   );
 
-  const pipeline = await executeFetchPipeline<T>({
+  const pipelineOptions: FetchPipelineOptions<T> = {
     url: options.url,
     cacheNamespace,
-    customHeaders: options.customHeaders,
-    retries: options.retries,
-    timeout: options.timeout,
-    cacheVary,
     transform: options.transform,
-    serialize: options.serialize,
-    deserialize: options.deserialize,
-  });
+  };
+
+  if (options.customHeaders !== undefined) {
+    pipelineOptions.customHeaders = options.customHeaders;
+  }
+
+  if (options.retries !== undefined) {
+    pipelineOptions.retries = options.retries;
+  }
+
+  if (options.timeout !== undefined) {
+    pipelineOptions.timeout = options.timeout;
+  }
+
+  if (cacheVary !== undefined) {
+    pipelineOptions.cacheVary = cacheVary;
+  }
+
+  if (options.serialize !== undefined) {
+    pipelineOptions.serialize = options.serialize;
+  }
+
+  if (options.deserialize !== undefined) {
+    pipelineOptions.deserialize = options.deserialize;
+  }
+
+  const pipeline = await executeFetchPipeline<T>(pipelineOptions);
 
   const inlineResult = applyInlineContentLimit(
     pipeline.data.content,
@@ -83,11 +107,19 @@ interface DownloadContext {
 export function getFileDownloadInfo(
   context: DownloadContext
 ): FileDownloadInfo | null {
-  return buildFileDownloadInfo({
+  const infoOptions: { cacheKey: string | null; url: string } = {
     cacheKey: context.cacheKey,
     url: context.url,
-    title: context.title,
-  });
+  };
+
+  if (context.title !== undefined) {
+    return buildFileDownloadInfo({
+      ...infoOptions,
+      title: context.title,
+    });
+  }
+
+  return buildFileDownloadInfo(infoOptions);
 }
 
 export function getInlineErrorResponse(
@@ -136,13 +168,18 @@ function buildResourceLink(
     return null;
   }
 
-  return {
+  const block: ToolContentBlock = {
     type: 'resource_link',
     uri: inlineResult.resourceUri,
     name,
-    mimeType: inlineResult.resourceMimeType,
     description: `Content exceeds inline limit (${config.constants.maxInlineContentChars} chars)`,
   };
+
+  if (inlineResult.resourceMimeType !== undefined) {
+    block.mimeType = inlineResult.resourceMimeType;
+  }
+
+  return block;
 }
 
 function buildEmbeddedResource(

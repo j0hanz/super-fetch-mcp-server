@@ -240,17 +240,23 @@ function buildCacheEntry(
   content: string,
   metadata: CacheEntryMetadata
 ): CacheEntry {
-  return {
+  const entry: CacheEntry = {
     url: metadata.url,
-    title: metadata.title,
     content,
     fetchedAt: new Date().toISOString(),
     expiresAt: new Date(Date.now() + config.cache.ttl * 1000).toISOString(),
   };
+
+  if (metadata.title !== undefined) {
+    entry.title = metadata.title;
+  }
+
+  return entry;
 }
 
 function persistCacheEntry(cacheKey: string, entry: CacheEntry): void {
   const expiresAt = Date.now() + config.cache.ttl * 1000;
   contentCache.set(cacheKey, { entry, expiresAt });
+  enforceMaxKeys();
   emitCacheUpdate(cacheKey);
 }

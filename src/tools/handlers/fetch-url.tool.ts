@@ -36,6 +36,7 @@ interface FetchUrlOptions {
   readonly includeMetadata: boolean;
   readonly maxContentLength?: number;
   readonly format: Format;
+  readonly includeContentBlocks: boolean;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -73,19 +74,31 @@ function deserializeJsonlTransformResult(
 }
 
 function resolveFetchUrlOptions(input: FetchUrlInput): FetchUrlOptions {
+  const format = input.format ?? 'jsonl';
   return {
     extractMainContent:
       input.extractMainContent ?? config.extraction.extractMainContent,
     includeMetadata: input.includeMetadata ?? config.extraction.includeMetadata,
-    maxContentLength: input.maxContentLength,
-    format: input.format ?? 'jsonl',
+    format,
+    includeContentBlocks:
+      input.includeContentBlocks ?? (format === 'markdown' ? false : true),
+    ...(input.maxContentLength !== undefined && {
+      maxContentLength: input.maxContentLength,
+    }),
   };
 }
 
 function buildFetchUrlTransform(options: FetchUrlOptions) {
   return (html: string, url: string) =>
     options.format === 'markdown'
-      ? transformHtmlToMarkdownWithBlocks(html, url, options)
+      ? transformHtmlToMarkdownWithBlocks(html, url, {
+          extractMainContent: options.extractMainContent,
+          includeMetadata: options.includeMetadata,
+          ...(options.maxContentLength !== undefined && {
+            maxContentLength: options.maxContentLength,
+          }),
+          includeContentBlocks: options.includeContentBlocks,
+        })
       : transformHtmlToJsonl(html, url, options);
 }
 
@@ -127,6 +140,7 @@ function logFetchUrlStart(url: string, options: FetchUrlOptions): void {
     extractMainContent: options.extractMainContent,
     includeMetadata: options.includeMetadata,
     format: options.format,
+    includeContentBlocks: options.includeContentBlocks,
   });
 }
 
@@ -138,20 +152,28 @@ async function fetchUrlPipeline(
   pipeline: PipelineResult<JsonlTransformResult>;
   inlineResult: InlineResult;
 }> {
-  return performSharedFetch<JsonlTransformResult>({
+  const sharedOptions = {
     url,
     format: options.format,
     extractMainContent: options.extractMainContent,
     includeMetadata: options.includeMetadata,
-    maxContentLength: options.maxContentLength,
-    customHeaders: input.customHeaders,
-    retries: input.retries,
-    timeout: input.timeout,
-    cacheVariant:
-      options.format === 'markdown' ? 'markdown-with-blocks' : undefined,
+    includeContentBlocks: options.includeContentBlocks,
+    ...(options.maxContentLength !== undefined && {
+      maxContentLength: options.maxContentLength,
+    }),
+    ...(input.customHeaders !== undefined && {
+      customHeaders: input.customHeaders,
+    }),
+    ...(input.retries !== undefined && { retries: input.retries }),
+    ...(input.timeout !== undefined && { timeout: input.timeout }),
+    ...(options.format === 'markdown' && {
+      cacheVariant: 'markdown-with-blocks',
+    }),
     transform: buildFetchUrlTransform(options),
     deserialize: deserializeJsonlTransformResult,
-  });
+  };
+
+  return performSharedFetch<JsonlTransformResult>(sharedOptions);
 }
 
 function buildFetchUrlResponse(

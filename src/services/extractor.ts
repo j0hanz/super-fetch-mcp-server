@@ -118,11 +118,16 @@ function extractMetadata(document: Document): ExtractedMetadata {
   scanMetaTags(document, state);
   ensureTitleFallback(document, state);
 
-  return {
-    title: resolveMetaField(state, 'title'),
-    description: resolveMetaField(state, 'description'),
-    author: resolveMetaField(state, 'author'),
-  };
+  const metadata: ExtractedMetadata = {};
+  const title = resolveMetaField(state, 'title');
+  const description = resolveMetaField(state, 'description');
+  const author = resolveMetaField(state, 'author');
+
+  if (title !== undefined) metadata.title = title;
+  if (description !== undefined) metadata.description = description;
+  if (author !== undefined) metadata.author = author;
+
+  return metadata;
 }
 
 function isReadabilityCompatible(doc: unknown): doc is Document {
@@ -161,14 +166,24 @@ function parseReadabilityArticle(
 function mapReadabilityResult(
   parsed: NonNullable<ReturnType<Readability['parse']>>
 ): ExtractedArticle {
-  return {
-    title: toOptional(parsed.title),
-    byline: toOptional(parsed.byline),
+  const article: ExtractedArticle = {
     content: parsed.content ?? '',
     textContent: parsed.textContent ?? '',
-    excerpt: toOptional(parsed.excerpt),
-    siteName: toOptional(parsed.siteName),
   };
+
+  const title = toOptional(parsed.title);
+  if (title !== undefined) article.title = title;
+
+  const byline = toOptional(parsed.byline);
+  if (byline !== undefined) article.byline = byline;
+
+  const excerpt = toOptional(parsed.excerpt);
+  if (excerpt !== undefined) article.excerpt = excerpt;
+
+  const siteName = toOptional(parsed.siteName);
+  if (siteName !== undefined) article.siteName = siteName;
+
+  return article;
 }
 
 function toOptional(value: string | null | undefined): string | undefined {

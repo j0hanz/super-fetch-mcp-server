@@ -135,7 +135,10 @@ export function createContextMiddleware(): (
     const requestId = randomUUID();
     const sessionId = getSessionId(req);
 
-    runWithRequestContext({ requestId, sessionId }, () => {
+    const context =
+      sessionId === undefined ? { requestId } : { requestId, sessionId };
+
+    runWithRequestContext(context, () => {
       const boundNext = bindToRequestContext(next);
       boundNext();
     });

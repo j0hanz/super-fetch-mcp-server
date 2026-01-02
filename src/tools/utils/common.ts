@@ -22,22 +22,26 @@ export function createContentMetadataBlock(
 ): MetadataBlock | undefined {
   if (!includeMetadata) return undefined;
   const now = new Date().toISOString();
-  return shouldExtractFromArticle && article
-    ? {
-        type: 'metadata',
-        title: article.title,
-        author: article.byline,
-        url,
-        fetchedAt: now,
-      }
-    : {
-        type: 'metadata',
-        title: extractedMeta.title,
-        description: extractedMeta.description,
-        author: extractedMeta.author,
-        url,
-        fetchedAt: now,
-      };
+  const metadata: MetadataBlock = {
+    type: 'metadata',
+    url,
+    fetchedAt: now,
+  };
+
+  if (shouldExtractFromArticle && article) {
+    if (article.title !== undefined) metadata.title = article.title;
+    if (article.byline !== undefined) metadata.author = article.byline;
+    return metadata;
+  }
+
+  if (extractedMeta.title !== undefined) metadata.title = extractedMeta.title;
+  if (extractedMeta.description !== undefined) {
+    metadata.description = extractedMeta.description;
+  }
+  if (extractedMeta.author !== undefined)
+    metadata.author = extractedMeta.author;
+
+  return metadata;
 }
 
 export function truncateContent(

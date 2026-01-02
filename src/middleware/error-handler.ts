@@ -42,7 +42,7 @@ function buildErrorResponse(err: Error): ErrorResponse {
     },
   };
 
-  if (process.env.NODE_ENV === 'development') {
+  if (process.env.NODE_ENV === 'development' && err.stack) {
     response.error.stack = err.stack;
   }
 

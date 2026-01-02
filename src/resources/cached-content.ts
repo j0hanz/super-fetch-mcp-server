@@ -235,14 +235,20 @@ function resolveStringParam(value: unknown): string | null {
 
 function parseCachedPayload(raw: string): CachedPayload | null {
   try {
-    const parsed = JSON.parse(raw) as unknown;
-    if (parsed && typeof parsed === 'object') {
-      return parsed as CachedPayload;
-    }
-    return null;
+    const parsed: unknown = JSON.parse(raw);
+    return isCachedPayload(parsed) ? parsed : null;
   } catch {
     return null;
   }
+}
+
+function isCachedPayload(value: unknown): value is CachedPayload {
+  if (!value || typeof value !== 'object') return false;
+  const record = value as Record<string, unknown>;
+  return (
+    (record.content === undefined || typeof record.content === 'string') &&
+    (record.markdown === undefined || typeof record.markdown === 'string')
+  );
 }
 
 function resolvePayloadContent(

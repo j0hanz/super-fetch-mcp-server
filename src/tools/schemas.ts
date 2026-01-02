@@ -56,6 +56,10 @@ const formatOptionsSchema = z.object({
     .enum(['jsonl', 'markdown'])
     .default('jsonl')
     .describe('Output format'),
+  includeContentBlocks: z
+    .boolean()
+    .optional()
+    .describe('Include content block counts when format=markdown'),
 });
 
 const resourceFieldsSchema = z.object({

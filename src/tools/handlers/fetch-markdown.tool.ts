@@ -78,7 +78,9 @@ function resolveMarkdownOptions(input: FetchMarkdownInput): MarkdownOptions {
     extractMainContent:
       input.extractMainContent ?? config.extraction.extractMainContent,
     includeMetadata: input.includeMetadata ?? config.extraction.includeMetadata,
-    maxContentLength: input.maxContentLength,
+    ...(input.maxContentLength !== undefined && {
+      maxContentLength: input.maxContentLength,
+    }),
   };
 }
 
@@ -132,18 +134,24 @@ async function fetchMarkdownPipeline(
   pipeline: PipelineResult<MarkdownPipelineResult>;
   inlineResult: InlineResult;
 }> {
-  return performSharedFetch<MarkdownPipelineResult>({
+  const sharedOptions = {
     url,
-    format: 'markdown',
+    format: 'markdown' as const,
     extractMainContent: options.extractMainContent,
     includeMetadata: options.includeMetadata,
-    maxContentLength: options.maxContentLength,
-    customHeaders: input.customHeaders,
-    retries: input.retries,
-    timeout: input.timeout,
+    ...(options.maxContentLength !== undefined && {
+      maxContentLength: options.maxContentLength,
+    }),
+    ...(input.customHeaders !== undefined && {
+      customHeaders: input.customHeaders,
+    }),
+    ...(input.retries !== undefined && { retries: input.retries }),
+    ...(input.timeout !== undefined && { timeout: input.timeout }),
     transform: buildMarkdownTransform(transformOptions),
     deserialize: deserializeMarkdownPipelineResult,
-  });
+  };
+
+  return performSharedFetch<MarkdownPipelineResult>(sharedOptions);
 }
 
 function buildMarkdownResponse(
@@ -210,13 +218,22 @@ async function executeFetchMarkdown(
   const inlineError = getInlineErrorResponse(inlineResult, url);
   if (inlineError) return inlineError;
 
-  const fileDownload = inlineResult.resourceUri
-    ? getFileDownloadInfo({
-        cacheKey: pipeline.cacheKey ?? null,
-        url: pipeline.url,
+  let fileDownload: FileDownloadInfo | null = null;
+  if (inlineResult.resourceUri) {
+    const downloadContext = {
+      cacheKey: pipeline.cacheKey ?? null,
+      url: pipeline.url,
+    };
+
+    if (pipeline.data.title !== undefined) {
+      fileDownload = getFileDownloadInfo({
+        ...downloadContext,
         title: pipeline.data.title,
-      })
-    : null;
+      });
+    } else {
+      fileDownload = getFileDownloadInfo(downloadContext);
+    }
+  }
 
   return buildMarkdownResponse(pipeline, inlineResult, fileDownload);
 }

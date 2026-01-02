@@ -104,11 +104,21 @@ function resolveCacheKey<T>(
 }
 
 function buildFetchOptions<T>(options: FetchPipelineOptions<T>): FetchOptions {
-  return {
-    customHeaders: options.customHeaders,
-    signal: options.signal,
-    timeout: options.timeout,
-  };
+  const fetchOptions: FetchOptions = {};
+
+  if (options.customHeaders !== undefined) {
+    fetchOptions.customHeaders = options.customHeaders;
+  }
+
+  if (options.signal !== undefined) {
+    fetchOptions.signal = options.signal;
+  }
+
+  if (options.timeout !== undefined) {
+    fetchOptions.timeout = options.timeout;
+  }
+
+  return fetchOptions;
 }
 
 function persistCache<T>(
@@ -119,10 +129,12 @@ function persistCache<T>(
 ): void {
   if (!cacheKey) return;
   const serializer = serialize ?? JSON.stringify;
-  cache.set(cacheKey, serializer(data), {
-    url: normalizedUrl,
-    title: extractTitle(data),
-  });
+  const metadata: { url: string; title?: string } = { url: normalizedUrl };
+  const title = extractTitle(data);
+  if (title !== undefined) {
+    metadata.title = title;
+  }
+  cache.set(cacheKey, serializer(data), metadata);
 }
 
 function extractTitle(value: unknown): string | undefined {

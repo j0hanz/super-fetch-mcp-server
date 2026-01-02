@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { Request, Response } from 'express';
 
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 
 import { config } from '../config/index.js';
@@ -183,7 +184,9 @@ async function createAndConnectTransport(
   const mcpServer = createMcpServer();
 
   try {
-    await mcpServer.connect(transport);
+    // StreamableHTTPServerTransport's accessor-based callbacks are not assignable
+    // to Transport under exactOptionalPropertyTypes, but are runtime-compatible.
+    await mcpServer.connect(transport as unknown as Transport);
   } catch (error) {
     clearInitTimeout();
     releaseSlot();
