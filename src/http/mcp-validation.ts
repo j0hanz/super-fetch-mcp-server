@@ -5,7 +5,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export function isMcpRequestBody(body: unknown): body is McpRequestBody {
-  if (!isRecord(body)) return false;
+  if (!isRecord(body) || Array.isArray(body)) return false;
 
   const { method, id, jsonrpc, params } = body;
   const methodValid = method === undefined || typeof method === 'string';

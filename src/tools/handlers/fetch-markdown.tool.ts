@@ -89,6 +89,13 @@ function resolveMarkdownOptions(input: FetchMarkdownInput): MarkdownOptions {
   };
 }
 
+function buildFetchMarkdownErrorDetails(): Record<string, unknown> {
+  return {
+    fetchedAt: new Date().toISOString(),
+    cached: false,
+  };
+}
+
 function buildMarkdownStructuredContent(
   pipeline: PipelineResult<MarkdownPipelineResult>,
   inlineResult: InlineResult,
@@ -210,7 +217,13 @@ export function createFetchMarkdownToolHandler(
         'fetch-markdown tool error',
         error instanceof Error ? error : undefined
       );
-      return handleToolError(error, input.url, 'Failed to fetch markdown');
+      const errorDetails = buildFetchMarkdownErrorDetails();
+      return handleToolError(
+        error,
+        input.url,
+        'Failed to fetch markdown',
+        errorDetails
+      );
     }
   };
 }
@@ -224,7 +237,12 @@ async function executeFetchMarkdown(
 ): Promise<ToolResponseBase> {
   const { url } = input;
   if (!url) {
-    return createToolErrorResponse('URL is required', '', 'VALIDATION_ERROR');
+    return createToolErrorResponse(
+      'URL is required',
+      '',
+      'VALIDATION_ERROR',
+      buildFetchMarkdownErrorDetails()
+    );
   }
 
   const options = resolveMarkdownOptions(input);
@@ -241,7 +259,11 @@ async function executeFetchMarkdown(
     transformImpl
   );
 
-  const inlineError = getInlineErrorResponse(inlineResult, url);
+  const inlineError = getInlineErrorResponse(
+    inlineResult,
+    url,
+    buildFetchMarkdownErrorDetails()
+  );
   if (inlineError) return inlineError;
 
   let fileDownload: FileDownloadInfo | null = null;

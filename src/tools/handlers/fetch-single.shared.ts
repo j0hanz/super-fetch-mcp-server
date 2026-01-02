@@ -130,10 +130,16 @@ export function getFileDownloadInfo(
 
 export function getInlineErrorResponse(
   inlineResult: InlineResult,
-  url: string
+  url: string,
+  details?: Record<string, unknown>
 ): ToolResponseBase | null {
   if (!inlineResult.error) return null;
-  return createToolErrorResponse(inlineResult.error, url, 'INTERNAL_ERROR');
+  return createToolErrorResponse(
+    inlineResult.error,
+    url,
+    'INTERNAL_ERROR',
+    details
+  );
 }
 
 export function applyInlineResultToStructuredContent(

@@ -32,13 +32,14 @@ function normalizeToolErrorCode(code: string): string {
 export function createToolErrorResponse(
   message: string,
   url: string,
-  code: string
+  code: string,
+  details: Record<string, unknown> = {}
 ): ToolErrorResponse {
   const structuredContent = {
+    ...details,
     error: message,
     url,
     errorCode: normalizeToolErrorCode(code),
-    errorType: code,
   };
 
   return {
@@ -65,26 +66,33 @@ function formatErrorMessage(
 export function handleToolError(
   error: unknown,
   url: string,
-  fallbackMessage = 'Operation failed'
+  fallbackMessage = 'Operation failed',
+  details: Record<string, unknown> = {}
 ): ToolErrorResponse {
   if (isValidationError(error)) {
-    return createToolErrorResponse(error.message, url, 'VALIDATION_ERROR');
+    return createToolErrorResponse(
+      error.message,
+      url,
+      'VALIDATION_ERROR',
+      details
+    );
   }
 
   if (error instanceof FetchError) {
     const message = formatErrorMessage(error.message, error);
-    return createToolErrorResponse(message, url, error.code);
+    return createToolErrorResponse(message, url, error.code, details);
   }
 
   if (error instanceof Error) {
     const message = formatErrorMessage(error.message, error, fallbackMessage);
-    return createToolErrorResponse(message, url, 'UNKNOWN_ERROR');
+    return createToolErrorResponse(message, url, 'UNKNOWN_ERROR', details);
   }
 
   return createToolErrorResponse(
     `${fallbackMessage}: Unknown error`,
     url,
-    'UNKNOWN_ERROR'
+    'UNKNOWN_ERROR',
+    details
   );
 }
 

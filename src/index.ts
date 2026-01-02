@@ -43,6 +43,13 @@ process.on('unhandledRejection', (reason) => {
   const error = reason instanceof Error ? reason : new Error(String(reason));
   logError('Unhandled rejection', error);
   process.stderr.write(`Unhandled rejection: ${error.message}\n`);
+
+  if (shouldAttemptShutdown()) {
+    attemptShutdown('UNHANDLED_REJECTION');
+    return;
+  }
+
+  process.exit(1);
 });
 
 try {

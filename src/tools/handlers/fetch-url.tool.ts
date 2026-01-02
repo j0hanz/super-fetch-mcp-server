@@ -88,6 +88,15 @@ function resolveFetchUrlOptions(input: FetchUrlInput): FetchUrlOptions {
   };
 }
 
+function buildFetchUrlErrorDetails(format: Format): Record<string, unknown> {
+  return {
+    contentBlocks: 0,
+    fetchedAt: new Date().toISOString(),
+    format,
+    cached: false,
+  };
+}
+
 function buildFetchUrlTransform(options: FetchUrlOptions) {
   return async (html: string, url: string): Promise<JsonlTransformResult> =>
     options.format === 'markdown'
@@ -213,7 +222,13 @@ export async function fetchUrlToolHandler(
       'fetch-url tool error',
       error instanceof Error ? error : undefined
     );
-    return handleToolError(error, input.url, 'Failed to fetch URL');
+    const errorDetails = buildFetchUrlErrorDetails(input.format ?? 'jsonl');
+    return handleToolError(
+      error,
+      input.url,
+      'Failed to fetch URL',
+      errorDetails
+    );
   }
 }
 
@@ -221,8 +236,14 @@ async function executeFetchUrl(
   input: FetchUrlInput
 ): Promise<ToolResponseBase> {
   const { url } = input;
+  const format = input.format ?? 'jsonl';
   if (!url) {
-    return createToolErrorResponse('URL is required', '', 'VALIDATION_ERROR');
+    return createToolErrorResponse(
+      'URL is required',
+      '',
+      'VALIDATION_ERROR',
+      buildFetchUrlErrorDetails(format)
+    );
   }
 
   const options = resolveFetchUrlOptions(input);
@@ -234,7 +255,11 @@ async function executeFetchUrl(
     options
   );
 
-  const inlineError = getInlineErrorResponse(inlineResult, url);
+  const inlineError = getInlineErrorResponse(
+    inlineResult,
+    url,
+    buildFetchUrlErrorDetails(options.format)
+  );
   if (inlineError) return inlineError;
   return buildFetchUrlResponse(pipeline, inlineResult, options.format);
 }

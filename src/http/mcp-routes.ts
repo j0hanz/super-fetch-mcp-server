@@ -108,17 +108,6 @@ function resolveSessionTransport(
   return session.transport;
 }
 
-function resolveSessionTransportForDelete(
-  sessionId: string | undefined,
-  options: McpSessionOptions
-): StreamableHTTPServerTransport | null {
-  if (!sessionId) return null;
-  const session = options.sessionStore.get(sessionId);
-  if (!session) return null;
-  options.sessionStore.touch(sessionId);
-  return session.transport;
-}
-
 async function handlePost(
   req: Request,
   res: Response,
@@ -161,14 +150,8 @@ async function handleDelete(
   res: Response,
   options: McpSessionOptions
 ): Promise<void> {
-  const transport = resolveSessionTransportForDelete(
-    getSessionId(req),
-    options
-  );
-  if (!transport) {
-    res.status(204).end();
-    return;
-  }
+  const transport = resolveSessionTransport(getSessionId(req), options, res);
+  if (!transport) return;
 
   await handleTransportRequest(transport, req, res);
 }

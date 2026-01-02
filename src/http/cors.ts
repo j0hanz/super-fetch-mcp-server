@@ -24,14 +24,24 @@ export function createCorsMiddleware(
 ): (req: Request, res: Response, next: NextFunction) => void {
   return (req: Request, res: Response, next: NextFunction): void => {
     const origin = resolveOrigin(req);
-    if (shouldSkipInvalidOrigin(origin)) {
-      next();
-      return;
-    }
+    if (origin) {
+      if (!isValidOrigin(origin)) {
+        res.status(403).json({
+          error: 'Origin not allowed',
+          code: 'ORIGIN_NOT_ALLOWED',
+        });
+        return;
+      }
 
-    if (!applyCorsHeaders(res, origin, options)) {
-      next();
-      return;
+      if (!isOriginAllowed(origin, options)) {
+        res.status(403).json({
+          error: 'Origin not allowed',
+          code: 'ORIGIN_NOT_ALLOWED',
+        });
+        return;
+      }
+
+      applyCorsHeaders(res, origin);
     }
 
     if (req.method === 'OPTIONS') {
@@ -47,29 +57,14 @@ function resolveOrigin(req: Request): string | undefined {
   return req.headers.origin;
 }
 
-function shouldSkipInvalidOrigin(origin: string | undefined): boolean {
-  return Boolean(origin && !isValidOrigin(origin));
-}
-
-function applyCorsHeaders(
-  res: Response,
-  origin: string | undefined,
-  options: CorsOptions
-): boolean {
-  if (isOriginAllowed(origin, options)) {
-    if (origin) {
-      res.vary('Origin');
-    }
-    res.header('Access-Control-Allow-Origin', origin ?? '*');
-    res.header('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
-    res.header(
-      'Access-Control-Allow-Headers',
-      'Content-Type, mcp-session-id, Authorization, X-API-Key'
-    );
-    res.header('Access-Control-Expose-Headers', 'mcp-session-id');
-    res.header('Access-Control-Max-Age', '86400');
-    return true;
-  }
-
-  return options.allowedOrigins.length === 0;
+function applyCorsHeaders(res: Response, origin: string): void {
+  res.vary('Origin');
+  res.header('Access-Control-Allow-Origin', origin);
+  res.header('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+  res.header(
+    'Access-Control-Allow-Headers',
+    'Content-Type, mcp-session-id, Authorization, X-API-Key'
+  );
+  res.header('Access-Control-Expose-Headers', 'mcp-session-id');
+  res.header('Access-Control-Max-Age', '86400');
 }
