@@ -89,14 +89,14 @@ const fileDownloadSchema = z.object({
 
 export const fetchUrlInputSchema = z.strictObject({
   ...requestOptionsSchema.shape,
-  url: z.url({ protocol: /^https?:$/i }).describe('The URL to fetch'),
+  url: z.url({ protocol: /^https?$/i }).describe('The URL to fetch'),
   ...extractionOptionsSchema.shape,
   ...formatOptionsSchema.shape,
 });
 
 export const fetchMarkdownInputSchema = z.strictObject({
   ...requestOptionsSchema.shape,
-  url: z.url({ protocol: /^https?:$/i }).describe('The URL to fetch'),
+  url: z.url({ protocol: /^https?$/i }).describe('The URL to fetch'),
   ...extractionOptionsSchema.shape,
 });
 
