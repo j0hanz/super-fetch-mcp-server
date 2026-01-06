@@ -10,6 +10,7 @@ import type {
 
 import { getErrorMessage } from '../utils/error-utils.js';
 
+import { FifoQueue } from './fifo-queue.js';
 import { logWarn } from './logger.js';
 
 type TransformMode = 'jsonl' | 'markdown' | 'markdown-blocks';
@@ -98,7 +99,7 @@ export function destroyTransformWorkers(): void {
 
 class TransformWorkerPool {
   private readonly workers: WorkerState[] = [];
-  private readonly queue: QueuedJob[] = [];
+  private readonly queue = new FifoQueue<QueuedJob>();
   private readonly pending = new Map<number, PendingJob>();
   private nextId = 1;
   private destroyed = false;
@@ -140,7 +141,7 @@ class TransformWorkerPool {
       this.pending.delete(id);
     }
 
-    this.queue.length = 0;
+    this.queue.clear();
   }
 
   private createWorker(): WorkerState {

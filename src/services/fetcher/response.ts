@@ -32,7 +32,7 @@ async function readStreamWithLimit(
 ): Promise<{ text: string; size: number }> {
   const decoder = new TextDecoder();
   let total = 0;
-  let text = '';
+  const parts: string[] = [];
   type WritableChunk = string | Buffer | Uint8Array;
   const toBuffer = (chunk: WritableChunk): Buffer => {
     if (typeof chunk === 'string') {
@@ -61,11 +61,13 @@ async function readStreamWithLimit(
         return;
       }
 
-      text += decoder.decode(buffer, { stream: true });
+      const decoded = decoder.decode(buffer, { stream: true });
+      if (decoded) parts.push(decoded);
       callback();
     },
     final(callback: (error?: Error | null) => void): void {
-      text += decoder.decode();
+      const decoded = decoder.decode();
+      if (decoded) parts.push(decoded);
       callback();
     },
   });
@@ -85,7 +87,7 @@ async function readStreamWithLimit(
     throw error;
   }
 
-  return { text, size: total };
+  return { text: parts.join(''), size: total };
 }
 
 export async function readResponseText(
