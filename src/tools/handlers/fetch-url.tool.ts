@@ -13,9 +13,9 @@ import {
   handleToolError,
 } from '../../utils/tool-error-handler.js';
 import {
-  transformHtmlToJsonlAsync,
-  transformHtmlToMarkdownWithBlocksAsync,
-} from '../utils/content-transform-async.js';
+  transformHtmlToJsonl,
+  transformHtmlToMarkdownWithBlocks,
+} from '../utils/content-transform.js';
 
 import {
   applyInlineResultToStructuredContent,
@@ -98,9 +98,9 @@ function buildFetchUrlErrorDetails(format: Format): Record<string, unknown> {
 }
 
 function buildFetchUrlTransform(options: FetchUrlOptions) {
-  return async (html: string, url: string): Promise<JsonlTransformResult> =>
+  return (html: string, url: string): JsonlTransformResult =>
     options.format === 'markdown'
-      ? transformHtmlToMarkdownWithBlocksAsync(html, url, {
+      ? transformHtmlToMarkdownWithBlocks(html, url, {
           extractMainContent: options.extractMainContent,
           includeMetadata: options.includeMetadata,
           ...(options.maxContentLength !== undefined && {
@@ -108,7 +108,7 @@ function buildFetchUrlTransform(options: FetchUrlOptions) {
           }),
           includeContentBlocks: options.includeContentBlocks,
         })
-      : transformHtmlToJsonlAsync(html, url, options);
+      : transformHtmlToJsonl(html, url, options);
 }
 
 function buildFetchUrlStructuredContent(

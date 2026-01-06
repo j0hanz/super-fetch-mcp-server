@@ -16,7 +16,7 @@ import {
   createToolErrorResponse,
   handleToolError,
 } from '../../utils/tool-error-handler.js';
-import { transformHtmlToMarkdownAsync } from '../utils/content-transform-async.js';
+import { transformHtmlToMarkdown } from '../utils/content-transform.js';
 
 import {
   applyInlineResultToStructuredContent,
@@ -37,7 +37,7 @@ export const FETCH_MARKDOWN_TOOL_DESCRIPTION =
 
 interface FetchMarkdownDeps {
   readonly performSharedFetch?: typeof performSharedFetch;
-  readonly transformHtmlToMarkdown?: typeof transformHtmlToMarkdownAsync;
+  readonly transformHtmlToMarkdown?: typeof transformHtmlToMarkdown;
 }
 
 interface MarkdownOptions {
@@ -132,10 +132,10 @@ function logFetchMarkdownStart(url: string, options: TransformOptions): void {
 
 function buildMarkdownTransform(
   options: TransformOptions,
-  transform: typeof transformHtmlToMarkdownAsync
+  transform: typeof transformHtmlToMarkdown
 ) {
-  return async (html: string, url: string): Promise<MarkdownPipelineResult> => {
-    const markdownResult = await transform(html, url, options);
+  return (html: string, url: string): MarkdownPipelineResult => {
+    const markdownResult = transform(html, url, options);
     return { ...markdownResult, content: markdownResult.markdown };
   };
 }
@@ -146,7 +146,7 @@ async function fetchMarkdownPipeline(
   options: MarkdownOptions,
   transformOptions: TransformOptions,
   performSharedFetchImpl: typeof performSharedFetch,
-  transformImpl: typeof transformHtmlToMarkdownAsync
+  transformImpl: typeof transformHtmlToMarkdown
 ): Promise<{
   pipeline: PipelineResult<MarkdownPipelineResult>;
   inlineResult: InlineResult;
@@ -202,8 +202,7 @@ export function createFetchMarkdownToolHandler(
   deps: FetchMarkdownDeps = {}
 ): (input: FetchMarkdownInput) => Promise<ToolResponseBase> {
   const performSharedFetchImpl = deps.performSharedFetch ?? performSharedFetch;
-  const transformImpl =
-    deps.transformHtmlToMarkdown ?? transformHtmlToMarkdownAsync;
+  const transformImpl = deps.transformHtmlToMarkdown ?? transformHtmlToMarkdown;
 
   return async (input: FetchMarkdownInput): Promise<ToolResponseBase> => {
     try {
@@ -231,7 +230,7 @@ export function createFetchMarkdownToolHandler(
 async function executeFetchMarkdown(
   input: FetchMarkdownInput,
   performSharedFetchImpl: typeof performSharedFetch,
-  transformImpl: typeof transformHtmlToMarkdownAsync
+  transformImpl: typeof transformHtmlToMarkdown
 ): Promise<ToolResponseBase> {
   const { url } = input;
   if (!url) {
