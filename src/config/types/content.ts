@@ -122,14 +122,5 @@ export interface MarkdownTransformResult {
 }
 
 export interface TransformOptions {
-  extractMainContent: boolean;
   includeMetadata: boolean;
-  maxContentLength?: number;
-}
-
-export interface JsonlTransformResult {
-  content: string;
-  contentBlocks: number;
-  title: string | undefined;
-  truncated?: boolean;
 }

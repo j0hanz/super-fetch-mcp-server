@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { fetchNormalizedUrlWithRetry } from '../dist/services/fetcher.js';
+import { fetchNormalizedUrl } from '../dist/services/fetcher.js';
 import { dispatcher as expectedDispatcher } from '../dist/services/fetcher/agents.js';
 
 test('fetch pipeline always passes the undici dispatcher into fetch()', async () => {
@@ -29,9 +29,7 @@ test('fetch pipeline always passes the undici dispatcher into fetch()', async ()
     (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch =
       mockedFetch;
 
-    const text = await fetchNormalizedUrlWithRetry('https://example.com', {
-      timeout: 5_000,
-    });
+    const text = await fetchNormalizedUrl('https://example.com');
 
     assert.equal(text, 'ok');
     assert.equal(called, true);

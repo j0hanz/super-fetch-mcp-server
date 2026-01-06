@@ -8,7 +8,6 @@ import { logDebug } from '../services/logger.js';
 
 import { generateSafeFilename } from '../utils/filename-generator.js';
 
-const VALID_NAMESPACES = new Set(['markdown', 'url']);
 const HASH_PATTERN = /^[a-f0-9.]+$/i;
 
 interface DownloadParams {
@@ -29,7 +28,7 @@ interface DownloadPayload {
 }
 
 function validateNamespace(namespace: string): boolean {
-  return VALID_NAMESPACES.has(namespace);
+  return namespace === 'markdown';
 }
 
 function validateHash(hash: string): boolean {
@@ -71,16 +70,6 @@ function respondServiceUnavailable(res: Response): void {
   });
 }
 
-function resolveContentType(namespace: string): string {
-  return namespace === 'markdown'
-    ? 'text/markdown; charset=utf-8'
-    : 'application/x-ndjson; charset=utf-8';
-}
-
-function resolveExtension(namespace: string): string {
-  return namespace === 'markdown' ? '.md' : '.jsonl';
-}
-
 function parseCachedPayload(raw: string): CachedPayload | null {
   try {
     const parsed: unknown = JSON.parse(raw);
@@ -100,21 +89,14 @@ function isCachedPayload(value: unknown): value is CachedPayload {
   );
 }
 
-function resolvePayloadContent(
-  payload: CachedPayload,
-  namespace: string
-): string | null {
-  if (namespace === 'markdown') {
-    if (typeof payload.markdown === 'string') {
-      return payload.markdown;
-    }
-    if (typeof payload.content === 'string') {
-      return payload.content;
-    }
-    return null;
+function resolvePayloadContent(payload: CachedPayload): string | null {
+  if (typeof payload.markdown === 'string') {
+    return payload.markdown;
   }
-
-  return typeof payload.content === 'string' ? payload.content : null;
+  if (typeof payload.content === 'string') {
+    return payload.content;
+  }
+  return null;
 }
 
 function resolveDownloadPayload(
@@ -124,7 +106,7 @@ function resolveDownloadPayload(
   const payload = parseCachedPayload(cacheEntry.content);
   if (!payload) return null;
 
-  const content = resolvePayloadContent(payload, params.namespace);
+  const content = resolvePayloadContent(payload);
   if (!content) return null;
 
   const safeTitle =
@@ -133,12 +115,12 @@ function resolveDownloadPayload(
     cacheEntry.url,
     cacheEntry.title ?? safeTitle,
     params.hash,
-    resolveExtension(params.namespace)
+    '.md'
   );
 
   return {
     content,
-    contentType: resolveContentType(params.namespace),
+    contentType: 'text/markdown; charset=utf-8',
     fileName,
   };
 }

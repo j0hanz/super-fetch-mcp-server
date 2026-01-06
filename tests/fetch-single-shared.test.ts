@@ -12,7 +12,7 @@ const executeFetchPipeline = async (options: unknown) => {
     fromCache: false,
     url: 'https://example.com',
     fetchedAt: new Date().toISOString(),
-    cacheKey: 'url:abc',
+    cacheKey: 'markdown:abc',
   };
 };
 
@@ -21,22 +21,20 @@ describe('performSharedFetch', () => {
     executeFetchPipelineCalls = [];
   });
 
-  it('forwards timeout to executeFetchPipeline', async () => {
+  it('forwards options to executeFetchPipeline', async () => {
     await performSharedFetch(
       {
         url: 'https://example.com',
-        format: 'markdown',
-        extractMainContent: true,
         includeMetadata: true,
-        timeout: 1234,
         transform: () => ({ content: 'hello' }),
       },
       { executeFetchPipeline }
     );
 
     const call = executeFetchPipelineCalls[0] as
-      | { timeout?: number }
+      | { url?: string; cacheNamespace?: string }
       | undefined;
-    assert.equal(call?.timeout, 1234);
+    assert.equal(call?.url, 'https://example.com');
+    assert.equal(call?.cacheNamespace, 'markdown');
   });
 });

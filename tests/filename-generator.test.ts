@@ -98,14 +98,5 @@ describe('generateSafeFilename', () => {
       generateSafeFilename('https://example.com/data/export', undefined, 'abc'),
       'export.md'
     );
-    assert.equal(
-      generateSafeFilename(
-        'https://example.com/data/export',
-        undefined,
-        'abc',
-        '.jsonl'
-      ),
-      'export.jsonl'
-    );
   });
 });

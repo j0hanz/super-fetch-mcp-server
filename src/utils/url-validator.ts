@@ -186,12 +186,8 @@ export function normalizeUrl(urlString: string): {
   return { normalizedUrl: url.href, hostname };
 }
 
-export async function validateAndNormalizeUrl(
-  urlString: string
-): Promise<string> {
-  const { normalizedUrl } = normalizeUrl(urlString);
-  await Promise.resolve();
-  return normalizedUrl;
+export function validateAndNormalizeUrl(urlString: string): string {
+  return normalizeUrl(urlString).normalizedUrl;
 }
 
 const VALIDATION_ERROR_CODE = 'VALIDATION_ERROR';

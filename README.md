@@ -10,9 +10,9 @@
 
 [![Install in Cursor](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/install-mcp?name=superfetch&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIkBqMGhhbnovc3VwZXJmZXRjaEBsYXRlc3QiLCItLXN0ZGlvIl19)
 
-A [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server that fetches web pages, extracts readable content with Mozilla Readability, and returns AI-friendly JSONL or Markdown.
+A [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server that fetches web pages, extracts readable content with Mozilla Readability, and returns AI-friendly Markdown.
 
-[Quick Start](#quick-start) | [How to Choose a Tool](#how-to-choose-a-tool) | [Tools](#available-tools) | [Resources](#resources) | [Configuration](#configuration) | [Security](#security) | [Development](#development)
+[Quick Start](#quick-start) | [Tool](#available-tools) | [Resources](#resources) | [Configuration](#configuration) | [Security](#security) | [Development](#development)
 
 > **Published to [MCP Registry](https://registry.modelcontextprotocol.io/)** - Search for `io.github.j0hanz/superfetch`
 
@@ -26,42 +26,11 @@ A [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server that f
 | Feature            | Description                                                               |
 | ------------------ | ------------------------------------------------------------------------- |
 | Smart extraction   | Mozilla Readability removes ads, navigation, and boilerplate when enabled |
-| JSONL + Markdown   | JSONL semantic blocks or clean Markdown with frontmatter                  |
-| Structured blocks  | Headings, paragraphs, lists, code, tables, images, blockquotes            |
+| Clean Markdown     | Clean Markdown output with YAML frontmatter                               |
 | Built-in caching   | In-memory cache with TTL, max keys, and resource subscriptions            |
-| Resilient fetching | Redirect handling plus retry with exponential backoff + jitter            |
+| Resilient fetching | Redirect handling with security validation                                |
 | Security first     | URL validation, SSRF/DNS/IP blocklists, header sanitization               |
 | HTTP mode          | API key auth, session management, rate limiting, CORS                     |
-
----
-
-## How to Choose a Tool
-
-Use this guide to select the right tool for your web content extraction needs.
-
-### Decision Tree
-
-```text
-Need web content for AI?
-- Want structured JSONL blocks -> fetch-url (format: jsonl)
-- Want clean Markdown -> fetch-markdown
-- Want Markdown but also need contentBlocks count -> fetch-url (format: markdown)
-```
-
-### Quick Reference Table
-
-| Tool             | Best For                           | Output Format                    | Use When                                  |
-| ---------------- | ---------------------------------- | -------------------------------- | ----------------------------------------- |
-| `fetch-url`      | Single page with structured blocks | JSONL (or Markdown via `format`) | RAG pipelines, content parsing, analytics |
-| `fetch-markdown` | Single page in readable format     | Markdown + frontmatter           | Documentation, summaries, human review    |
-
-### Common Use Cases
-
-| Task                     | Recommended Tool                         | Why                                                  |
-| ------------------------ | ---------------------------------------- | ---------------------------------------------------- |
-| Parse a blog post for AI | `fetch-url`                              | Returns semantic blocks (headings, paragraphs, code) |
-| Generate documentation   | `fetch-markdown`                         | Clean markdown with frontmatter                      |
-| Extract article for RAG  | `fetch-url` + `extractMainContent: true` | Removes ads/nav, keeps main content                  |
 
 ---
 
@@ -289,67 +258,23 @@ Sessions are managed via the `mcp-session-id` header (see [HTTP Mode Details](#h
 
 ### Tool Response Notes
 
-Both tools return:
+The tool returns a minimal `structuredContent` with just `url`, `title`, and `markdown`. On errors, `error` is included instead of content.
 
-- `structuredContent` for machine-readable fields (includes `contentSize`, `cached`, and optional `resourceUri`/`resourceMimeType`/`truncated`; Markdown responses may also include `file`)
-- `content` blocks that include:
-  - a `text` block containing JSON of `structuredContent`
-  - in stdio mode, a `resource` block with a `file:///...` URI embedding the full content
-  - in HTTP mode, a `resource` block when inline content is available
-  - when content exceeds `MAX_INLINE_CONTENT_CHARS` and cache is enabled, a `resource_link` block points to `superfetch://cache/...` and `structuredContent.resourceUri` is set
+The response includes:
 
-If content exceeds `MAX_INLINE_CONTENT_CHARS` and cache is disabled, the server truncates output, appends `...[truncated]`, and sets `truncated: true`.
+- a `text` block containing JSON of `structuredContent`
+- a `resource` block embedding the full content with a `file:///...` URI
+- in HTTP mode when content exceeds `MAX_INLINE_CONTENT_CHARS`, a `resource_link` block pointing to `superfetch://cache/...`
 
 ---
 
 ### `fetch-url`
 
-Fetches a webpage and converts it to AI-readable JSONL format with semantic content blocks. You can also request Markdown with `format: "markdown"`.
+Fetches a webpage and converts it to clean Markdown format with optional frontmatter.
 
-| Parameter              | Type                  | Default                            | Description                                            |
-| ---------------------- | --------------------- | ---------------------------------- | ------------------------------------------------------ |
-| `url`                  | string                | required                           | URL to fetch                                           |
-| `format`               | "jsonl" \| "markdown" | `"jsonl"`                          | Output format                                          |
-| `includeContentBlocks` | boolean               | `true` (jsonl), `false` (markdown) | Include content block counts when `format: "markdown"` |
-| `extractMainContent`   | boolean               | `true`                             | Use Readability to extract main content                |
-| `includeMetadata`      | boolean               | `true`                             | Include page metadata                                  |
-| `maxContentLength`     | number                | -                                  | Maximum content length in characters (max 5,242,880)   |
-| `customHeaders`        | object                | -                                  | Custom HTTP headers (sanitized)                        |
-| `timeout`              | number                | `30000`                            | Request timeout in milliseconds (1000-120000)          |
-| `retries`              | number                | `3`                                | Number of retry attempts (1-10)                        |
-
-When `format: "markdown"` and `includeContentBlocks` is `false`, `contentBlocks` will be `0`.
-
-**Example `structuredContent`:**
-
-```json
-{
-  "url": "https://example.com/article",
-  "title": "Example Article",
-  "contentBlocks": 42,
-  "fetchedAt": "2025-12-11T10:30:00.000Z",
-  "format": "jsonl",
-  "contentSize": 12345,
-  "cached": false,
-  "content": "{\"type\":\"metadata\",\"title\":\"Example Article\",\"url\":\"https://example.com/article\"}\n{\"type\":\"heading\",\"level\":1,\"text\":\"Introduction\"}"
-}
-```
-
----
-
-### `fetch-markdown`
-
-Fetches a webpage and converts it to clean Markdown with optional frontmatter.
-
-| Parameter            | Type    | Default  | Description                                          |
-| -------------------- | ------- | -------- | ---------------------------------------------------- |
-| `url`                | string  | required | URL to fetch                                         |
-| `extractMainContent` | boolean | `true`   | Extract main content only                            |
-| `includeMetadata`    | boolean | `true`   | Include YAML frontmatter                             |
-| `maxContentLength`   | number  | -        | Maximum content length in characters (max 5,242,880) |
-| `customHeaders`      | object  | -        | Custom HTTP headers (sanitized)                      |
-| `timeout`            | number  | `30000`  | Request timeout in milliseconds (1000-120000)        |
-| `retries`            | number  | `3`      | Number of retry attempts (1-10)                      |
+| Parameter | Type   | Default  | Description  |
+| --------- | ------ | -------- | ------------ |
+| `url`     | string | required | URL to fetch |
 
 **Example `structuredContent`:**
 
@@ -357,41 +282,37 @@ Fetches a webpage and converts it to clean Markdown with optional frontmatter.
 {
   "url": "https://example.com/docs",
   "title": "Documentation",
-  "fetchedAt": "2025-12-11T10:30:00.000Z",
-  "markdown": "---\ntitle: Documentation\nsource: \"https://example.com/docs\"\n---\n\n# Getting Started\n\nWelcome...",
-  "contentSize": 9876,
-  "cached": false,
-  "truncated": false,
-  "file": {
-    "downloadUrl": "/mcp/downloads/markdown/abc123def456",
-    "fileName": "documentation.md",
-    "expiresAt": "2025-12-11T11:30:00.000Z"
-  }
+  "markdown": "---\ntitle: Documentation\n---\n\n# Getting Started\n\nWelcome..."
 }
 ```
 
-`file` is included only in HTTP mode when content is cached and too large to inline.
+**Error response:**
+
+```json
+{
+  "url": "https://example.com/broken",
+  "error": "Failed to fetch: 404 Not Found"
+}
+```
 
 ---
 
 ### Large Content Handling
 
-- Inline limit is configurable via `MAX_INLINE_CONTENT_CHARS` (see `CONFIGURATION.md`).
-- If content exceeds the limit and cache is enabled, responses include `resourceUri`/`resourceMimeType` and a `resource_link` block.
-- If cache is disabled, content is truncated with `...[truncated]` and `truncated: true`.
-- Use `maxContentLength` per request to enforce a lower limit (hard cap: 5,242,880 characters).
+- Content is always fully embedded as a resource block in the response.
+- In HTTP mode, a `resource_link` block is added when content exceeds `MAX_INLINE_CONTENT_CHARS`.
 - Upstream fetch size is capped at 10 MB of HTML; larger responses fail.
 
 ---
 
 ## Resources
 
-| URI                                        | Description                                                                |
-| ------------------------------------------ | -------------------------------------------------------------------------- |
-| `superfetch://health`                      | Real-time server health and memory checks                                  |
-| `superfetch://stats`                       | Server stats and cache metrics                                             |
-| `superfetch://cache/list`                  | List cached entries and their resource URIs                                |
-| `superfetch://cache/{namespace}/{urlHash}` | Cached content entry (`namespace`: `url`, `markdown`; `links` is reserved) |
+| URI                                        | Description                                    |
+| ------------------------------------------ | ---------------------------------------------- |
+| `superfetch://health`                      | Real-time server health and memory checks      |
+| `superfetch://stats`                       | Server stats and cache metrics                 |
+| `superfetch://cache/list`                  | List cached entries and their resource URIs    |
+| `superfetch://cache/{namespace}/{urlHash}` | Cached content entry (`namespace`: `markdown`) |
 
 Resource subscriptions notify clients when cache entries update.
 
@@ -407,16 +328,16 @@ When running in HTTP mode, cached content can be downloaded directly. Downloads 
 GET /mcp/downloads/:namespace/:hash
 ```
 
-- `namespace`: `markdown` or `url`
+- `namespace`: `markdown`
 - Auth required (`Authorization: Bearer <API_KEY>` or `X-API-Key: <API_KEY>`)
 
 ### Response Headers
 
-| Header                | Value                                                                   |
-| --------------------- | ----------------------------------------------------------------------- |
-| `Content-Type`        | `text/markdown; charset=utf-8` or `application/x-ndjson; charset=utf-8` |
-| `Content-Disposition` | `attachment; filename="<name>"`                                         |
-| `Cache-Control`       | `private, max-age=<CACHE_TTL>`                                          |
+| Header                | Value                           |
+| --------------------- | ------------------------------- |
+| `Content-Type`        | `text/markdown; charset=utf-8`  |
+| `Content-Disposition` | `attachment; filename="<name>"` |
+| `Cache-Control`       | `private, max-age=<CACHE_TTL>`  |
 
 ### Example Usage
 
@@ -455,23 +376,6 @@ HTTP mode uses the MCP Streamable HTTP transport. The workflow is:
 If `MAX_SESSIONS` is reached, the server evicts the oldest session when possible, otherwise returns a 503.
 
 Host header validation is always enforced in HTTP mode. When binding to `0.0.0.0` or `::`, set `ALLOWED_HOSTS` to the hostnames clients will send. If an `Origin` header is present, it must be allowed by `ALLOWED_ORIGINS` or `CORS_ALLOW_ALL`.
-
----
-
-## Content Block Types
-
-JSONL output includes semantic content blocks:
-
-| Type         | Description                              |
-| ------------ | ---------------------------------------- |
-| `metadata`   | Minimal page metadata (type, title, url) |
-| `heading`    | Headings (h1-h6) with level indicator    |
-| `paragraph`  | Text paragraphs                          |
-| `list`       | Ordered/unordered lists                  |
-| `code`       | Code blocks with optional language       |
-| `table`      | Tables with headers and rows             |
-| `image`      | Images with src and alt text             |
-| `blockquote` | Block quote text                         |
 
 ---
 

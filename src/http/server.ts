@@ -17,7 +17,7 @@ import { createCorsMiddleware } from './cors.js';
 import { registerDownloadRoutes } from './download-routes.js';
 import { registerMcpRoutes } from './mcp-routes.js';
 import { createRateLimitMiddleware } from './rate-limit.js';
-import { attachBaseMiddleware, buildCorsOptions } from './server-middleware.js';
+import { attachBaseMiddleware } from './server-middleware.js';
 import { startSessionCleanupLoop } from './session-cleanup.js';
 import { createSessionStore } from './sessions.js';
 
@@ -124,17 +124,18 @@ export async function startHttpServer(): Promise<{
   enableHttpMode();
 
   const { app, jsonParser } = await createExpressApp();
-  const corsOptions = buildCorsOptions();
   const { middleware: rateLimitMiddleware, stop: stopRateLimitCleanup } =
     createRateLimitMiddleware(config.rateLimit);
   const authMiddleware = createAuthMiddleware(config.security.apiKey ?? '');
+  // No CORS - MCP clients don't run in browsers
+  const corsMiddleware = createCorsMiddleware();
 
   attachBaseMiddleware(
     app,
     jsonParser,
     rateLimitMiddleware,
     authMiddleware,
-    createCorsMiddleware(corsOptions)
+    corsMiddleware
   );
   assertHttpConfiguration();
 
@@ -168,9 +169,6 @@ async function createExpressApp(): Promise<{
 }> {
   const { default: express } = await import('express');
   const app = express();
-  if (config.server.trustProxy) {
-    app.set('trust proxy', true);
-  }
   const jsonParser = express.json({ limit: '1mb' });
   return { app, jsonParser };
 }

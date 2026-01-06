@@ -3,8 +3,6 @@ import type { Dispatcher } from 'undici';
 import { config } from '../config/index.js';
 import type { FetchOptions } from '../config/types/runtime.js';
 
-import { normalizeHeaderRecord } from '../utils/header-normalizer.js';
-
 import { destroyAgents, dispatcher } from './fetcher/agents.js';
 import {
   createHttpError,
@@ -18,7 +16,6 @@ import {
 } from './fetcher/interceptors.js';
 import { fetchWithRedirects } from './fetcher/redirects.js';
 import { readResponseText } from './fetcher/response.js';
-import { executeWithRetry } from './fetcher/retry-policy.js';
 
 export { destroyAgents };
 
@@ -31,18 +28,8 @@ const DEFAULT_HEADERS = {
   Connection: 'keep-alive',
 } as const;
 
-function buildHeaders(customHeaders?: Record<string, string>): Headers {
-  const headers = new Headers(DEFAULT_HEADERS);
-  const sanitized = normalizeHeaderRecord(
-    customHeaders,
-    config.security.blockedHeaders
-  );
-  if (sanitized) {
-    for (const [key, value] of Object.entries(sanitized)) {
-      headers.set(key, value);
-    }
-  }
-  return headers;
+function buildHeaders(): Headers {
+  return new Headers(DEFAULT_HEADERS);
 }
 
 function buildRequestSignal(
@@ -121,47 +108,17 @@ async function fetchWithTelemetry(
   }
 }
 
-export async function fetchNormalizedUrlWithRetry(
+/**
+ * Fetch a normalized URL with the configured timeout.
+ * No internal retries - let the MCP client handle retry logic.
+ */
+export async function fetchNormalizedUrl(
   normalizedUrl: string,
-  options?: FetchOptions,
-  maxRetries = 3
+  options?: FetchOptions
 ): Promise<string> {
-  const context = buildRequestContext(options);
-
-  return executeWithRetry(
-    normalizedUrl,
-    maxRetries,
-    async () => runFetch(normalizedUrl, context),
-    context.signal
-  );
-}
-
-function buildRequestContext(options?: FetchOptions): {
-  timeoutMs: number;
-  headers: Headers;
-  signal?: AbortSignal;
-} {
-  const context: {
-    timeoutMs: number;
-    headers: Headers;
-    signal?: AbortSignal;
-  } = {
-    timeoutMs: options?.timeout ?? config.fetcher.timeout,
-    headers: buildHeaders(options?.customHeaders),
-  };
-
-  if (options?.signal) {
-    context.signal = options.signal;
-  }
-
-  return context;
-}
-
-async function runFetch(
-  normalizedUrl: string,
-  context: { timeoutMs: number; headers: Headers; signal?: AbortSignal }
-): Promise<string> {
-  const signal = buildRequestSignal(context.timeoutMs, context.signal);
-  const requestInit = buildRequestInit(context.headers, signal);
-  return fetchWithTelemetry(normalizedUrl, requestInit, context.timeoutMs);
+  const timeoutMs = config.fetcher.timeout;
+  const headers = buildHeaders();
+  const signal = buildRequestSignal(timeoutMs, options?.signal);
+  const requestInit = buildRequestInit(headers, signal);
+  return fetchWithTelemetry(normalizedUrl, requestInit, timeoutMs);
 }

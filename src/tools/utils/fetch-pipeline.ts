@@ -5,13 +5,11 @@ import type {
 } from '../../config/types/runtime.js';
 
 import * as cache from '../../services/cache.js';
-import { fetchNormalizedUrlWithRetry } from '../../services/fetcher.js';
+import { fetchNormalizedUrl } from '../../services/fetcher.js';
 import { logDebug } from '../../services/logger.js';
 
 import { transformToRawUrl } from '../../utils/url-transformer.js';
 import { normalizeUrl } from '../../utils/url-validator.js';
-
-import { appendHeaderVary } from './cache-vary.js';
 
 function attemptCacheRetrieval<T>(
   cacheKey: string | null,
@@ -74,13 +72,9 @@ export async function executeFetchPipeline<T>(
   if (cachedResult) return cachedResult;
 
   const fetchOptions = buildFetchOptions(options);
-  logDebug('Fetching URL', { url: normalizedUrl, retries: options.retries });
+  logDebug('Fetching URL', { url: normalizedUrl });
 
-  const html = await fetchNormalizedUrlWithRetry(
-    normalizedUrl,
-    fetchOptions,
-    options.retries
-  );
+  const html = await fetchNormalizedUrl(normalizedUrl, fetchOptions);
   const data = await options.transform(html, normalizedUrl);
   if (cache.isEnabled()) {
     persistCache(cacheKey, data, options.serialize, normalizedUrl);
@@ -93,23 +87,18 @@ function resolveCacheKey<T>(
   options: FetchPipelineOptions<T>,
   normalizedUrl: string
 ): string | null {
-  const cacheVary = appendHeaderVary(options.cacheVary, options.customHeaders);
-  return cache.createCacheKey(options.cacheNamespace, normalizedUrl, cacheVary);
+  return cache.createCacheKey(
+    options.cacheNamespace,
+    normalizedUrl,
+    options.cacheVary
+  );
 }
 
 function buildFetchOptions<T>(options: FetchPipelineOptions<T>): FetchOptions {
   const fetchOptions: FetchOptions = {};
 
-  if (options.customHeaders !== undefined) {
-    fetchOptions.customHeaders = options.customHeaders;
-  }
-
   if (options.signal !== undefined) {
     fetchOptions.signal = options.signal;
-  }
-
-  if (options.timeout !== undefined) {
-    fetchOptions.timeout = options.timeout;
   }
 
   return fetchOptions;

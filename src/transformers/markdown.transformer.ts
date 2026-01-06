@@ -34,9 +34,45 @@ function createTurndownInstance(): TurndownService {
   return instance;
 }
 
+function isElement(node: unknown): node is HTMLElement {
+  return (
+    node !== null &&
+    typeof node === 'object' &&
+    'getAttribute' in node &&
+    typeof (node as HTMLElement).getAttribute === 'function'
+  );
+}
+
 function addNoiseRule(instance: TurndownService): void {
   instance.addRule('removeNoise', {
-    filter: ['script', 'style', 'noscript', 'nav', 'footer', 'aside', 'iframe'],
+    filter: [
+      'script',
+      'style',
+      'noscript',
+      'iframe',
+      'nav',
+      'footer',
+      'aside',
+      'header',
+      'form',
+      'button',
+      'input',
+      'select',
+      'textarea',
+    ],
+    replacement: () => '',
+  });
+
+  instance.addRule('removeHiddenAndGraphics', {
+    filter: (node) => {
+      if (!isElement(node)) return false;
+      const tagName = node.tagName.toLowerCase();
+      if (tagName === 'svg' || tagName === 'canvas') return true;
+      return (
+        node.getAttribute('hidden') !== null ||
+        node.getAttribute('aria-hidden') === 'true'
+      );
+    },
     replacement: () => '',
   });
 }
@@ -57,15 +93,6 @@ function isFencedCodeBlock(
   const { firstChild } = node;
   if (!firstChild) return false;
   return firstChild.nodeName === 'CODE';
-}
-
-function isElement(node: unknown): node is HTMLElement {
-  return (
-    node !== null &&
-    typeof node === 'object' &&
-    'getAttribute' in node &&
-    typeof (node as HTMLElement).getAttribute === 'function'
-  );
 }
 
 function formatFencedCodeBlock(node: TurndownService.Node): string {

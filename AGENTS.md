@@ -3,7 +3,7 @@
 ## Project Overview
 
 - **Package**: `@j0hanz/superfetch` (MCP server ID: `io.github.j0hanz/superfetch`)
-- **Purpose**: MCP server that fetches web pages, extracts readable content via Mozilla Readability, and returns AI-friendly JSONL or Markdown
+- **Purpose**: MCP server that fetches web pages, extracts readable content via Mozilla Readability, and returns AI-friendly Markdown
 - **Stack**: TypeScript 5.9, Node.js >=20.12, Express 5, MCP SDK, Zod 4
 - **License**: MIT
 

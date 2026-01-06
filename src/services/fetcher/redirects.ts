@@ -32,7 +32,7 @@ async function performFetchCycle(
   void response.body?.cancel();
   return {
     response,
-    nextUrl: await resolveRedirectTarget(currentUrl, location),
+    nextUrl: resolveRedirectTarget(currentUrl, location),
   };
 }
 
@@ -60,10 +60,7 @@ function annotateRedirectError(error: unknown, url: string): void {
   (error as { requestUrl?: string }).requestUrl = url;
 }
 
-async function resolveRedirectTarget(
-  baseUrl: string,
-  location: string
-): Promise<string> {
+function resolveRedirectTarget(baseUrl: string, location: string): string {
   if (!URL.canParse(location, baseUrl)) {
     throw createErrorWithCode('Invalid redirect target', 'EBADREDIRECT');
   }

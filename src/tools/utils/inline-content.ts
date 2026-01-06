@@ -3,8 +3,6 @@ import { config } from '../../config/index.js';
 
 import * as cache from '../../services/cache.js';
 
-type InlineContentFormat = 'jsonl' | 'markdown';
-
 interface InlineContentResult {
   content?: string;
   contentSize: number;
@@ -16,8 +14,7 @@ interface InlineContentResult {
 
 export function applyInlineContentLimit(
   content: string,
-  cacheKey: string | null,
-  format: InlineContentFormat
+  cacheKey: string | null
 ): InlineContentResult {
   const contentSize = content.length;
   const inlineLimit = config.constants.maxInlineContentChars;
@@ -34,17 +31,13 @@ export function applyInlineContentLimit(
   return {
     contentSize,
     resourceUri,
-    resourceMimeType: resolveResourceMimeType(format),
+    resourceMimeType: 'text/markdown',
   };
 }
 
 function resolveResourceUri(cacheKey: string | null): string | null {
   if (!config.cache.enabled || !cacheKey) return null;
   return cache.toResourceUri(cacheKey);
-}
-
-function resolveResourceMimeType(format: InlineContentFormat): string {
-  return format === 'markdown' ? 'text/markdown' : 'application/jsonl';
 }
 
 function buildTruncatedFallback(

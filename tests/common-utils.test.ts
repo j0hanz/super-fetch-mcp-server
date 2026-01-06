@@ -4,12 +4,12 @@ import { describe, it } from 'node:test';
 import {
   createContentMetadataBlock,
   determineContentExtractionSource,
-  truncateContent,
+  isExtractionSufficient,
 } from '../dist/tools/utils/content-shaping.js';
 
 describe('determineContentExtractionSource', () => {
   it('returns true when extraction is enabled and article exists', () => {
-    const result = determineContentExtractionSource(true, {
+    const result = determineContentExtractionSource({
       content: '<p>content</p>',
       textContent: 'content',
     });
@@ -43,17 +43,48 @@ describe('createContentMetadataBlock', () => {
   });
 });
 
-describe('truncateContent', () => {
-  it('does not truncate when below the limit', () => {
-    const result = truncateContent('hello', 10);
-    assert.equal(result.truncated, false);
-    assert.equal(result.content, 'hello');
+describe('isExtractionSufficient', () => {
+  it('returns false for null article', () => {
+    const result = isExtractionSufficient(null, '<p>some content</p>');
+    assert.equal(result, false);
   });
 
-  it('truncates when exceeding the limit', () => {
-    const result = truncateContent('hello world', 5);
-    assert.equal(result.truncated, true);
-    assert.equal(result.content.length, 5);
-    assert.equal(result.content.startsWith('...['), true);
+  it('returns true for short original HTML (below threshold)', () => {
+    const result = isExtractionSufficient(
+      { content: '<p>x</p>', textContent: 'x' },
+      '<p>short</p>' // Less than 100 chars estimated
+    );
+    assert.equal(result, true);
+  });
+
+  it('returns true when article retains sufficient content (>30%)', () => {
+    // Original: 200 chars of text, Article: 100 chars = 50% retained
+    const longText = 'a'.repeat(200);
+    const articleText = 'a'.repeat(100);
+    const result = isExtractionSufficient(
+      { content: `<p>${articleText}</p>`, textContent: articleText },
+      `<div><p>${longText}</p></div>`
+    );
+    assert.equal(result, true);
+  });
+
+  it('returns false when article retains too little content (<30%)', () => {
+    // Original: 500 chars of text, Article: 50 chars = 10% retained
+    const longText = 'a'.repeat(500);
+    const articleText = 'a'.repeat(50);
+    const result = isExtractionSufficient(
+      { content: `<p>${articleText}</p>`, textContent: articleText },
+      `<div><p>${longText}</p></div>`
+    );
+    assert.equal(result, false);
+  });
+
+  it('handles article with empty textContent', () => {
+    const result = isExtractionSufficient(
+      { content: '<p></p>', textContent: '' },
+      '<div><p>test content here</p></div>'.repeat(10)
+    );
+    // textContent is empty (0 length) so ratio = 0, should return false
+    assert.equal(result, false);
   });
 });

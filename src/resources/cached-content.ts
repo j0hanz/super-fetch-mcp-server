@@ -7,7 +7,7 @@ import { logWarn } from '../services/logger.js';
 
 import { getErrorMessage } from '../utils/error-utils.js';
 
-const VALID_NAMESPACES = new Set(['url', 'markdown', 'links']);
+const VALID_NAMESPACES = new Set(['markdown', 'links']);
 const HASH_PATTERN = /^[a-f0-9.]+$/i;
 
 interface CachedPayload {
@@ -46,24 +46,6 @@ function listCachedResources(): {
   return { resources };
 }
 
-function buildCacheListPayload(): Record<string, unknown> {
-  const cacheKeys = cache.keys();
-  return {
-    totalEntries: cacheKeys.length,
-    entries: cacheKeys.map((key) => {
-      const parts = cache.parseCacheKey(key);
-      const namespace = parts?.namespace ?? 'unknown';
-      const urlHash = parts?.urlHash ?? 'unknown';
-      return {
-        namespace,
-        urlHash,
-        resourceUri: `superfetch://cache/${namespace}/${urlHash}`,
-      };
-    }),
-    timestamp: new Date().toISOString(),
-  };
-}
-
 function notifyResourceUpdate(server: McpServer, uri: string): void {
   if (!server.isConnected()) return;
   void server.server.sendResourceUpdated({ uri }).catch((error: unknown) => {
@@ -76,7 +58,6 @@ function notifyResourceUpdate(server: McpServer, uri: string): void {
 
 export function registerCachedContentResource(server: McpServer): void {
   registerCacheContentResource(server);
-  registerCacheListResource(server);
   registerCacheUpdateSubscription(server);
 }
 
@@ -114,11 +95,11 @@ function buildCachedContentResponse(
   if (!cached) {
     throw new McpError(
       ErrorCode.InvalidParams,
-      `Content not found in cache for key: ${cacheKey}. Use superfetch://stats to see available cache entries.`
+      `Content not found in cache for key: ${cacheKey}`
     );
   }
 
-  if (namespace !== 'url' && namespace !== 'markdown') {
+  if (namespace !== 'markdown') {
     return {
       contents: [
         {
@@ -131,9 +112,7 @@ function buildCachedContentResponse(
   }
 
   const payload = parseCachedPayload(cached.content);
-  const resolvedContent = payload
-    ? resolvePayloadContent(payload, namespace)
-    : null;
+  const resolvedContent = payload ? resolvePayloadContent(payload) : null;
 
   if (!resolvedContent) {
     throw new McpError(
@@ -146,7 +125,7 @@ function buildCachedContentResponse(
     contents: [
       {
         uri: uri.href,
-        mimeType: resolveCacheMimeType(namespace),
+        mimeType: 'text/markdown',
         text: resolvedContent,
       },
     ],
@@ -162,7 +141,7 @@ function registerCacheContentResource(server: McpServer): void {
     {
       title: 'Cached Content',
       description:
-        'Access previously fetched web content from cache. Namespace: url, links, markdown. UrlHash: SHA-256 hash of the URL.',
+        'Access previously fetched web content from cache. Namespace: markdown, links. UrlHash: SHA-256 hash of the URL.',
       mimeType: 'text/plain',
     },
     (uri, params) => {
@@ -175,34 +154,12 @@ function registerCacheContentResource(server: McpServer): void {
   );
 }
 
-function registerCacheListResource(server: McpServer): void {
-  server.registerResource(
-    'cached-urls',
-    'superfetch://cache/list',
-    {
-      title: 'Cached URLs List',
-      description: 'List all URLs currently in cache with their namespaces',
-      mimeType: 'application/json',
-    },
-    (uri) => ({
-      contents: [
-        {
-          uri: uri.href,
-          mimeType: 'application/json',
-          text: JSON.stringify(buildCacheListPayload(), null, 2),
-        },
-      ],
-    })
-  );
-}
-
 function registerCacheUpdateSubscription(server: McpServer): void {
   const unsubscribe = cache.onCacheUpdate(({ cacheKey }) => {
     const resourceUri = cache.toResourceUri(cacheKey);
     if (!resourceUri) return;
 
     notifyResourceUpdate(server, resourceUri);
-    notifyResourceUpdate(server, 'superfetch://cache/list');
     if (server.isConnected()) {
       server.sendResourceListChanged();
     }
@@ -217,7 +174,6 @@ function registerCacheUpdateSubscription(server: McpServer): void {
 
 function resolveCacheMimeType(namespace: string): string {
   if (namespace === 'markdown') return 'text/markdown';
-  if (namespace === 'url') return 'application/jsonl';
   return 'application/json';
 }
 
@@ -251,19 +207,12 @@ function isCachedPayload(value: unknown): value is CachedPayload {
   );
 }
 
-function resolvePayloadContent(
-  payload: CachedPayload,
-  namespace: string
-): string | null {
-  if (namespace === 'markdown') {
-    if (typeof payload.markdown === 'string') {
-      return payload.markdown;
-    }
-    if (typeof payload.content === 'string') {
-      return payload.content;
-    }
-    return null;
+function resolvePayloadContent(payload: CachedPayload): string | null {
+  if (typeof payload.markdown === 'string') {
+    return payload.markdown;
   }
-
-  return typeof payload.content === 'string' ? payload.content : null;
+  if (typeof payload.content === 'string') {
+    return payload.content;
+  }
+  return null;
 }

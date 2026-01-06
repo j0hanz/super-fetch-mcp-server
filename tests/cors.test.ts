@@ -4,19 +4,41 @@ import { describe, it } from 'node:test';
 import { createCorsMiddleware } from '../dist/http/cors.js';
 
 describe('createCorsMiddleware', () => {
-  it('exposes mcp-session-id for allowed origins', () => {
-    const middleware = createCorsMiddleware({
-      allowedOrigins: ['https://client.test'],
-      allowAllOrigins: false,
-    });
+  it('handles OPTIONS preflight', () => {
+    const middleware = createCorsMiddleware();
 
     const headers: Record<string, string> = {};
+    let statusSent: number | undefined;
     const res = {
       header: (key: string, value: string) => {
         headers[key] = value;
         return res;
       },
-      vary: () => res,
+      sendStatus: (code: number) => {
+        statusSent = code;
+        return res;
+      },
+    };
+    const req = {
+      headers: { origin: 'https://client.test' },
+      method: 'OPTIONS',
+    };
+    let nextCalled = 0;
+    const next = () => {
+      nextCalled += 1;
+    };
+
+    middleware(req as never, res as never, next);
+
+    assert.equal(statusSent, 200);
+    assert.equal(nextCalled, 0);
+  });
+
+  it('passes through non-OPTIONS requests', () => {
+    const middleware = createCorsMiddleware();
+
+    const res = {
+      header: () => res,
       sendStatus: () => res,
     };
     const req = {
@@ -30,7 +52,6 @@ describe('createCorsMiddleware', () => {
 
     middleware(req as never, res as never, next);
 
-    assert.equal(headers['Access-Control-Expose-Headers'], 'mcp-session-id');
     assert.equal(nextCalled, 1);
   });
 });

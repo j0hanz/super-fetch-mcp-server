@@ -28,8 +28,9 @@ function formatLogEntry(
 }
 
 function shouldLog(level: LogLevel): boolean {
-  if (!config.logging.enabled) return false;
+  // Debug logs only when LOG_LEVEL=debug
   if (level === 'debug') return config.logging.level === 'debug';
+  // All other levels always log
   return true;
 }
 

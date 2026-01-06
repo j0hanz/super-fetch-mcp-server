@@ -2,7 +2,6 @@ import { Worker } from 'node:worker_threads';
 
 import { config } from '../config/index.js';
 import type {
-  JsonlTransformResult,
   MarkdownTransformResult,
   TransformOptions,
 } from '../config/types/content.js';
@@ -11,29 +10,18 @@ import { getErrorMessage } from '../utils/error-utils.js';
 
 import { logWarn } from './logger.js';
 
-export type TransformKind = 'jsonl' | 'markdown' | 'markdown-with-blocks';
-
-export type WorkerTransformResult =
-  | JsonlTransformResult
-  | MarkdownTransformResult;
-
-export type WorkerTransformOptions = TransformOptions & {
-  includeContentBlocks?: boolean;
-};
-
 interface WorkerTransformRequest {
   id: number;
-  kind: TransformKind;
   html: string;
   url: string;
-  options: WorkerTransformOptions;
+  options: TransformOptions;
 }
 
 type WorkerTransformResponse =
   | {
       id: number;
       ok: true;
-      result: WorkerTransformResult;
+      result: MarkdownTransformResult;
     }
   | {
       id: number;
@@ -44,7 +32,7 @@ type WorkerTransformResponse =
 interface TransformTask {
   id: number;
   request: WorkerTransformRequest;
-  resolve: (result: WorkerTransformResult) => void;
+  resolve: (result: MarkdownTransformResult) => void;
   reject: (error: Error) => void;
   signal: AbortSignal | undefined;
   abortHandler: (() => void) | undefined;
@@ -75,7 +63,7 @@ class TransformWorkerPool {
   run(
     request: Omit<WorkerTransformRequest, 'id'>,
     signal?: AbortSignal
-  ): Promise<WorkerTransformResult> {
+  ): Promise<MarkdownTransformResult> {
     if (this.destroyed) {
       return Promise.reject(new Error('Worker pool is shut down'));
     }
@@ -299,7 +287,7 @@ function getPool(): TransformWorkerPool {
 export async function transformInWorker(
   request: Omit<WorkerTransformRequest, 'id'>,
   signal?: AbortSignal
-): Promise<WorkerTransformResult> {
+): Promise<MarkdownTransformResult> {
   return getPool().run(request, signal);
 }
 

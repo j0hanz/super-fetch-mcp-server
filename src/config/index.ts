@@ -44,8 +44,8 @@ function isLogLevel(value: string): value is LogLevel {
 }
 
 const host = process.env.HOST ?? '127.0.0.1';
-const isLoopbackHost =
-  host === '127.0.0.1' || host === '::1' || host === 'localhost';
+
+const isRemoteHost = host === '0.0.0.0' || host === '::';
 
 interface RuntimeState {
   httpMode: boolean;
@@ -61,40 +61,22 @@ export const config = {
     version: packageJson.version,
     port: parseInteger(process.env.PORT, 3000, 1024, 65535),
     host,
-    trustProxy: parseBoolean(process.env.TRUST_PROXY, false),
-    sessionTtlMs: parseInteger(
-      process.env.SESSION_TTL_MS,
-      TIMEOUT.DEFAULT_SESSION_TTL_MS,
-      TIMEOUT.MIN_SESSION_TTL_MS,
-      TIMEOUT.MAX_SESSION_TTL_MS
-    ),
-    sessionInitTimeoutMs: parseInteger(
-      process.env.SESSION_INIT_TIMEOUT_MS,
-      10000,
-      1000,
-      60000
-    ),
-    maxSessions: parseInteger(process.env.MAX_SESSIONS, 200, 10, 10000),
+    sessionTtlMs: TIMEOUT.DEFAULT_SESSION_TTL_MS,
+    sessionInitTimeoutMs: 10000,
+    maxSessions: 200,
   },
   fetcher: {
-    timeout: parseInteger(
-      process.env.FETCH_TIMEOUT,
-      TIMEOUT.DEFAULT_FETCH_TIMEOUT_MS,
-      TIMEOUT.MIN_FETCH_TIMEOUT_MS,
-      TIMEOUT.MAX_FETCH_TIMEOUT_MS
-    ),
+    timeout: TIMEOUT.DEFAULT_FETCH_TIMEOUT_MS,
     maxRedirects: 5,
-    userAgent: process.env.USER_AGENT ?? 'superFetch-MCP/1.0',
+    userAgent: process.env.USER_AGENT ?? 'superFetch-MCP/2.0',
     maxContentLength: SIZE_LIMITS.TEN_MB,
   },
   cache: {
     enabled: parseBoolean(process.env.CACHE_ENABLED, true),
     ttl: parseInteger(process.env.CACHE_TTL, 3600, 60, 86400),
-    maxKeys: parseInteger(process.env.CACHE_MAX_KEYS, 100, 10, 1000),
+    maxKeys: 100,
   },
   extraction: {
-    extractMainContent: parseBoolean(process.env.EXTRACT_MAIN_CONTENT, true),
-    includeMetadata: parseBoolean(process.env.INCLUDE_METADATA, true),
     maxBlockLength: 5000,
     minParagraphLength: 10,
   },
@@ -103,18 +85,11 @@ export const config = {
   },
   logging: {
     level: parseLogLevel(process.env.LOG_LEVEL),
-    enabled: parseBoolean(process.env.ENABLE_LOGGING, true),
   },
   constants: {
     maxHtmlSize: SIZE_LIMITS.TEN_MB,
-    maxContentSize: SIZE_LIMITS.FIVE_MB,
     maxUrlLength: 2048,
-    maxInlineContentChars: parseInteger(
-      process.env.MAX_INLINE_CONTENT_CHARS,
-      20000,
-      1000,
-      200000
-    ),
+    maxInlineContentChars: 20000,
   },
   security: {
     blockedHosts: new Set([
@@ -145,33 +120,14 @@ export const config = {
       /^::ffff:192\.168\./,
       /^::ffff:169\.254\./,
     ] as readonly RegExp[],
-    blockedHeaders: new Set([
-      'host',
-      'authorization',
-      'cookie',
-      'x-forwarded-for',
-      'x-real-ip',
-      'proxy-authorization',
-    ]),
     apiKey: process.env.API_KEY,
-    allowRemote: parseBoolean(process.env.ALLOW_REMOTE, false),
-    requireAuth: parseBoolean(process.env.REQUIRE_AUTH, !isLoopbackHost),
+    allowRemote: isRemoteHost,
   },
   rateLimit: {
-    enabled: parseBoolean(process.env.RATE_LIMIT_ENABLED, true),
-    maxRequests: parseInteger(process.env.RATE_LIMIT_MAX, 100, 1, 10000),
-    windowMs: parseInteger(
-      process.env.RATE_LIMIT_WINDOW_MS,
-      60000,
-      1000,
-      3600000
-    ),
-    cleanupIntervalMs: parseInteger(
-      process.env.RATE_LIMIT_CLEANUP_MS,
-      60000,
-      10000,
-      3600000
-    ),
+    enabled: true,
+    maxRequests: 100,
+    windowMs: 60000,
+    cleanupIntervalMs: 60000,
   },
   runtime: runtimeState,
 } as const;

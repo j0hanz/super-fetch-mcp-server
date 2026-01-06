@@ -96,35 +96,6 @@ describe('download routes', () => {
     assert.equal(getBody(), '# Title\n\nBody');
   });
 
-  it('returns jsonl content for url namespace', async () => {
-    const cacheKey = 'url:abc123def456';
-    cache.set(
-      cacheKey,
-      JSON.stringify({ content: '{"type":"paragraph","text":"Hello"}\n' }),
-      { url: 'https://example.com/article' }
-    );
-
-    const handler = getDownloadHandler();
-    const { res, headers, getBody } = createResponseCapture();
-    const next = () => undefined;
-
-    await handler(
-      { params: { namespace: 'url', hash: 'abc123def456' } },
-      res,
-      next
-    );
-
-    assert.equal(getBody(), '{"type":"paragraph","text":"Hello"}\n');
-    assert.equal(
-      headers['content-type'],
-      'application/x-ndjson; charset=utf-8'
-    );
-    assert.equal(
-      headers['content-disposition'].includes('article.jsonl'),
-      true
-    );
-  });
-
   it('responds with not found for invalid cached payloads', async () => {
     const cacheKey = 'markdown:deadbeef';
     cache.set(cacheKey, 'not-json', { url: 'https://example.com/article' });

@@ -36,14 +36,7 @@ export type ToolContentBlock =
 
 // Fetcher types
 export interface FetchOptions {
-  customHeaders?: Record<string, string>;
   signal?: AbortSignal;
-  timeout?: number;
-}
-
-export interface TruncationResult {
-  readonly content: string;
-  readonly truncated: boolean;
 }
 
 export interface SessionEntry {
@@ -70,14 +63,8 @@ export interface FetchPipelineOptions<T> {
   url: string;
   /** Cache namespace (e.g., 'url', 'links', 'markdown') */
   cacheNamespace: string;
-  /** Optional custom HTTP headers */
-  customHeaders?: Record<string, string>;
-  /** Optional: number of retry attempts (1-10, defaults to 3) */
-  retries?: number;
   /** Optional: AbortSignal for request cancellation */
   signal?: AbortSignal;
-  /** Optional: per-request timeout override in milliseconds */
-  timeout?: number;
   /** Optional: cache variation input for headers/flags */
   cacheVary?: Record<string, unknown> | string;
   /** Transform function to process HTML into desired format */

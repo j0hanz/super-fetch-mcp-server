@@ -1,45 +1,16 @@
-import { ErrorCode } from '@modelcontextprotocol/sdk/types.js';
-
 import type { ToolErrorResponse } from '../config/types/tools.js';
 
 import { FetchError } from '../errors/app-error.js';
 
 import { isSystemError } from './error-utils.js';
 
-const IS_DEVELOPMENT_WITH_STACK_TRACES =
-  process.env.NODE_ENV === 'development' &&
-  process.env.EXPOSE_STACK_TRACES === 'true';
-
-const MCP_ERROR_CODE_MAP: Record<string, string> = {
-  VALIDATION_ERROR: String(ErrorCode.InvalidParams),
-  INVALID_PARAMS: String(ErrorCode.InvalidParams),
-  INTERNAL_ERROR: String(ErrorCode.InternalError),
-  FETCH_ERROR: String(ErrorCode.InternalError),
-  BATCH_ERROR: String(ErrorCode.InternalError),
-  PROMISE_REJECTED: String(ErrorCode.InternalError),
-  UNKNOWN_ERROR: String(ErrorCode.InternalError),
-};
-
-const NUMERIC_ERROR_CODE = /^-?\d+$/;
-
-function normalizeToolErrorCode(code: string): string {
-  if (!code) return String(ErrorCode.InternalError);
-  if (NUMERIC_ERROR_CODE.test(code)) return code;
-  if (code.startsWith('HTTP_')) return String(ErrorCode.InternalError);
-  return MCP_ERROR_CODE_MAP[code] ?? code;
-}
-
 export function createToolErrorResponse(
   message: string,
-  url: string,
-  code: string,
-  details: Record<string, unknown> = {}
+  url: string
 ): ToolErrorResponse {
   const structuredContent = {
-    ...details,
     error: message,
     url,
-    errorCode: normalizeToolErrorCode(code),
   };
 
   return {
@@ -49,51 +20,25 @@ export function createToolErrorResponse(
   };
 }
 
-function formatErrorMessage(
-  baseMessage: string,
-  error: Error,
-  fallback?: string
-): string {
-  const message = fallback ? `${fallback}: ${error.message}` : error.message;
-
-  if (IS_DEVELOPMENT_WITH_STACK_TRACES && error.stack) {
-    return `${message}\n${error.stack}`;
-  }
-
-  return message;
-}
-
 export function handleToolError(
   error: unknown,
   url: string,
-  fallbackMessage = 'Operation failed',
-  details: Record<string, unknown> = {}
+  fallbackMessage = 'Operation failed'
 ): ToolErrorResponse {
   if (isValidationError(error)) {
-    return createToolErrorResponse(
-      error.message,
-      url,
-      'VALIDATION_ERROR',
-      details
-    );
+    return createToolErrorResponse(error.message, url);
   }
 
   if (error instanceof FetchError) {
-    const message = formatErrorMessage(error.message, error);
-    return createToolErrorResponse(message, url, error.code, details);
+    return createToolErrorResponse(error.message, url);
   }
 
   if (error instanceof Error) {
-    const message = formatErrorMessage(error.message, error, fallbackMessage);
-    return createToolErrorResponse(message, url, 'UNKNOWN_ERROR', details);
+    const message = `${fallbackMessage}: ${error.message}`;
+    return createToolErrorResponse(message, url);
   }
 
-  return createToolErrorResponse(
-    `${fallbackMessage}: Unknown error`,
-    url,
-    'UNKNOWN_ERROR',
-    details
-  );
+  return createToolErrorResponse(`${fallbackMessage}: Unknown error`, url);
 }
 
 function isValidationError(error: unknown): error is NodeJS.ErrnoException {

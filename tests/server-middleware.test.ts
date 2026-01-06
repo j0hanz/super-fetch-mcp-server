@@ -1,10 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import {
-  attachBaseMiddleware,
-  buildCorsOptions,
-} from '../dist/http/server-middleware.js';
+import { attachBaseMiddleware } from '../dist/http/server-middleware.js';
 
 function captureMiddleware() {
   const uses: unknown[][] = [];
@@ -26,26 +23,6 @@ function captureMiddleware() {
 
   return { uses, routes };
 }
-
-describe('buildCorsOptions', () => {
-  it('reads allowed origins and allow-all flag', () => {
-    const originalOrigins = process.env.ALLOWED_ORIGINS;
-    const originalAllowAll = process.env.CORS_ALLOW_ALL;
-
-    process.env.ALLOWED_ORIGINS = 'https://a.test, https://b.test';
-    process.env.CORS_ALLOW_ALL = 'true';
-
-    const options = buildCorsOptions();
-    assert.deepEqual(options.allowedOrigins, [
-      'https://a.test',
-      'https://b.test',
-    ]);
-    assert.equal(options.allowAllOrigins, true);
-
-    process.env.ALLOWED_ORIGINS = originalOrigins;
-    process.env.CORS_ALLOW_ALL = originalAllowAll;
-  });
-});
 
 describe('createJsonParseErrorHandler', () => {
   it('returns JSON-RPC parse error for invalid JSON', () => {
