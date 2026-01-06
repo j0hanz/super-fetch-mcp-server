@@ -16,6 +16,8 @@ function assertContentLengthWithinLimit(
     return;
   }
 
+  void response.body?.cancel();
+
   throw new FetchError(
     `Response exceeds maximum size of ${maxBytes} bytes`,
     url
@@ -96,7 +98,14 @@ export async function readResponseText(
 
   if (!response.body) {
     const text = await response.text();
-    return { text, size: Buffer.byteLength(text) };
+    const size = Buffer.byteLength(text);
+    if (size > maxBytes) {
+      throw new FetchError(
+        `Response exceeds maximum size of ${maxBytes} bytes`,
+        url
+      );
+    }
+    return { text, size };
   }
 
   return readStreamWithLimit(response.body, url, maxBytes, signal);

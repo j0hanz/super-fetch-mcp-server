@@ -1,7 +1,7 @@
 import dns from 'node:dns';
 import os from 'node:os';
 
-import { Agent } from 'undici';
+import { Agent, type Dispatcher } from 'undici';
 
 import { createErrorWithCode } from '../../utils/error-utils.js';
 import { isBlockedIp } from '../../utils/url-validator.js';
@@ -272,7 +272,7 @@ function getAgentOptions(): ConstructorParameters<typeof Agent>[0] {
   };
 }
 
-export const dispatcher = new Agent(getAgentOptions());
+export const dispatcher: Dispatcher = new Agent(getAgentOptions());
 
 export function destroyAgents(): void {
   void dispatcher.close();

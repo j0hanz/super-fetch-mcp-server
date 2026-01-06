@@ -1,3 +1,5 @@
+import type { Dispatcher } from 'undici';
+
 import { config } from '../config/index.js';
 import type { FetchOptions } from '../config/types/runtime.js';
 
@@ -55,7 +57,7 @@ function buildRequestSignal(
 function buildRequestInit(
   headers: Headers,
   signal: AbortSignal
-): RequestInit & { dispatcher?: unknown } {
+): RequestInit & { dispatcher: Dispatcher } {
   return {
     method: 'GET',
     headers,
