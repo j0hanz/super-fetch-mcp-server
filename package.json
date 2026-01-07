@@ -55,24 +55,24 @@
     "express": "^5.2.1",
     "linkedom": "^0.18.12",
     "turndown": "^7.2.2",
-    "undici": "^6.22.0",
-    "zod": "^4.3.4"
+    "undici": "^6.23.0",
+    "zod": "^4.3.5"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.2",
-    "@trivago/prettier-plugin-sort-imports": "^6.0.0",
+    "@trivago/prettier-plugin-sort-imports": "^6.0.1",
     "@types/express": "^5.0.6",
     "@types/node": "^22.19.3",
     "@types/turndown": "^5.0.6",
     "eslint": "^9.23.2",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-unused-imports": "^4.3.0",
-    "knip": "^5.78.0",
+    "knip": "^5.80.0",
     "prettier": "^3.7.4",
     "shx": "^0.4.0",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.51.0"
+    "typescript-eslint": "^8.52.0"
   },
   "engines": {
     "node": ">=20.12.0"
