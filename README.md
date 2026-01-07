@@ -23,14 +23,15 @@ A [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server that f
 
 ## Features
 
-| Feature            | Description                                                               |
-| ------------------ | ------------------------------------------------------------------------- |
-| Smart extraction   | Mozilla Readability removes ads, navigation, and boilerplate when enabled |
-| Clean Markdown     | Clean Markdown output with YAML frontmatter                               |
-| Built-in caching   | In-memory cache with TTL, max keys, and resource subscriptions            |
-| Resilient fetching | Redirect handling with security validation                                |
-| Security first     | URL validation, SSRF/DNS/IP blocklists, header sanitization               |
-| HTTP mode          | API key auth, session management, rate limiting, CORS                     |
+| Feature              | Description                                                                           |
+| -------------------- | ------------------------------------------------------------------------------------- |
+| Smart extraction     | Mozilla Readability with quality gates to strip boilerplate when it improves results  |
+| Clean Markdown       | Markdown output with optional YAML frontmatter (title + source)                       |
+| Raw content handling | Preserves raw markdown/text and rewrites GitHub/GitLab/Bitbucket blob URLs to raw     |
+| Built-in caching     | In-memory cache with TTL, max keys, and resource subscriptions                        |
+| Resilient fetching   | Redirect handling with validation, timeouts, and response size limits                 |
+| Security first       | URL validation plus SSRF/DNS/IP blocklists                                            |
+| HTTP mode            | Static token or OAuth auth, session management, rate limiting, host/origin validation |
 
 ---
 
@@ -199,7 +200,7 @@ npm install -g @j0hanz/superfetch
 # Run in stdio mode
 superfetch --stdio
 
-# Run HTTP server (requires API_KEY)
+# Run HTTP server (requires auth token)
 superfetch
 ```
 
@@ -226,7 +227,7 @@ node dist/index.js --stdio
 <details>
 <summary><strong>HTTP Mode</strong> (default)</summary>
 
-HTTP mode requires `API_KEY` and only binds to loopback addresses unless `ALLOW_REMOTE=true`.
+HTTP mode requires authentication. By default it binds to `127.0.0.1`. To listen on all interfaces, set `HOST=0.0.0.0` or `HOST=::` and configure OAuth (remote bindings require OAuth). Other non-loopback `HOST` values are rejected.
 
 ```bash
 API_KEY=supersecret npx -y @j0hanz/superfetch@latest
@@ -240,7 +241,9 @@ $env:API_KEY = "supersecret"
 npx -y @j0hanz/superfetch@latest
 ```
 
-Endpoints (all require `Authorization: Bearer <API_KEY>` or `X-API-Key: <API_KEY>`):
+For multiple static tokens, set `ACCESS_TOKENS` (comma/space separated).
+
+Endpoints (auth required via `Authorization: Bearer <token>`; in static token mode, `X-API-Key` is also accepted):
 
 - `GET /health`
 - `POST /mcp`
@@ -258,13 +261,13 @@ Sessions are managed via the `mcp-session-id` header (see [HTTP Mode Details](#h
 
 ### Tool Response Notes
 
-The tool returns a minimal `structuredContent` with just `url`, `title`, and `markdown`. On errors, `error` is included instead of content.
+The tool returns `structuredContent` with `url`, optional `title`, and `markdown` when inline content is available. On errors, `error` is included instead of content.
 
 The response includes:
 
 - a `text` block containing JSON of `structuredContent`
-- a `resource` block embedding the full content with a `file:///...` URI
-- in HTTP mode when content exceeds `MAX_INLINE_CONTENT_CHARS`, a `resource_link` block pointing to `superfetch://cache/...`
+- a `resource` block embedding markdown when inline content is available (always in stdio mode)
+- when content exceeds the inline limit and cache is enabled, a `resource_link` block pointing to `superfetch://cache/...` (inline markdown may be omitted)
 
 ---
 
@@ -299,8 +302,9 @@ Fetches a webpage and converts it to clean Markdown format with optional frontma
 
 ### Large Content Handling
 
-- Content is always fully embedded as a resource block in the response.
-- In HTTP mode, a `resource_link` block is added when content exceeds `MAX_INLINE_CONTENT_CHARS`.
+- Inline markdown is capped at 20,000 characters (`maxInlineContentChars`).
+- **Stdio mode:** full markdown is embedded as a `resource` block.
+- **HTTP mode:** if content exceeds the inline limit and cache is enabled, the response includes a `resource_link` to `superfetch://cache/...` (no embedded markdown). If cache is disabled, the inline markdown is truncated with `...[truncated]`.
 - Upstream fetch size is capped at 10 MB of HTML; larger responses fail.
 
 ---
@@ -309,12 +313,9 @@ Fetches a webpage and converts it to clean Markdown format with optional frontma
 
 | URI                                        | Description                                    |
 | ------------------------------------------ | ---------------------------------------------- |
-| `superfetch://health`                      | Real-time server health and memory checks      |
-| `superfetch://stats`                       | Server stats and cache metrics                 |
-| `superfetch://cache/list`                  | List cached entries and their resource URIs    |
 | `superfetch://cache/{namespace}/{urlHash}` | Cached content entry (`namespace`: `markdown`) |
 
-Resource subscriptions notify clients when cache entries update.
+Resource listings enumerate cached entries, and subscriptions notify clients when cache entries update.
 
 ---
 
@@ -329,7 +330,7 @@ GET /mcp/downloads/:namespace/:hash
 ```
 
 - `namespace`: `markdown`
-- Auth required (`Authorization: Bearer <API_KEY>` or `X-API-Key: <API_KEY>`)
+- Auth required (`Authorization: Bearer <token>`; in static token mode, `X-API-Key` is accepted)
 
 ### Response Headers
 
@@ -342,7 +343,7 @@ GET /mcp/downloads/:namespace/:hash
 ### Example Usage
 
 ```bash
-curl -H "Authorization: Bearer $API_KEY" \
+curl -H "Authorization: Bearer $TOKEN" \
   http://localhost:3000/mcp/downloads/markdown/abc123.def456 \
   -o article.md
 ```
@@ -359,7 +360,65 @@ curl -H "Authorization: Bearer $API_KEY" \
 
 ## Configuration
 
-Configuration details live in `CONFIGURATION.md`, including all environment variables, defaults, ranges, presets, and dev-only flags.
+Set environment variables in your MCP client `env` or in the shell before starting the server.
+
+### Core Server Settings
+
+| Variable        | Default              | Description                                                   |
+| --------------- | -------------------- | ------------------------------------------------------------- |
+| `HOST`          | `127.0.0.1`          | HTTP bind address                                             |
+| `PORT`          | `3000`               | HTTP server port (1024-65535)                                 |
+| `USER_AGENT`    | `superFetch-MCP/2.0` | User-Agent header for outgoing requests                       |
+| `CACHE_ENABLED` | `true`               | Enable response caching                                       |
+| `CACHE_TTL`     | `3600`               | Cache TTL in seconds (60-86400)                               |
+| `LOG_LEVEL`     | `info`               | `debug`, `info`, `warn`, `error`                              |
+| `ALLOWED_HOSTS` | (empty)              | Additional allowed Host/Origin values (comma/space separated) |
+
+### Auth (HTTP Mode)
+
+| Variable        | Default | Description                                                  |
+| --------------- | ------- | ------------------------------------------------------------ |
+| `AUTH_MODE`     | auto    | `static` or `oauth`. Auto-selects OAuth if any OAUTH URL set |
+| `ACCESS_TOKENS` | (empty) | Comma/space-separated static bearer tokens                   |
+| `API_KEY`       | (empty) | Adds a static bearer token and enables `X-API-Key` header    |
+
+Static mode requires at least one token (`ACCESS_TOKENS` or `API_KEY`).
+
+### OAuth (HTTP Mode)
+
+Required when `AUTH_MODE=oauth` (or auto-selected by presence of OAuth URLs):
+
+| Variable                  | Default | Description            |
+| ------------------------- | ------- | ---------------------- |
+| `OAUTH_ISSUER_URL`        | -       | OAuth issuer           |
+| `OAUTH_AUTHORIZATION_URL` | -       | Authorization endpoint |
+| `OAUTH_TOKEN_URL`         | -       | Token endpoint         |
+| `OAUTH_INTROSPECTION_URL` | -       | Introspection endpoint |
+
+Optional:
+
+| Variable                         | Default                    | Description                             |
+| -------------------------------- | -------------------------- | --------------------------------------- |
+| `OAUTH_REVOCATION_URL`           | -                          | Revocation endpoint                     |
+| `OAUTH_REGISTRATION_URL`         | -                          | Dynamic client registration endpoint    |
+| `OAUTH_RESOURCE_URL`             | `http://<host>:<port>/mcp` | Protected resource URL                  |
+| `OAUTH_REQUIRED_SCOPES`          | (empty)                    | Required scopes (comma/space separated) |
+| `OAUTH_CLIENT_ID`                | -                          | Client ID for introspection             |
+| `OAUTH_CLIENT_SECRET`            | -                          | Client secret for introspection         |
+| `OAUTH_INTROSPECTION_TIMEOUT_MS` | `5000`                     | Introspection timeout (1000-30000)      |
+
+### Fixed Limits (Not Configurable via env)
+
+- Fetch timeout: 15 seconds
+- Max redirects: 5
+- Max HTML response size: 10 MB
+- Inline markdown limit: 20,000 characters
+- Cache max entries: 100
+- Session TTL: 30 minutes
+- Max sessions: 200
+- Rate limit: 100 req/min per IP (60s window)
+
+See `CONFIGURATION.md` for preset examples and quick-start snippets.
 
 ---
 
@@ -371,11 +430,13 @@ HTTP mode uses the MCP Streamable HTTP transport. The workflow is:
 2. The server returns `mcp-session-id` in the response headers.
 3. Use that header for subsequent `POST /mcp`, `GET /mcp`, and `DELETE /mcp` requests.
 
+If the `mcp-protocol-version` header is missing, the server defaults it to `2025-03-26`. Supported versions are `2025-03-26` and `2025-11-25`.
+
 `GET /mcp` and `DELETE /mcp` require `mcp-session-id`. `POST /mcp` without an `initialize` request will return 400.
 
-If `MAX_SESSIONS` is reached, the server evicts the oldest session when possible, otherwise returns a 503.
+If the server reaches its session cap (200), it evicts the oldest session when possible; otherwise it returns a 503.
 
-Host header validation is always enforced in HTTP mode. When binding to `0.0.0.0` or `::`, set `ALLOWED_HOSTS` to the hostnames clients will send. If an `Origin` header is present, it must be allowed by `ALLOWED_ORIGINS` or `CORS_ALLOW_ALL`.
+Host and Origin headers are always validated. Allowed values include loopback hosts, the configured `HOST` (if not a wildcard), and any entries in `ALLOWED_HOSTS`. When binding to `0.0.0.0` or `::`, set `ALLOWED_HOSTS` to the hostnames clients will send.
 
 ---
 
@@ -402,13 +463,14 @@ DNS resolution is performed and blocked if any resolved IP matches a blocked ran
 - Max URL length: 2048 characters
 - Hostnames ending in `.local` or `.internal` are rejected
 
-### Header Sanitization
+### Host/Origin Validation (HTTP Mode)
 
-Blocked headers: `host`, `authorization`, `cookie`, `x-forwarded-for`, `x-real-ip`, `proxy-authorization`
+- Host header must match loopback, configured `HOST` (if not a wildcard), or `ALLOWED_HOSTS`
+- Origin header (when present) is validated against the same allow-list
 
 ### Rate Limiting
 
-Rate limiting applies to `/mcp` and `/mcp/downloads` and is configurable via `RATE_LIMIT_ENABLED`, `RATE_LIMIT_MAX`, `RATE_LIMIT_WINDOW_MS`, and `RATE_LIMIT_CLEANUP_MS` (see `CONFIGURATION.md`).
+Rate limiting applies to `/mcp` and `/mcp/downloads` (100 req/min per IP, 60s window). OPTIONS requests are not rate-limited.
 
 ---
 
@@ -439,10 +501,10 @@ Rate limiting applies to `/mcp` and `/mcp/downloads` and is configurable via `RA
 | Language           | TypeScript 5.9                    |
 | MCP SDK            | @modelcontextprotocol/sdk ^1.25.1 |
 | Content Extraction | @mozilla/readability ^0.6.0       |
-| HTML Parsing       | Cheerio ^1.1.2, LinkeDOM ^0.18.12 |
+| HTML Parsing       | LinkeDOM ^0.18.12                 |
 | Markdown           | Turndown ^7.2.2                   |
-| HTTP               | Express ^5.2.1, undici ^6.22.0    |
-| Validation         | Zod ^4.3.4                        |
+| HTTP               | Express ^5.2.1, undici ^6.23.0    |
+| Validation         | Zod ^4.3.5                        |
 
 ---
 
