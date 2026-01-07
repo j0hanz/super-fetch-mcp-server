@@ -1,30 +1,26 @@
 import { parseInteger, parseList, parseUrlEnv } from './env-parsers.js';
 
-export interface CoreOAuthUrls {
+export interface AuthConfig {
+  mode: 'oauth' | 'static';
   issuerUrl: URL | undefined;
   authorizationUrl: URL | undefined;
   tokenUrl: URL | undefined;
-}
-
-export interface OptionalOAuthUrls {
   revocationUrl: URL | undefined;
   registrationUrl: URL | undefined;
   introspectionUrl: URL | undefined;
   resourceUrl: URL;
-}
-
-export type AuthUrls = CoreOAuthUrls & OptionalOAuthUrls;
-
-export type AuthConfig = AuthUrls & {
-  mode: 'oauth' | 'static';
   requiredScopes: string[];
   clientId: string | undefined;
   clientSecret: string | undefined;
   introspectionTimeoutMs: number;
   staticTokens: string[];
-};
+}
 
-function readCoreOAuthUrls(): CoreOAuthUrls {
+function readCoreOAuthUrls(): {
+  issuerUrl: URL | undefined;
+  authorizationUrl: URL | undefined;
+  tokenUrl: URL | undefined;
+} {
   return {
     issuerUrl: parseUrlEnv(process.env.OAUTH_ISSUER_URL, 'OAUTH_ISSUER_URL'),
     authorizationUrl: parseUrlEnv(
@@ -35,7 +31,12 @@ function readCoreOAuthUrls(): CoreOAuthUrls {
   };
 }
 
-function readOptionalOAuthUrls(baseUrl: URL): OptionalOAuthUrls {
+function readOptionalOAuthUrls(baseUrl: URL): {
+  revocationUrl: URL | undefined;
+  registrationUrl: URL | undefined;
+  introspectionUrl: URL | undefined;
+  resourceUrl: URL;
+} {
   return {
     revocationUrl: parseUrlEnv(
       process.env.OAUTH_REVOCATION_URL,
@@ -55,13 +56,26 @@ function readOptionalOAuthUrls(baseUrl: URL): OptionalOAuthUrls {
   };
 }
 
-function readOAuthUrls(baseUrl: URL): AuthUrls {
+function readOAuthUrls(baseUrl: URL): {
+  issuerUrl: URL | undefined;
+  authorizationUrl: URL | undefined;
+  tokenUrl: URL | undefined;
+  revocationUrl: URL | undefined;
+  registrationUrl: URL | undefined;
+  introspectionUrl: URL | undefined;
+  resourceUrl: URL;
+} {
   return { ...readCoreOAuthUrls(), ...readOptionalOAuthUrls(baseUrl) };
 }
 
 function resolveAuthMode(
   authModeEnv: string | undefined,
-  urls: AuthUrls
+  urls: {
+    issuerUrl: URL | undefined;
+    authorizationUrl: URL | undefined;
+    tokenUrl: URL | undefined;
+    introspectionUrl: URL | undefined;
+  }
 ): 'oauth' | 'static' {
   if (authModeEnv === 'oauth') return 'oauth';
   if (authModeEnv === 'static') return 'static';
