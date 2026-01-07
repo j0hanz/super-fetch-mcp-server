@@ -5,7 +5,10 @@ import { config } from '../config/index.js';
 import { createErrorWithCode } from './error-utils.js';
 
 const BLOCK_LIST = new BlockList();
-const BLOCKED_IPV4_SUBNETS = [
+const BLOCKED_IPV4_SUBNETS: readonly {
+  subnet: string;
+  prefix: number;
+}[] = [
   { subnet: '0.0.0.0', prefix: 8 },
   { subnet: '10.0.0.0', prefix: 8 },
   { subnet: '100.64.0.0', prefix: 10 },
@@ -15,8 +18,11 @@ const BLOCKED_IPV4_SUBNETS = [
   { subnet: '192.168.0.0', prefix: 16 },
   { subnet: '224.0.0.0', prefix: 4 },
   { subnet: '240.0.0.0', prefix: 4 },
-] as const;
-const BLOCKED_IPV6_SUBNETS = [
+];
+const BLOCKED_IPV6_SUBNETS: readonly {
+  subnet: string;
+  prefix: number;
+}[] = [
   { subnet: '::', prefix: 128 },
   { subnet: '::1', prefix: 128 },
   { subnet: '64:ff9b::', prefix: 96 },
@@ -26,7 +32,7 @@ const BLOCKED_IPV6_SUBNETS = [
   { subnet: 'fc00::', prefix: 7 },
   { subnet: 'fe80::', prefix: 10 },
   { subnet: 'ff00::', prefix: 8 },
-] as const;
+];
 
 for (const entry of BLOCKED_IPV4_SUBNETS) {
   BLOCK_LIST.addSubnet(entry.subnet, entry.prefix, 'ipv4');
@@ -141,7 +147,7 @@ function normalizeHostname(url: URL): string {
   return hostname;
 }
 
-const BLOCKED_HOST_SUFFIXES = ['.local', '.internal'] as const;
+const BLOCKED_HOST_SUFFIXES: readonly string[] = ['.local', '.internal'];
 
 function assertHostnameAllowed(hostname: string): void {
   if (config.security.blockedHosts.has(hostname)) {

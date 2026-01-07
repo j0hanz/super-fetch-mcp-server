@@ -1,6 +1,7 @@
 import { FetchError } from '../../errors/app-error.js';
 
 import { createErrorWithCode } from '../../utils/error-utils.js';
+import { isRecord } from '../../utils/guards.js';
 import { validateAndNormalizeUrl } from '../../utils/url-validator.js';
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
@@ -56,8 +57,8 @@ function getRedirectLocation(response: Response, currentUrl: string): string {
 }
 
 function annotateRedirectError(error: unknown, url: string): void {
-  if (!error || typeof error !== 'object') return;
-  (error as { requestUrl?: string }).requestUrl = url;
+  if (!isRecord(error)) return;
+  error.requestUrl = url;
 }
 
 function resolveRedirectTarget(baseUrl: string, location: string): string {

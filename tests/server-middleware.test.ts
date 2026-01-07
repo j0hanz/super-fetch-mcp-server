@@ -27,7 +27,7 @@ function captureMiddleware() {
 describe('createJsonParseErrorHandler', () => {
   it('returns JSON-RPC parse error for invalid JSON', () => {
     const { uses } = captureMiddleware();
-    const handler = uses[3][0] as (
+    const handler = uses[4][0] as (
       err: Error,
       _req: unknown,
       res: {
@@ -66,7 +66,7 @@ describe('createJsonParseErrorHandler', () => {
 
   it('delegates to next for non-parse errors', () => {
     const { uses } = captureMiddleware();
-    const handler = uses[3][0] as (
+    const handler = uses[4][0] as (
       err: Error,
       _req: unknown,
       res: { status: () => unknown; json: () => unknown },
@@ -87,7 +87,7 @@ describe('createJsonParseErrorHandler', () => {
 describe('createContextMiddleware', () => {
   it('invokes next handler', () => {
     const { uses } = captureMiddleware();
-    const middleware = uses[2][0] as (
+    const middleware = uses[3][0] as (
       req: { headers?: Record<string, string> },
       _res: unknown,
       next: () => void
@@ -121,9 +121,71 @@ describe('registerHealthRoute', () => {
   });
 });
 
+describe('createOriginValidationMiddleware', () => {
+  it('rejects non-loopback origins when bound to loopback', () => {
+    const { uses } = captureMiddleware();
+    const middleware = uses[1][0] as (
+      req: { headers?: Record<string, string> },
+      res: {
+        status: (code: number) => unknown;
+        json: (payload: unknown) => void;
+      },
+      next: () => void
+    ) => void;
+
+    let statusCode: number | undefined;
+    let jsonBody: unknown;
+    const res = {
+      status: (code: number) => {
+        statusCode = code;
+        return res;
+      },
+      json: (payload: unknown) => {
+        jsonBody = payload;
+      },
+    };
+    let nextCalled = 0;
+    const next = () => {
+      nextCalled += 1;
+    };
+
+    middleware(
+      { headers: { origin: 'https://evil.example' } } as never,
+      res as never,
+      next
+    );
+
+    assert.equal(statusCode, 403);
+    assert.equal((jsonBody as { code?: string }).code, 'ORIGIN_NOT_ALLOWED');
+    assert.equal(nextCalled, 0);
+  });
+
+  it('allows loopback origins when bound to loopback', () => {
+    const { uses } = captureMiddleware();
+    const middleware = uses[1][0] as (
+      req: { headers?: Record<string, string> },
+      _res: unknown,
+      next: () => void
+    ) => void;
+
+    let nextCalled = 0;
+    const next = () => {
+      nextCalled += 1;
+    };
+
+    middleware(
+      { headers: { origin: 'http://127.0.0.1:3000' } } as never,
+      {} as never,
+      next
+    );
+
+    assert.equal(nextCalled, 1);
+  });
+});
+
 describe('attachBaseMiddleware', () => {
   it('registers middleware in expected order', () => {
     const { uses } = captureMiddleware();
-    assert.equal(uses.length, 7);
+    assert.equal(uses.length, 8);
   });
 });

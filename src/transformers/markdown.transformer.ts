@@ -142,7 +142,7 @@ const ESCAPE_PATTERNS = {
   quote: /"/g,
   newline: /\n/g,
   tab: /\t/g,
-} as const;
+};
 
 function needsYamlQuotes(value: string): boolean {
   const checks = [

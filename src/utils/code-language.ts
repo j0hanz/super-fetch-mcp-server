@@ -26,11 +26,11 @@ const CODE_PATTERNS: readonly [RegExp, string][] = [
   [/^\s*(func|package|import\s+")/m, 'go'],
 ];
 
-const CLASS_PATTERNS = [
+const CLASS_PATTERNS: readonly RegExp[] = [
   /language-(\w+)/,
   /lang-(\w+)/,
   /highlight-(\w+)/,
-] as const;
+];
 
 export function detectLanguageFromCode(code: string): string | undefined {
   for (const [pattern, language] of CODE_PATTERNS) {

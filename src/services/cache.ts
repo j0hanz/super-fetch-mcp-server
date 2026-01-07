@@ -9,8 +9,6 @@ import type { CacheKeyParts } from './cache-keys.js';
 import { parseCacheKey } from './cache-keys.js';
 import { logWarn } from './logger.js';
 
-export { createCacheKey, parseCacheKey, toResourceUri } from './cache-keys.js';
-
 interface CacheItem {
   entry: CacheEntry;
   expiresAt: number;

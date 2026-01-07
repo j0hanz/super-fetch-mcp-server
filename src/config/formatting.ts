@@ -5,7 +5,7 @@ export const CODE_BLOCK = {
   format: (code: string, language = ''): string => {
     return `\`\`\`${language}\n${code}\n\`\`\``;
   },
-} as const;
+};
 
 export const FRONTMATTER_DELIMITER = '---';
 

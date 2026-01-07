@@ -1,4 +1,4 @@
-import type { Express, NextFunction, Request, Response } from 'express';
+import type { Express, Request, Response } from 'express';
 
 import { config } from '../config/index.js';
 import type { CacheEntry } from '../config/types/content.js';
@@ -11,6 +11,8 @@ import {
   resolveCachedPayloadContent,
 } from '../utils/cached-payload.js';
 import { generateSafeFilename } from '../utils/filename-generator.js';
+
+import { wrapAsync } from './async-handler.js';
 
 const HASH_PATTERN = /^[a-f0-9.]+$/i;
 
@@ -140,11 +142,5 @@ function handleDownload(req: Request, res: Response): Promise<void> {
 }
 
 export function registerDownloadRoutes(app: Express): void {
-  const asyncHandler =
-    (fn: (req: Request, res: Response) => Promise<void>) =>
-    (req: Request, res: Response, next: NextFunction) => {
-      Promise.resolve(fn(req, res)).catch(next);
-    };
-
-  app.get('/mcp/downloads/:namespace/:hash', asyncHandler(handleDownload));
+  app.get('/mcp/downloads/:namespace/:hash', wrapAsync(handleDownload));
 }

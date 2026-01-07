@@ -67,9 +67,8 @@ function resolveResultOrder(
 
 function getLegacyVerbatim(options: dns.LookupOptions): boolean | undefined {
   if (isRecord(options)) {
-    // eslint-disable-next-line @typescript-eslint/dot-notation
-    const legacy = options['verbatim'];
-    return typeof legacy === 'boolean' ? legacy : undefined;
+    const { verbatim } = options;
+    return typeof verbatim === 'boolean' ? verbatim : undefined;
   }
   return undefined;
 }

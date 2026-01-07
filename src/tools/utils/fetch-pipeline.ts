@@ -5,6 +5,7 @@ import type {
 } from '../../config/types/runtime.js';
 
 import * as cache from '../../services/cache.js';
+import { createCacheKey } from '../../services/cache-keys.js';
 import { fetchNormalizedUrl } from '../../services/fetcher.js';
 import { logDebug } from '../../services/logger.js';
 
@@ -87,7 +88,7 @@ function resolveCacheKey<T>(
   options: FetchPipelineOptions<T>,
   normalizedUrl: string
 ): string | null {
-  return cache.createCacheKey(
+  return createCacheKey(
     options.cacheNamespace,
     normalizedUrl,
     options.cacheVary

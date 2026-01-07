@@ -13,6 +13,7 @@ import { logError, logInfo, logWarn } from '../services/logger.js';
 import { getErrorMessage } from '../utils/error-utils.js';
 
 import { createMcpServer } from '../server.js';
+import { sendJsonRpcError } from './jsonrpc-http.js';
 import {
   createSlotTracker,
   ensureSessionCapacity,
@@ -77,11 +78,11 @@ function createTransportForNewSession(options: McpSessionOptions): {
         createdAt: now,
         lastSeen: now,
       });
-      logInfo('Session initialized', { sessionId: id });
+      logInfo('Session initialized');
     },
     onsessionclosed: (id) => {
       options.sessionStore.remove(id);
-      logInfo('Session closed', { sessionId: id });
+      logInfo('Session closed');
     },
   });
 
@@ -160,6 +161,11 @@ export async function resolveTransportForPost(
       options.sessionStore.touch(sessionId);
       return existingSession.transport;
     }
+
+    // Client supplied a session id, but it doesn't exist.
+    // Streamable HTTP contract: invalid session IDs => 404.
+    sendJsonRpcError(res, -32600, 'Session not found', 404);
+    return null;
   }
 
   if (sessionId || !isInitializeRequest(body)) {

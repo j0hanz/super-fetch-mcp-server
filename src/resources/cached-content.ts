@@ -3,6 +3,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 
 import * as cache from '../services/cache.js';
+import { parseCacheKey, toResourceUri } from '../services/cache-keys.js';
 import { logWarn } from '../services/logger.js';
 
 import {
@@ -38,7 +39,7 @@ function listCachedResources(): {
   const resources = cache
     .keys()
     .map((key) => {
-      const parts = cache.parseCacheKey(key);
+      const parts = parseCacheKey(key);
       if (parts?.namespace !== CACHE_NAMESPACE) return null;
       return buildResourceEntry(parts.namespace, parts.urlHash);
     })
@@ -123,7 +124,7 @@ function registerCacheContentResource(server: McpServer): void {
 
 function registerCacheUpdateSubscription(server: McpServer): void {
   const unsubscribe = cache.onCacheUpdate(({ cacheKey }) => {
-    const resourceUri = cache.toResourceUri(cacheKey);
+    const resourceUri = toResourceUri(cacheKey);
     if (!resourceUri) return;
 
     notifyResourceUpdate(server, resourceUri);

@@ -2,7 +2,7 @@ const BYTES = {
   KB: 1024,
   MB: 1024 * 1024,
   GB: 1024 * 1024 * 1024,
-} as const;
+};
 
 export const SIZE_LIMITS = {
   ONE_MB: 1 * BYTES.MB,
@@ -10,16 +10,16 @@ export const SIZE_LIMITS = {
   TEN_MB: 10 * BYTES.MB,
   FIFTY_MB: 50 * BYTES.MB,
   HUNDRED_MB: 100 * BYTES.MB,
-} as const;
+};
 
 export const CACHE_HASH = {
   URL_HASH_LENGTH: 16,
   VARY_HASH_LENGTH: 12,
-} as const;
+};
 
 export const TIMEOUT = {
   DEFAULT_FETCH_TIMEOUT_MS: 15000,
   MIN_SESSION_TTL_MS: 60 * 1000,
   DEFAULT_SESSION_TTL_MS: 30 * 60 * 1000,
   MAX_SESSION_TTL_MS: 24 * 60 * 60 * 1000,
-} as const;
+};

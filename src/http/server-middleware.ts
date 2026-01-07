@@ -16,6 +16,10 @@ import { getSessionId } from './sessions.js';
 
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
 
+function isLoopbackHost(hostname: string): boolean {
+  return LOOPBACK_HOSTS.has(hostname);
+}
+
 function normalizeHost(value: string): string | null {
   const trimmed = value.trim().toLowerCase();
   if (!trimmed) return null;
@@ -79,6 +83,50 @@ function createHostValidationMiddleware(): RequestHandler {
       res.status(403).json({
         error: 'Host not allowed',
         code: 'HOST_NOT_ALLOWED',
+      });
+      return;
+    }
+
+    next();
+  };
+}
+
+function createOriginValidationMiddleware(): RequestHandler {
+  const isWildcard =
+    config.server.host === '0.0.0.0' || config.server.host === '::';
+
+  return (req: Request, res: Response, next: NextFunction): void => {
+    const originHeader = req.headers.origin;
+    if (typeof originHeader !== 'string' || originHeader.trim() === '') {
+      next();
+      return;
+    }
+
+    // MCP clients shouldn't be browsers; reject cross-site requests by default.
+    // If bound to wildcard, we can't safely allow any browser origin.
+    if (isWildcard) {
+      res.status(403).json({
+        error: 'Origin not allowed',
+        code: 'ORIGIN_NOT_ALLOWED',
+      });
+      return;
+    }
+
+    let originUrl: URL;
+    try {
+      originUrl = new URL(originHeader);
+    } catch {
+      res.status(403).json({
+        error: 'Origin not allowed',
+        code: 'ORIGIN_NOT_ALLOWED',
+      });
+      return;
+    }
+
+    if (!isLoopbackHost(originUrl.hostname)) {
+      res.status(403).json({
+        error: 'Origin not allowed',
+        code: 'ORIGIN_NOT_ALLOWED',
       });
       return;
     }
@@ -151,6 +199,7 @@ export function attachBaseMiddleware(
   corsMiddleware: RequestHandler
 ): void {
   app.use(createHostValidationMiddleware());
+  app.use(createOriginValidationMiddleware());
   app.use(jsonParser);
   app.use(createContextMiddleware());
   app.use(createJsonParseErrorHandler());

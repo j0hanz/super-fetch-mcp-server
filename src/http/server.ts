@@ -1,5 +1,3 @@
-import { styleText } from 'node:util';
-
 import type { Express, RequestHandler } from 'express';
 
 import { config, enableHttpMode } from '../config/index.js';
@@ -47,12 +45,10 @@ function startListening(app: Express): ReturnType<Express['listen']> {
       });
 
       const baseUrl = `http://${config.server.host}:${config.server.port}`;
-      process.stdout.write(
-        `${styleText('green', 'V')} superFetch MCP server running at ${styleText('cyan', baseUrl)}\n` +
-          `  Health check: ${styleText('dim', `${baseUrl}/health`)}\n` +
-          `  MCP endpoint: ${styleText('dim', `${baseUrl}/mcp`)}\n` +
-          `\n${styleText('dim', 'Run with --stdio flag for direct stdio integration')}\n`
+      logInfo(
+        `superFetch MCP server running at ${baseUrl} (health: ${baseUrl}/health, mcp: ${baseUrl}/mcp)`
       );
+      logInfo('Run with --stdio flag for direct stdio integration');
     })
     .on('error', (err) => {
       logError('Failed to start server', err);
@@ -67,9 +63,7 @@ function createShutdownHandler(
   stopRateLimitCleanup: () => void
 ): (signal: string) => Promise<void> {
   return async (signal: string): Promise<void> => {
-    process.stdout.write(
-      `\n${styleText('yellow', signal)} received, shutting down gracefully...\n`
-    );
+    logInfo(`${signal} received, shutting down gracefully...`);
 
     stopRateLimitCleanup();
     sessionCleanupController.abort();

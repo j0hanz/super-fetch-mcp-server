@@ -8,7 +8,7 @@ import { logError, logInfo } from './services/logger.js';
 
 import { registerTools } from './tools/index.js';
 
-import { registerResources } from './resources/index.js';
+import { registerCachedContentResource } from './resources/cached-content.js';
 
 export function createMcpServer(): McpServer {
   const server = new McpServer(
@@ -27,7 +27,7 @@ export function createMcpServer(): McpServer {
   );
 
   registerTools(server);
-  registerResources(server);
+  registerCachedContentResource(server);
 
   return server;
 }

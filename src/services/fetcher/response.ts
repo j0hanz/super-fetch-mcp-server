@@ -1,10 +1,4 @@
-import { Readable, Writable } from 'node:stream';
-import { pipeline } from 'node:stream/promises';
-import type { ReadableStream as WebReadableStream } from 'node:stream/web';
-
 import { FetchError } from '../../errors/app-error.js';
-
-type WritableChunk = string | Buffer | Uint8Array;
 
 function assertContentLengthWithinLimit(
   response: Response,
@@ -40,21 +34,13 @@ function createReadState(): StreamReadState {
   };
 }
 
-function toBuffer(chunk: WritableChunk): Buffer {
-  if (typeof chunk === 'string') {
-    return Buffer.from(chunk);
-  }
-
-  return Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-}
-
 function appendChunk(
   state: StreamReadState,
-  chunk: WritableChunk,
+  chunk: Uint8Array,
   maxBytes: number,
   url: string
 ): void {
-  const buffer = toBuffer(chunk);
+  const buffer = Buffer.from(chunk);
   state.total += buffer.length;
 
   if (state.total > maxBytes) {
@@ -73,28 +59,9 @@ function finalizeRead(state: StreamReadState): void {
   if (decoded) state.parts.push(decoded);
 }
 
-function createLimitedSink(
-  state: StreamReadState,
-  maxBytes: number,
-  url: string
-): Writable {
-  return new Writable({
-    write(
-      chunk: WritableChunk,
-      _encoding: BufferEncoding,
-      callback: (error?: Error | null) => void
-    ): void {
-      try {
-        appendChunk(state, chunk, maxBytes, url);
-        callback();
-      } catch (error) {
-        callback(error instanceof Error ? error : new Error(String(error)));
-      }
-    },
-    final(callback: (error?: Error | null) => void): void {
-      finalizeRead(state);
-      callback();
-    },
+function createAbortError(url: string): FetchError {
+  return new FetchError('Request was aborted during response read', url, 499, {
+    reason: 'aborted',
   });
 }
 
@@ -105,23 +72,35 @@ async function readStreamWithLimit(
   signal?: AbortSignal
 ): Promise<{ text: string; size: number }> {
   const state = createReadState();
-  const sink = createLimitedSink(state, maxBytes, url);
+  const reader = stream.getReader();
 
   try {
-    const readable = Readable.fromWeb(stream as WebReadableStream, { signal });
-    await pipeline(readable, sink, { signal });
+    if (signal?.aborted) {
+      await reader.cancel();
+      throw createAbortError(url);
+    }
+
+    let result = await reader.read();
+    while (!result.done) {
+      appendChunk(state, result.value, maxBytes, url);
+
+      if (signal?.aborted) {
+        await reader.cancel();
+        throw createAbortError(url);
+      }
+
+      result = await reader.read();
+    }
   } catch (error) {
     if (signal?.aborted) {
-      throw new FetchError(
-        'Request was aborted during response read',
-        url,
-        499,
-        { reason: 'aborted' }
-      );
+      throw createAbortError(url);
     }
     throw error;
+  } finally {
+    reader.releaseLock();
   }
 
+  finalizeRead(state);
   return { text: state.parts.join(''), size: state.total };
 }
 

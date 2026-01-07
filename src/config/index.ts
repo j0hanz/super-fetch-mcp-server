@@ -114,7 +114,7 @@ export const config = {
       /^::ffff:172\.(1[6-9]|2\d|3[01])\./,
       /^::ffff:192\.168\./,
       /^::ffff:169\.254\./,
-    ] as readonly RegExp[],
+    ],
     apiKey: process.env.API_KEY,
     allowRemote: isRemoteHost,
   },
@@ -125,7 +125,7 @@ export const config = {
     cleanupIntervalMs: 60000,
   },
   runtime: runtimeState,
-} as const;
+};
 
 export function enableHttpMode(): void {
   runtimeState.httpMode = true;

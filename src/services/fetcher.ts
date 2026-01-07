@@ -24,7 +24,7 @@ const DEFAULT_HEADERS = {
   'Accept-Language': 'en-US,en;q=0.5',
   'Accept-Encoding': 'gzip, deflate, br',
   Connection: 'keep-alive',
-} as const;
+};
 
 function buildHeaders(): Headers {
   return new Headers(DEFAULT_HEADERS);
@@ -106,10 +106,6 @@ async function fetchWithTelemetry(
   }
 }
 
-/**
- * Fetch a normalized URL with the configured timeout.
- * No internal retries - let the MCP client handle retry logic.
- */
 export async function fetchNormalizedUrl(
   normalizedUrl: string,
   options?: FetchOptions

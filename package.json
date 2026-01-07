@@ -2,7 +2,7 @@
   "name": "@j0hanz/superfetch",
   "version": "1.2.5",
   "mcpName": "io.github.j0hanz/superfetch",
-  "description": "Intelligent web content fetcher MCP server that converts HTML to clean, AI-readable JSONL format",
+  "description": "Intelligent web content fetcher MCP server that converts HTML to clean, AI-readable Markdown",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
@@ -28,7 +28,7 @@
     "web-fetching",
     "content-extraction",
     "readability",
-    "jsonl",
+    "markdown",
     "ai-tools",
     "model-context-protocol",
     "superfetch"

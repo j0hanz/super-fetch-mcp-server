@@ -1,4 +1,4 @@
-import type { Express, NextFunction, Request, Response } from 'express';
+import type { Express, Request, Response } from 'express';
 
 import type { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 
@@ -6,39 +6,29 @@ import type { McpRequestBody } from '../config/types/runtime.js';
 
 import { logError, logInfo } from '../services/logger.js';
 
+import { acceptsEventStream, ensurePostAcceptHeader } from './accept-policy.js';
+import { wrapAsync } from './async-handler.js';
+import { sendJsonRpcError } from './jsonrpc-http.js';
 import {
   type McpSessionOptions,
   resolveTransportForPost,
 } from './mcp-session.js';
 import { isJsonRpcBatchRequest, isMcpRequestBody } from './mcp-validation.js';
+import { ensureMcpProtocolVersionHeader } from './protocol-policy.js';
 import { getSessionId } from './sessions.js';
 
-function sendJsonRpcError(
-  res: Response,
-  code: number,
-  message: string,
-  status = 400
-): void {
-  res.status(status).json({
-    jsonrpc: '2.0',
-    error: {
-      code,
-      message,
-    },
-    id: null,
-  });
-}
+type RequestWithUnknownBody = Omit<Request, 'body'> & { body: unknown };
 
 function respondInvalidRequestBody(res: Response): void {
   sendJsonRpcError(res, -32600, 'Invalid Request: Malformed request body', 400);
 }
 
 function respondMissingSession(res: Response): void {
-  res.status(400).json({ error: 'Missing mcp-session-id header' });
+  sendJsonRpcError(res, -32600, 'Missing mcp-session-id header', 400);
 }
 
 function respondSessionNotFound(res: Response): void {
-  res.status(404).json({ error: 'Session not found' });
+  sendJsonRpcError(res, -32600, 'Session not found', 404);
 }
 
 function logPostRequest(
@@ -49,7 +39,6 @@ function logPostRequest(
   logInfo('[MCP POST]', {
     method: body.method,
     id: body.id,
-    sessionId: sessionId ?? 'none',
     isInitialize: body.method === 'initialize',
     sessionCount: options.sessionStore.size(),
   });
@@ -93,51 +82,57 @@ function resolveSessionTransport(
   options: McpSessionOptions,
   res: Response
 ): StreamableHTTPServerTransport | null {
+  const { sessionStore } = options;
+
   if (!sessionId) {
     respondMissingSession(res);
     return null;
   }
 
-  const session = options.sessionStore.get(sessionId);
+  const session = sessionStore.get(sessionId);
   if (!session) {
     respondSessionNotFound(res);
     return null;
   }
 
-  options.sessionStore.touch(sessionId);
+  sessionStore.touch(sessionId);
   return session.transport;
 }
 
 async function handlePost(
-  req: Request,
+  req: RequestWithUnknownBody,
   res: Response,
   options: McpSessionOptions
 ): Promise<void> {
-  const sessionId = getSessionId(req);
-  const body = req.body as unknown;
+  ensurePostAcceptHeader(req);
+  if (!ensureMcpProtocolVersionHeader(req, res)) return;
 
-  if (isJsonRpcBatchRequest(body)) {
+  const sessionId = getSessionId(req);
+  const { body } = req;
+  const payload = body;
+
+  if (isJsonRpcBatchRequest(payload)) {
     sendJsonRpcError(res, -32600, 'Batch requests are not supported', 400);
     return;
   }
 
-  if (!isMcpRequestBody(body)) {
+  if (!isMcpRequestBody(payload)) {
     respondInvalidRequestBody(res);
     return;
   }
 
-  logPostRequest(body, sessionId, options);
+  logPostRequest(payload, sessionId, options);
 
   const transport = await resolveTransportForPost(
     req,
     res,
-    body,
+    payload,
     sessionId,
     options
   );
   if (!transport) return;
 
-  await handleTransportRequest(transport, req, res, body);
+  await handleTransportRequest(transport, req, res, payload);
 }
 
 async function handleGet(
@@ -145,6 +140,15 @@ async function handleGet(
   res: Response,
   options: McpSessionOptions
 ): Promise<void> {
+  if (!ensureMcpProtocolVersionHeader(req, res)) return;
+  if (!acceptsEventStream(req)) {
+    res.status(406).json({
+      error: 'Not Acceptable',
+      code: 'ACCEPT_NOT_SUPPORTED',
+    });
+    return;
+  }
+
   const transport = resolveSessionTransport(getSessionId(req), options, res);
   if (!transport) return;
 
@@ -156,6 +160,8 @@ async function handleDelete(
   res: Response,
   options: McpSessionOptions
 ): Promise<void> {
+  if (!ensureMcpProtocolVersionHeader(req, res)) return;
+
   const transport = resolveSessionTransport(getSessionId(req), options, res);
   if (!transport) return;
 
@@ -166,22 +172,16 @@ export function registerMcpRoutes(
   app: Express,
   options: McpSessionOptions
 ): void {
-  const asyncHandler =
-    (fn: (req: Request, res: Response) => Promise<void>) =>
-    (req: Request, res: Response, next: NextFunction) => {
-      Promise.resolve(fn(req, res)).catch(next);
-    };
-
   app.post(
     '/mcp',
-    asyncHandler((req, res) => handlePost(req, res, options))
+    wrapAsync((req, res) => handlePost(req, res, options))
   );
   app.get(
     '/mcp',
-    asyncHandler((req, res) => handleGet(req, res, options))
+    wrapAsync((req, res) => handleGet(req, res, options))
   );
   app.delete(
     '/mcp',
-    asyncHandler((req, res) => handleDelete(req, res, options))
+    wrapAsync((req, res) => handleDelete(req, res, options))
   );
 }

@@ -1,7 +1,7 @@
 import { TRUNCATION_MARKER } from '../../config/formatting.js';
 import { config } from '../../config/index.js';
 
-import * as cache from '../../services/cache.js';
+import { toResourceUri } from '../../services/cache-keys.js';
 
 interface InlineContentResult {
   content?: string;
@@ -37,7 +37,7 @@ export function applyInlineContentLimit(
 
 function resolveResourceUri(cacheKey: string | null): string | null {
   if (!config.cache.enabled || !cacheKey) return null;
-  return cache.toResourceUri(cacheKey);
+  return toResourceUri(cacheKey);
 }
 
 function buildTruncatedFallback(
