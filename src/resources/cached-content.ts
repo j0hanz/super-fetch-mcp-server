@@ -156,7 +156,7 @@ function requireCacheEntry(cacheKey: string): { content: string } {
   const cached = cache.get(cacheKey);
   if (!cached) {
     throw new McpError(
-      ErrorCode.InvalidParams,
+      -32002,
       `Content not found in cache for key: ${cacheKey}`
     );
   }

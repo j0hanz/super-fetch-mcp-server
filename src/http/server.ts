@@ -9,7 +9,7 @@ import { errorHandler } from '../middleware/error-handler.js';
 
 import { getErrorMessage } from '../utils/error-utils.js';
 
-import { createAuthMiddleware } from './auth.js';
+import { createAuthMetadataRouter, createAuthMiddleware } from './auth.js';
 import { createCorsMiddleware } from './cors.js';
 import { registerDownloadRoutes } from './download-routes.js';
 import { registerMcpRoutes } from './mcp-routes.js';
@@ -30,9 +30,35 @@ function assertHttpConfiguration(): void {
     process.exit(1);
   }
 
-  if (!config.security.apiKey) {
-    logError('API_KEY is required for HTTP mode; refusing to start');
+  if (config.security.allowRemote && config.auth.mode !== 'oauth') {
+    logError(
+      'Remote HTTP mode requires OAuth configuration; refusing to start'
+    );
     process.exit(1);
+  }
+
+  if (config.auth.mode === 'static' && config.auth.staticTokens.length === 0) {
+    logError('At least one static access token is required for HTTP mode');
+    process.exit(1);
+  }
+
+  if (config.auth.mode === 'oauth') {
+    if (!config.auth.issuerUrl || !config.auth.authorizationUrl) {
+      logError(
+        'OAUTH_ISSUER_URL and OAUTH_AUTHORIZATION_URL are required for OAuth mode'
+      );
+      process.exit(1);
+    }
+
+    if (!config.auth.tokenUrl) {
+      logError('OAUTH_TOKEN_URL is required for OAuth mode');
+      process.exit(1);
+    }
+
+    if (!config.auth.introspectionUrl) {
+      logError('OAUTH_INTROSPECTION_URL is required for OAuth mode');
+      process.exit(1);
+    }
   }
 }
 
@@ -112,7 +138,7 @@ function buildMiddleware(): {
 } {
   const { middleware: rateLimitMiddleware, stop: stopRateLimitCleanup } =
     createRateLimitMiddleware(config.rateLimit);
-  const authMiddleware = createAuthMiddleware(config.security.apiKey ?? '');
+  const authMiddleware = createAuthMiddleware();
   // No CORS - MCP clients don't run in browsers
   const corsMiddleware = createCorsMiddleware();
 
@@ -138,8 +164,11 @@ function createSessionInfrastructure(): {
 
 function registerHttpRoutes(
   app: Express,
-  sessionStore: ReturnType<typeof createSessionStore>
+  sessionStore: ReturnType<typeof createSessionStore>,
+  authMiddleware: RequestHandler
 ): void {
+  app.use('/mcp', authMiddleware);
+  app.use('/mcp/downloads', authMiddleware);
   registerMcpRoutes(app, {
     sessionStore,
     maxSessions: config.server.maxSessions,
@@ -161,18 +190,17 @@ export async function startHttpServer(): Promise<{
     corsMiddleware,
   } = buildMiddleware();
 
-  attachBaseMiddleware(
-    app,
-    jsonParser,
-    rateLimitMiddleware,
-    authMiddleware,
-    corsMiddleware
-  );
+  attachBaseMiddleware(app, jsonParser, rateLimitMiddleware, corsMiddleware);
+
+  const authMetadataRouter = createAuthMetadataRouter();
+  if (authMetadataRouter) {
+    app.use(authMetadataRouter);
+  }
   assertHttpConfiguration();
 
   const { sessionStore, sessionCleanupController } =
     createSessionInfrastructure();
-  registerHttpRoutes(app, sessionStore);
+  registerHttpRoutes(app, sessionStore, authMiddleware);
 
   const server = startListening(app);
   const shutdown = createShutdownHandler(

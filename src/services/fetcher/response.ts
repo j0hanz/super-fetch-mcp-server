@@ -40,8 +40,7 @@ function appendChunk(
   maxBytes: number,
   url: string
 ): void {
-  const buffer = Buffer.from(chunk);
-  state.total += buffer.length;
+  state.total += chunk.byteLength;
 
   if (state.total > maxBytes) {
     throw new FetchError(
@@ -50,7 +49,7 @@ function appendChunk(
     );
   }
 
-  const decoded = state.decoder.decode(buffer, { stream: true });
+  const decoded = state.decoder.decode(chunk, { stream: true });
   if (decoded) state.parts.push(decoded);
 }
 
@@ -92,6 +91,13 @@ async function readStreamWithLimit(
       result = await reader.read();
     }
   } catch (error) {
+    if (!signal?.aborted) {
+      try {
+        await reader.cancel();
+      } catch {
+        // Ignore cancel errors; we're already failing this read.
+      }
+    }
     if (signal?.aborted) {
       throw createAbortError(url);
     }

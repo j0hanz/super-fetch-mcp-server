@@ -16,7 +16,8 @@ export function isMcpRequestBody(body: unknown): body is McpRequestBody {
   const idValid =
     id === undefined || typeof id === 'string' || typeof id === 'number';
   const jsonrpcValid = jsonrpc === undefined || jsonrpc === '2.0';
-  const paramsValid = params === undefined || typeof params === 'object';
+  const paramsValid =
+    params === undefined || (typeof params === 'object' && params !== null);
 
   return methodValid && idValid && jsonrpcValid && paramsValid;
 }

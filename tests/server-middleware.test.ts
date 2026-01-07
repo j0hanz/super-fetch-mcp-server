@@ -16,10 +16,9 @@ function captureMiddleware() {
   };
   const jsonParser = () => undefined;
   const rateLimit = () => undefined;
-  const auth = () => undefined;
   const cors = () => undefined;
 
-  attachBaseMiddleware(app as never, jsonParser, rateLimit, auth, cors);
+  attachBaseMiddleware(app as never, jsonParser, rateLimit, cors);
 
   return { uses, routes };
 }
@@ -186,6 +185,6 @@ describe('createOriginValidationMiddleware', () => {
 describe('attachBaseMiddleware', () => {
   it('registers middleware in expected order', () => {
     const { uses } = captureMiddleware();
-    assert.equal(uses.length, 8);
+    assert.equal(uses.length, 7);
   });
 });

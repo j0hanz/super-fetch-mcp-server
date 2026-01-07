@@ -16,10 +16,6 @@ import { getSessionId } from './sessions.js';
 
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
 
-function isLoopbackHost(hostname: string): boolean {
-  return LOOPBACK_HOSTS.has(hostname);
-}
-
 function normalizeHost(value: string): string | null {
   const trimmed = value.trim().toLowerCase();
   if (!trimmed) return null;
@@ -59,21 +55,18 @@ function buildAllowedHosts(): Set<string> {
     allowedHosts.add(configuredHost);
   }
 
+  // Allow explicitly configured hosts
+  for (const host of config.security.allowedHosts) {
+    allowedHosts.add(host);
+  }
+
   return allowedHosts;
 }
 
 function createHostValidationMiddleware(): RequestHandler {
   const allowedHosts = buildAllowedHosts();
-  const isWildcard =
-    config.server.host === '0.0.0.0' || config.server.host === '::';
 
   return (req: Request, res: Response, next: NextFunction): void => {
-    // Skip validation for wildcard bindings (user takes responsibility)
-    if (isWildcard) {
-      next();
-      return;
-    }
-
     const hostHeader =
       typeof req.headers.host === 'string' ? req.headers.host : '';
 
@@ -92,23 +85,12 @@ function createHostValidationMiddleware(): RequestHandler {
 }
 
 function createOriginValidationMiddleware(): RequestHandler {
-  const isWildcard =
-    config.server.host === '0.0.0.0' || config.server.host === '::';
+  const allowedHosts = buildAllowedHosts();
 
   return (req: Request, res: Response, next: NextFunction): void => {
     const originHeader = req.headers.origin;
     if (typeof originHeader !== 'string' || originHeader.trim() === '') {
       next();
-      return;
-    }
-
-    // MCP clients shouldn't be browsers; reject cross-site requests by default.
-    // If bound to wildcard, we can't safely allow any browser origin.
-    if (isWildcard) {
-      res.status(403).json({
-        error: 'Origin not allowed',
-        code: 'ORIGIN_NOT_ALLOWED',
-      });
       return;
     }
 
@@ -123,7 +105,7 @@ function createOriginValidationMiddleware(): RequestHandler {
       return;
     }
 
-    if (!isLoopbackHost(originUrl.hostname)) {
+    if (!allowedHosts.has(originUrl.hostname.toLowerCase())) {
       res.status(403).json({
         error: 'Origin not allowed',
         code: 'ORIGIN_NOT_ALLOWED',
@@ -195,7 +177,6 @@ export function attachBaseMiddleware(
   app: Express,
   jsonParser: RequestHandler,
   rateLimitMiddleware: RequestHandler,
-  authMiddleware: RequestHandler,
   corsMiddleware: RequestHandler
 ): void {
   app.use(createHostValidationMiddleware());
@@ -205,6 +186,5 @@ export function attachBaseMiddleware(
   app.use(createJsonParseErrorHandler());
   app.use(corsMiddleware);
   app.use('/mcp', rateLimitMiddleware);
-  app.use(authMiddleware);
   registerHealthRoute(app);
 }

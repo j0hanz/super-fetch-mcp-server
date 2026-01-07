@@ -38,16 +38,21 @@ function deserializeMarkdownResult(
     const parsed: unknown = JSON.parse(cached);
     if (!isRecord(parsed)) return undefined;
 
-    const { content, markdown, title } = parsed;
-    if (typeof content !== 'string') return undefined;
-    if (typeof markdown !== 'string') return undefined;
+    const { content, markdown, title, truncated } = parsed;
+    const resolvedContent =
+      typeof markdown === 'string'
+        ? markdown
+        : typeof content === 'string'
+          ? content
+          : undefined;
+    if (resolvedContent === undefined) return undefined;
     if (title !== undefined && typeof title !== 'string') return undefined;
 
     return {
-      content,
-      markdown,
+      content: resolvedContent,
+      markdown: resolvedContent,
       title: typeof title === 'string' ? title : undefined,
-      truncated: false,
+      truncated: typeof truncated === 'boolean' ? truncated : false,
     };
   } catch {
     return undefined;
@@ -61,6 +66,14 @@ function buildMarkdownTransform() {
     });
     return { ...result, content: result.markdown };
   };
+}
+
+function serializeMarkdownResult(result: MarkdownPipelineResult): string {
+  return JSON.stringify({
+    markdown: result.markdown,
+    title: result.title,
+    truncated: result.truncated,
+  });
 }
 
 function buildStructuredContent(
@@ -85,6 +98,7 @@ async function fetchPipeline(url: string): Promise<{
   return performSharedFetch<MarkdownPipelineResult>({
     url,
     transform: buildMarkdownTransform(),
+    serialize: serializeMarkdownResult,
     deserialize: deserializeMarkdownResult,
   });
 }
