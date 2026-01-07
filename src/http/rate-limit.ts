@@ -42,12 +42,16 @@ export function createRateLimitMiddleware(
   const stop = (): void => {
     cleanupController.abort();
   };
+  const middleware = createRateLimitHandler(store, options);
 
-  const middleware = (
-    req: Request,
-    res: Response,
-    next: NextFunction
-  ): void => {
+  return { middleware, stop, store };
+}
+
+function createRateLimitHandler(
+  store: Map<string, RateLimitEntry>,
+  options: RateLimitConfig
+): (req: Request, res: Response, next: NextFunction) => void {
+  return (req: Request, res: Response, next: NextFunction): void => {
     if (shouldSkipRateLimit(req, options)) {
       next();
       return;
@@ -68,8 +72,6 @@ export function createRateLimitMiddleware(
 
     next();
   };
-
-  return { middleware, stop, store };
 }
 
 async function startCleanupLoop(

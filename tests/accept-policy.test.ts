@@ -6,38 +6,91 @@ import {
   ensurePostAcceptHeader,
 } from '../dist/http/accept-policy.js';
 
-describe('accept-policy', () => {
-  it('defaults POST Accept when missing', () => {
-    const req = { headers: {} } as never;
-    ensurePostAcceptHeader(req);
-    assert.equal(req.headers.accept, 'application/json, text/event-stream');
-  });
+type AcceptCase = {
+  name: string;
+  header?: string;
+  expected: string;
+};
 
-  it('defaults POST Accept when */*', () => {
-    const req = { headers: { accept: '*/*' } } as never;
-    ensurePostAcceptHeader(req);
-    assert.equal(req.headers.accept, 'application/json, text/event-stream');
-  });
+type EventStreamCase = {
+  name: string;
+  header?: string;
+  expected: boolean;
+};
 
-  it('defaults POST Accept when incomplete', () => {
-    const req = { headers: { accept: 'application/json' } } as never;
-    ensurePostAcceptHeader(req);
-    assert.equal(req.headers.accept, 'application/json, text/event-stream');
-  });
+const postAcceptCases: AcceptCase[] = [
+  {
+    name: 'defaults POST Accept when missing',
+    expected: 'application/json, text/event-stream',
+  },
+  {
+    name: 'defaults POST Accept when */*',
+    header: '*/*',
+    expected: 'application/json, text/event-stream',
+  },
+  {
+    name: 'defaults POST Accept when incomplete',
+    header: 'application/json',
+    expected: 'application/json, text/event-stream',
+  },
+  {
+    name: 'preserves POST Accept when already includes JSON and SSE',
+    header: 'application/json, text/event-stream',
+    expected: 'application/json, text/event-stream',
+  },
+];
 
-  it('preserves POST Accept when already includes JSON and SSE', () => {
-    const req = {
-      headers: { accept: 'application/json, text/event-stream' },
-    } as never;
-    ensurePostAcceptHeader(req);
-    assert.equal(req.headers.accept, 'application/json, text/event-stream');
-  });
+const eventStreamCases: EventStreamCase[] = [
+  {
+    name: 'returns false when Accept is missing',
+    expected: false,
+  },
+  {
+    name: 'returns true when Accept includes SSE',
+    header: 'text/event-stream',
+    expected: true,
+  },
+];
 
-  it('acceptsEventStream returns true only when Accept includes SSE', () => {
-    assert.equal(acceptsEventStream({ headers: {} } as never), false);
-    assert.equal(
-      acceptsEventStream({ headers: { accept: 'text/event-stream' } } as never),
-      true
-    );
+function runPostAcceptCase(testCase: AcceptCase) {
+  const req = {
+    headers: testCase.header ? { accept: testCase.header } : {},
+  } as never;
+
+  ensurePostAcceptHeader(req);
+
+  assert.equal(req.headers.accept, testCase.expected);
+}
+
+function runEventStreamCase(testCase: EventStreamCase) {
+  const req = {
+    headers: testCase.header ? { accept: testCase.header } : {},
+  } as never;
+
+  assert.equal(acceptsEventStream(req), testCase.expected);
+}
+
+function registerPostAcceptCases() {
+  postAcceptCases.forEach((testCase) => {
+    it(testCase.name, () => {
+      runPostAcceptCase(testCase);
+    });
   });
-});
+}
+
+function registerEventStreamCases() {
+  eventStreamCases.forEach((testCase) => {
+    it(`acceptsEventStream ${testCase.name}`, () => {
+      runEventStreamCase(testCase);
+    });
+  });
+}
+
+function registerAcceptPolicyTests() {
+  describe('accept-policy', () => {
+    registerPostAcceptCases();
+    registerEventStreamCases();
+  });
+}
+
+registerAcceptPolicyTests();

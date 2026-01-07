@@ -76,20 +76,33 @@ function emitCacheUpdate(cacheKey: string): void {
 
 export function get(cacheKey: string | null): CacheEntry | undefined {
   if (!isCacheReadable(cacheKey)) return undefined;
-
-  try {
-    return readCacheEntry(cacheKey);
-  } catch (error) {
-    logWarn('Cache get error', {
-      key: cacheKey.substring(0, 100),
-      error: getErrorMessage(error),
-    });
-    return undefined;
-  }
+  return runCacheOperation(cacheKey, 'Cache get error', () =>
+    readCacheEntry(cacheKey)
+  );
 }
 
 function isCacheReadable(cacheKey: string | null): cacheKey is string {
   return config.cache.enabled && Boolean(cacheKey);
+}
+
+function isCacheWritable(
+  cacheKey: string | null,
+  content: string
+): cacheKey is string {
+  return config.cache.enabled && Boolean(cacheKey) && Boolean(content);
+}
+
+function runCacheOperation<T>(
+  cacheKey: string,
+  message: string,
+  operation: () => T
+): T | undefined {
+  try {
+    return operation();
+  } catch (error) {
+    logCacheError(message, cacheKey, error);
+    return undefined;
+  }
 }
 
 function readCacheEntry(cacheKey: string): CacheEntry | undefined {
@@ -117,20 +130,12 @@ export function set(
   content: string,
   metadata: CacheEntryMetadata
 ): void {
-  if (!config.cache.enabled) return;
-  if (!cacheKey) return;
-  if (!content) return;
-
-  try {
+  if (!isCacheWritable(cacheKey, content)) return;
+  runCacheOperation(cacheKey, 'Cache set error', () => {
     startCleanupLoop();
     const entry = buildCacheEntry(content, metadata);
     persistCacheEntry(cacheKey, entry);
-  } catch (error) {
-    logWarn('Cache set error', {
-      key: cacheKey.substring(0, 100),
-      error: getErrorMessage(error),
-    });
-  }
+  });
 }
 
 export function keys(): readonly string[] {
@@ -145,22 +150,20 @@ function buildCacheEntry(
   content: string,
   metadata: CacheEntryMetadata
 ): CacheEntry {
+  const fetchedAt = new Date().toISOString();
+  const expiresAt = new Date(resolveExpiryTimestamp()).toISOString();
   const entry: CacheEntry = {
     url: metadata.url,
     content,
-    fetchedAt: new Date().toISOString(),
-    expiresAt: new Date(Date.now() + config.cache.ttl * 1000).toISOString(),
+    fetchedAt,
+    expiresAt,
+    ...(metadata.title !== undefined ? { title: metadata.title } : {}),
   };
-
-  if (metadata.title !== undefined) {
-    entry.title = metadata.title;
-  }
-
   return entry;
 }
 
 function persistCacheEntry(cacheKey: string, entry: CacheEntry): void {
-  const expiresAt = Date.now() + config.cache.ttl * 1000;
+  const expiresAt = resolveExpiryTimestamp();
   contentCache.set(cacheKey, { entry, expiresAt });
   trimCacheToMaxKeys();
   emitCacheUpdate(cacheKey);
@@ -175,4 +178,19 @@ function trimCacheToMaxKeys(): void {
     if (done) break;
     contentCache.delete(value);
   }
+}
+
+function resolveExpiryTimestamp(): number {
+  return Date.now() + config.cache.ttl * 1000;
+}
+
+function logCacheError(
+  message: string,
+  cacheKey: string,
+  error: unknown
+): void {
+  logWarn(message, {
+    key: cacheKey.substring(0, 100),
+    error: getErrorMessage(error),
+  });
 }

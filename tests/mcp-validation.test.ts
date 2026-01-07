@@ -6,116 +6,129 @@ import {
   isMcpRequestBody,
 } from '../dist/http/mcp-validation.js';
 
+type Case<T> = {
+  name: string;
+  input: T;
+  expected: boolean;
+};
+
+const BATCH_CASES: readonly Case<unknown>[] = [
+  { name: 'empty array', input: [], expected: true },
+  {
+    name: 'single JSON-RPC request',
+    input: [{ jsonrpc: '2.0', method: 'test', id: 1 }],
+    expected: true,
+  },
+  {
+    name: 'multiple JSON-RPC requests',
+    input: [
+      { jsonrpc: '2.0', method: 'a', id: 1 },
+      { jsonrpc: '2.0', method: 'b', id: 2 },
+    ],
+    expected: true,
+  },
+  { name: 'null', input: null, expected: false },
+  { name: 'undefined', input: undefined, expected: false },
+  { name: 'object', input: {}, expected: false },
+  {
+    name: 'single object request (non-array)',
+    input: { jsonrpc: '2.0', method: 'test', id: 1 },
+    expected: false,
+  },
+  { name: 'string', input: 'string', expected: false },
+  { name: 'number', input: 123, expected: false },
+];
+
+const MCP_REQUEST_CASES: readonly Case<unknown>[] = [
+  {
+    name: 'valid initialize request',
+    input: { jsonrpc: '2.0', method: 'initialize', id: 1 },
+    expected: true,
+  },
+  {
+    name: 'valid tools/list request',
+    input: { jsonrpc: '2.0', method: 'tools/list', id: 'abc' },
+    expected: true,
+  },
+  {
+    name: 'valid tools/call request',
+    input: {
+      jsonrpc: '2.0',
+      method: 'tools/call',
+      params: { name: 'test' },
+      id: 1,
+    },
+    expected: true,
+  },
+  {
+    name: 'notification without id',
+    input: { jsonrpc: '2.0', method: 'notifications/cancelled' },
+    expected: true,
+  },
+  { name: 'missing method and jsonrpc', input: {}, expected: false },
+  {
+    name: 'missing jsonrpc',
+    input: { method: 'test', id: 1 },
+    expected: false,
+  },
+  {
+    name: 'missing method',
+    input: { jsonrpc: '2.0', id: 1 },
+    expected: false,
+  },
+  { name: 'batch payload', input: [], expected: false },
+  {
+    name: 'batch payload with request',
+    input: [{ jsonrpc: '2.0', method: 'test', id: 1 }],
+    expected: false,
+  },
+  { name: 'null', input: null, expected: false },
+  { name: 'undefined', input: undefined, expected: false },
+  { name: 'string', input: 'string', expected: false },
+  { name: 'number', input: 123, expected: false },
+  {
+    name: 'invalid jsonrpc version',
+    input: { jsonrpc: '1.0', method: 'test', id: 1 },
+    expected: false,
+  },
+  {
+    name: 'invalid method type',
+    input: { jsonrpc: '2.0', method: 123, id: 1 },
+    expected: false,
+  },
+  {
+    name: 'invalid id type',
+    input: { jsonrpc: '2.0', method: 'test', id: [] },
+    expected: false,
+  },
+  {
+    name: 'params array',
+    input: { jsonrpc: '2.0', method: 'tools/call', params: [], id: 1 },
+    expected: false,
+  },
+];
+
+function assertCase<T>(
+  testCase: Case<T>,
+  predicate: (input: T) => boolean
+): void {
+  assert.equal(predicate(testCase.input), testCase.expected);
+}
+
 describe('mcp-validation', () => {
   describe('isJsonRpcBatchRequest', () => {
-    it('returns true for array payloads', () => {
-      assert.equal(isJsonRpcBatchRequest([]), true);
-      assert.equal(
-        isJsonRpcBatchRequest([{ jsonrpc: '2.0', method: 'test', id: 1 }]),
-        true
-      );
-      assert.equal(
-        isJsonRpcBatchRequest([
-          { jsonrpc: '2.0', method: 'a', id: 1 },
-          { jsonrpc: '2.0', method: 'b', id: 2 },
-        ]),
-        true
-      );
-    });
-
-    it('returns false for non-array payloads', () => {
-      assert.equal(isJsonRpcBatchRequest(null), false);
-      assert.equal(isJsonRpcBatchRequest(undefined), false);
-      assert.equal(isJsonRpcBatchRequest({}), false);
-      assert.equal(
-        isJsonRpcBatchRequest({ jsonrpc: '2.0', method: 'test', id: 1 }),
-        false
-      );
-      assert.equal(isJsonRpcBatchRequest('string'), false);
-      assert.equal(isJsonRpcBatchRequest(123), false);
-    });
+    for (const testCase of BATCH_CASES) {
+      it(testCase.name, () => {
+        assertCase(testCase, isJsonRpcBatchRequest);
+      });
+    }
   });
 
   describe('isMcpRequestBody', () => {
-    it('accepts valid JSON-RPC 2.0 request objects', () => {
-      assert.equal(
-        isMcpRequestBody({ jsonrpc: '2.0', method: 'initialize', id: 1 }),
-        true
-      );
-      assert.equal(
-        isMcpRequestBody({ jsonrpc: '2.0', method: 'tools/list', id: 'abc' }),
-        true
-      );
-      assert.equal(
-        isMcpRequestBody({
-          jsonrpc: '2.0',
-          method: 'tools/call',
-          params: { name: 'test' },
-          id: 1,
-        }),
-        true
-      );
-    });
-
-    it('accepts notification objects (no id)', () => {
-      assert.equal(
-        isMcpRequestBody({ jsonrpc: '2.0', method: 'notifications/cancelled' }),
-        true
-      );
-    });
-
-    it('rejects missing method or jsonrpc', () => {
-      assert.equal(isMcpRequestBody({}), false);
-      assert.equal(isMcpRequestBody({ method: 'test', id: 1 }), false);
-      assert.equal(isMcpRequestBody({ jsonrpc: '2.0', id: 1 }), false);
-    });
-
-    it('rejects array (batch) payloads', () => {
-      assert.equal(isMcpRequestBody([]), false);
-      assert.equal(
-        isMcpRequestBody([{ jsonrpc: '2.0', method: 'test', id: 1 }]),
-        false
-      );
-    });
-
-    it('rejects null and primitives', () => {
-      assert.equal(isMcpRequestBody(null), false);
-      assert.equal(isMcpRequestBody(undefined), false);
-      assert.equal(isMcpRequestBody('string'), false);
-      assert.equal(isMcpRequestBody(123), false);
-    });
-
-    it('rejects invalid jsonrpc version', () => {
-      assert.equal(
-        isMcpRequestBody({ jsonrpc: '1.0', method: 'test', id: 1 }),
-        false
-      );
-    });
-
-    it('rejects invalid method type', () => {
-      assert.equal(
-        isMcpRequestBody({ jsonrpc: '2.0', method: 123, id: 1 }),
-        false
-      );
-    });
-
-    it('rejects invalid id type', () => {
-      assert.equal(
-        isMcpRequestBody({ jsonrpc: '2.0', method: 'test', id: [] }),
-        false
-      );
-    });
-
-    it('rejects params arrays', () => {
-      assert.equal(
-        isMcpRequestBody({
-          jsonrpc: '2.0',
-          method: 'tools/call',
-          params: [],
-          id: 1,
-        }),
-        false
-      );
-    });
+    for (const testCase of MCP_REQUEST_CASES) {
+      it(testCase.name, () => {
+        assertCase(testCase, isMcpRequestBody);
+      });
+    }
   });
 });

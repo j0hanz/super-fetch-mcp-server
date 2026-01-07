@@ -25,63 +25,57 @@ function attemptCacheRetrieval<T>(
   if (!cached) return null;
 
   if (!deserialize) {
-    logDebug('Cache miss due to missing deserializer', {
-      namespace: cacheNamespace,
-      url: normalizedUrl,
-    });
+    logCacheMiss('missing deserializer', cacheNamespace, normalizedUrl);
     return null;
   }
 
   const data = deserialize(cached.content);
 
   if (data === undefined) {
-    logDebug('Cache miss due to deserialize failure', {
-      namespace: cacheNamespace,
-      url: normalizedUrl,
-    });
+    logCacheMiss('deserialize failure', cacheNamespace, normalizedUrl);
     return null;
   }
 
   logDebug('Cache hit', { namespace: cacheNamespace, url: normalizedUrl });
 
-  return {
-    data,
-    fromCache: true,
-    url: normalizedUrl,
-    fetchedAt: cached.fetchedAt,
-    cacheKey,
-  };
+  return buildCacheHitResult(data, cached.fetchedAt, normalizedUrl, cacheKey);
+}
+
+function resolveNormalizedUrl(url: string): {
+  normalizedUrl: string;
+  originalUrl: string;
+  transformed: boolean;
+} {
+  const { normalizedUrl: validatedUrl } = normalizeUrl(url);
+  const { url: normalizedUrl, transformed } = transformToRawUrl(validatedUrl);
+  return { normalizedUrl, originalUrl: validatedUrl, transformed };
 }
 
 export async function executeFetchPipeline<T>(
   options: FetchPipelineOptions<T>
 ): Promise<PipelineResult<T>> {
-  const { normalizedUrl: validatedUrl } = normalizeUrl(options.url);
-  const { url: normalizedUrl, transformed } = transformToRawUrl(validatedUrl);
-  if (transformed) {
-    logDebug('Using transformed raw content URL', { original: validatedUrl });
+  const resolvedUrl = resolveNormalizedUrl(options.url);
+  if (resolvedUrl.transformed) {
+    logDebug('Using transformed raw content URL', {
+      original: resolvedUrl.originalUrl,
+    });
   }
 
-  const cacheKey = resolveCacheKey(options, normalizedUrl);
-
-  const cachedResult = attemptCacheRetrieval<T>(
+  const cacheKey = resolveCacheKey(options, resolvedUrl.normalizedUrl);
+  const cachedResult = attemptCacheRetrieval(
     cacheKey,
     options.deserialize,
     options.cacheNamespace,
-    normalizedUrl
+    resolvedUrl.normalizedUrl
   );
   if (cachedResult) return cachedResult;
 
-  const fetchOptions = buildFetchOptions(options);
-  logDebug('Fetching URL', { url: normalizedUrl });
-
-  const html = await fetchNormalizedUrl(normalizedUrl, fetchOptions);
-  const data = await options.transform(html, normalizedUrl);
+  const data = await fetchAndTransform(options, resolvedUrl.normalizedUrl);
   if (cache.isEnabled()) {
-    persistCache(cacheKey, data, options.serialize, normalizedUrl);
+    persistCache(cacheKey, data, options.serialize, resolvedUrl.normalizedUrl);
   }
 
-  return buildPipelineResult(normalizedUrl, data, cacheKey);
+  return buildPipelineResult(resolvedUrl.normalizedUrl, data, cacheKey);
 }
 
 function resolveCacheKey<T>(
@@ -95,6 +89,17 @@ function resolveCacheKey<T>(
   );
 }
 
+async function fetchAndTransform<T>(
+  options: FetchPipelineOptions<T>,
+  normalizedUrl: string
+): Promise<T> {
+  const fetchOptions = buildFetchOptions(options);
+  logDebug('Fetching URL', { url: normalizedUrl });
+
+  const html = await fetchNormalizedUrl(normalizedUrl, fetchOptions);
+  return options.transform(html, normalizedUrl);
+}
+
 function buildFetchOptions<T>(options: FetchPipelineOptions<T>): FetchOptions {
   const fetchOptions: FetchOptions = {};
 
@@ -105,6 +110,24 @@ function buildFetchOptions<T>(options: FetchPipelineOptions<T>): FetchOptions {
   return fetchOptions;
 }
 
+function resolveCacheMetadata(
+  data: unknown,
+  normalizedUrl: string
+): { url: string; title?: string } {
+  const metadata: { url: string; title?: string } = { url: normalizedUrl };
+  const title = extractTitle(data);
+  if (title !== undefined) {
+    metadata.title = title;
+  }
+  return metadata;
+}
+
+function resolveSerializer<T>(
+  serialize: ((result: T) => string) | undefined
+): (result: T) => string {
+  return serialize ?? JSON.stringify;
+}
+
 function persistCache<T>(
   cacheKey: string | null,
   data: T,
@@ -112,12 +135,8 @@ function persistCache<T>(
   normalizedUrl: string
 ): void {
   if (!cacheKey) return;
-  const serializer = serialize ?? JSON.stringify;
-  const metadata: { url: string; title?: string } = { url: normalizedUrl };
-  const title = extractTitle(data);
-  if (title !== undefined) {
-    metadata.title = title;
-  }
+  const serializer = resolveSerializer(serialize);
+  const metadata = resolveCacheMetadata(data, normalizedUrl);
   cache.set(cacheKey, serializer(data), metadata);
 }
 
@@ -125,6 +144,32 @@ function extractTitle(value: unknown): string | undefined {
   if (!isRecord(value)) return undefined;
   const { title } = value;
   return typeof title === 'string' ? title : undefined;
+}
+
+function logCacheMiss(
+  reason: string,
+  cacheNamespace: string,
+  normalizedUrl: string
+): void {
+  logDebug(`Cache miss due to ${reason}`, {
+    namespace: cacheNamespace,
+    url: normalizedUrl,
+  });
+}
+
+function buildCacheHitResult<T>(
+  data: T,
+  fetchedAt: string,
+  url: string,
+  cacheKey: string
+): PipelineResult<T> {
+  return {
+    data,
+    fromCache: true,
+    url,
+    fetchedAt,
+    cacheKey,
+  };
 }
 
 function buildPipelineResult<T>(

@@ -3,9 +3,20 @@ import { describe, it } from 'node:test';
 
 import { extractContent } from '../dist/services/extractor.js';
 
-describe('extractContent', () => {
-  it('extracts metadata from title and meta tags', () => {
-    const html = `
+type MetadataCase = {
+  name: string;
+  html: string;
+  expected: {
+    title?: string;
+    description?: string;
+    author?: string;
+  };
+};
+
+const METADATA_CASES: readonly MetadataCase[] = [
+  {
+    name: 'extracts metadata from title and meta tags',
+    html: `
       <html>
         <head>
           <title>Example Title</title>
@@ -14,20 +25,16 @@ describe('extractContent', () => {
         </head>
         <body><p>Content</p></body>
       </html>
-    `;
-
-    const result = extractContent(html, 'https://example.com', {
-      extractArticle: false,
-    });
-
-    assert.equal(result.metadata.title, 'Example Title');
-    assert.equal(result.metadata.description, 'Example description');
-    assert.equal(result.metadata.author, 'Example Author');
-    assert.equal(result.article, null);
-  });
-
-  it('prefers OpenGraph metadata over Twitter and standard metadata', () => {
-    const html = `
+    `,
+    expected: {
+      title: 'Example Title',
+      description: 'Example description',
+      author: 'Example Author',
+    },
+  },
+  {
+    name: 'prefers OpenGraph metadata over Twitter and standard metadata',
+    html: `
       <html>
         <head>
           <title>Standard Title</title>
@@ -39,18 +46,15 @@ describe('extractContent', () => {
         </head>
         <body><p>Content</p></body>
       </html>
-    `;
-
-    const result = extractContent(html, 'https://example.com', {
-      extractArticle: false,
-    });
-
-    assert.equal(result.metadata.title, 'OG Title');
-    assert.equal(result.metadata.description, 'OG description');
-  });
-
-  it('prefers Twitter metadata over standard metadata when OpenGraph is absent', () => {
-    const html = `
+    `,
+    expected: {
+      title: 'OG Title',
+      description: 'OG description',
+    },
+  },
+  {
+    name: 'prefers Twitter metadata over standard metadata when OpenGraph is absent',
+    html: `
       <html>
         <head>
           <title>Standard Title</title>
@@ -60,15 +64,31 @@ describe('extractContent', () => {
         </head>
         <body><p>Content</p></body>
       </html>
-    `;
+    `,
+    expected: {
+      title: 'Twitter Title',
+      description: 'Twitter description',
+    },
+  },
+];
 
-    const result = extractContent(html, 'https://example.com', {
-      extractArticle: false,
-    });
-
-    assert.equal(result.metadata.title, 'Twitter Title');
-    assert.equal(result.metadata.description, 'Twitter description');
+function assertMetadataCase(testCase: MetadataCase): void {
+  const result = extractContent(testCase.html, 'https://example.com', {
+    extractArticle: false,
   });
+
+  assert.equal(result.metadata.title, testCase.expected.title);
+  assert.equal(result.metadata.description, testCase.expected.description);
+  assert.equal(result.metadata.author, testCase.expected.author);
+  assert.equal(result.article, null);
+}
+
+describe('extractContent', () => {
+  for (const testCase of METADATA_CASES) {
+    it(testCase.name, () => {
+      assertMetadataCase(testCase);
+    });
+  }
 
   it('returns empty result for invalid input', () => {
     const result = extractContent('', '', { extractArticle: false });

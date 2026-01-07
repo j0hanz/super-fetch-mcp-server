@@ -4,6 +4,13 @@ import { describe, it } from 'node:test';
 import * as cache from '../dist/services/cache.js';
 import { registerDownloadRoutes } from '../dist/http/download-routes.js';
 
+type ResponseState = {
+  headers: Record<string, string>;
+  statusCode: number;
+  jsonBody: unknown;
+  body: unknown;
+};
+
 function getDownloadHandler() {
   let handler: (req: unknown, res: unknown, next: () => void) => void;
   const app = {
@@ -15,41 +22,61 @@ function getDownloadHandler() {
   return handler as (req: unknown, res: unknown, next: () => void) => void;
 }
 
-function createResponseCapture() {
-  const headers: Record<string, string> = {};
-  let statusCode = 200;
-  let jsonBody: unknown;
-  let body: unknown;
-
-  const res = {
-    setHeader: (name: string, value: string) => {
-      headers[name.toLowerCase()] = value;
-      return res;
-    },
-    status: (code: number) => {
-      statusCode = code;
-      return res;
-    },
-    json: (payload: unknown) => {
-      jsonBody = payload;
-      return res;
-    },
-    send: (payload: unknown) => {
-      body = payload;
-      return res;
-    },
-  };
-
+function createResponseState(): ResponseState {
   return {
-    res,
-    headers,
-    getStatus: () => statusCode,
-    getJson: () => jsonBody,
-    getBody: () => body,
+    headers: {},
+    statusCode: 200,
+    jsonBody: undefined,
+    body: undefined,
   };
 }
 
-describe('download routes', () => {
+function createResponse(state: ResponseState) {
+  const res = {
+    setHeader: (name: string, value: string) => {
+      state.headers[name.toLowerCase()] = value;
+      return res;
+    },
+    status: (code: number) => {
+      state.statusCode = code;
+      return res;
+    },
+    json: (payload: unknown) => {
+      state.jsonBody = payload;
+      return res;
+    },
+    send: (payload: unknown) => {
+      state.body = payload;
+      return res;
+    },
+  };
+
+  return res;
+}
+
+function createResponseCapture() {
+  const state = createResponseState();
+  const res = createResponse(state);
+  return {
+    res,
+    headers: state.headers,
+    getStatus: () => state.statusCode,
+    getJson: () => state.jsonBody,
+    getBody: () => state.body,
+  };
+}
+
+function createNextTracker(): { next: () => void; getCalls: () => number } {
+  let nextCalls = 0;
+  return {
+    next: () => {
+      nextCalls += 1;
+    },
+    getCalls: () => nextCalls,
+  };
+}
+
+function registerMarkdownNamespaceTest(): void {
   it('returns markdown content for markdown namespace', async () => {
     const cacheKey = 'markdown:abc123def456';
     cache.set(cacheKey, JSON.stringify({ markdown: '# Title\n\nBody' }), {
@@ -59,24 +86,23 @@ describe('download routes', () => {
 
     const handler = getDownloadHandler();
     const { res, headers, getBody, getStatus } = createResponseCapture();
-    let nextCalls = 0;
-    const next = () => {
-      nextCalls += 1;
-    };
+    const nextTracker = createNextTracker();
 
     await handler(
       { params: { namespace: 'markdown', hash: 'abc123def456' } },
       res,
-      next
+      nextTracker.next
     );
 
-    assert.equal(nextCalls, 0);
+    assert.equal(nextTracker.getCalls(), 0);
     assert.equal(getStatus(), 200);
     assert.equal(getBody(), '# Title\n\nBody');
     assert.equal(headers['content-type'], 'text/markdown; charset=utf-8');
     assert.equal(headers['content-disposition'].includes('article.md'), true);
   });
+}
 
+function registerMarkdownContentFallbackTest(): void {
   it('falls back to content field for markdown payloads', async () => {
     const cacheKey = 'markdown:abc123ff';
     cache.set(cacheKey, JSON.stringify({ content: '# Title\n\nBody' }), {
@@ -85,32 +111,38 @@ describe('download routes', () => {
 
     const handler = getDownloadHandler();
     const { res, getBody } = createResponseCapture();
-    const next = () => undefined;
 
     await handler(
       { params: { namespace: 'markdown', hash: 'abc123ff' } },
       res,
-      next
+      () => undefined
     );
 
     assert.equal(getBody(), '# Title\n\nBody');
   });
+}
 
+function registerInvalidPayloadTest(): void {
   it('responds with not found for invalid cached payloads', async () => {
     const cacheKey = 'markdown:deadbeef';
     cache.set(cacheKey, 'not-json', { url: 'https://example.com/article' });
 
     const handler = getDownloadHandler();
     const { res, getJson, getStatus } = createResponseCapture();
-    const next = () => undefined;
 
     await handler(
       { params: { namespace: 'markdown', hash: 'deadbeef' } },
       res,
-      next
+      () => undefined
     );
 
     assert.equal(getStatus(), 404);
     assert.equal((getJson() as { code?: string }).code, 'NOT_FOUND');
   });
+}
+
+describe('download routes', () => {
+  registerMarkdownNamespaceTest();
+  registerMarkdownContentFallbackTest();
+  registerInvalidPayloadTest();
 });

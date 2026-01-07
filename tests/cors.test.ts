@@ -3,55 +3,71 @@ import { describe, it } from 'node:test';
 
 import { createCorsMiddleware } from '../dist/http/cors.js';
 
-describe('createCorsMiddleware', () => {
-  it('handles OPTIONS preflight', () => {
-    const middleware = createCorsMiddleware();
+function createNextTracker() {
+  let nextCalled = 0;
+  const next = () => {
+    nextCalled += 1;
+  };
 
-    const headers: Record<string, string> = {};
-    let statusSent: number | undefined;
-    const res = {
-      header: (key: string, value: string) => {
-        headers[key] = value;
-        return res;
-      },
-      sendStatus: (code: number) => {
-        statusSent = code;
-        return res;
-      },
-    };
-    const req = {
-      headers: { origin: 'https://client.test' },
-      method: 'OPTIONS',
-    };
-    let nextCalled = 0;
-    const next = () => {
-      nextCalled += 1;
-    };
+  return { next, getCalls: () => nextCalled };
+}
 
-    middleware(req as never, res as never, next);
+function createCorsRequest(method: string) {
+  return {
+    headers: { origin: 'https://client.test' },
+    method,
+  };
+}
 
-    assert.equal(statusSent, 200);
-    assert.equal(nextCalled, 0);
+function createCorsResponseCapture() {
+  const headers: Record<string, string> = {};
+  let statusSent: number | undefined;
+  const res = {
+    header: (key: string, value: string) => {
+      headers[key] = value;
+      return res;
+    },
+    sendStatus: (code: number) => {
+      statusSent = code;
+      return res;
+    },
+  };
+
+  return { res, headers, getStatusSent: () => statusSent };
+}
+
+function testHandlesOptionsPreflight() {
+  const middleware = createCorsMiddleware();
+  const { res, getStatusSent } = createCorsResponseCapture();
+  const req = createCorsRequest('OPTIONS');
+  const { next, getCalls } = createNextTracker();
+
+  middleware(req as never, res as never, next);
+
+  assert.equal(getStatusSent(), 200);
+  assert.equal(getCalls(), 0);
+}
+
+function testPassesThroughNonOptionsRequests() {
+  const middleware = createCorsMiddleware();
+  const res = { header: () => res, sendStatus: () => res };
+  const req = createCorsRequest('POST');
+  const { next, getCalls } = createNextTracker();
+
+  middleware(req as never, res as never, next);
+
+  assert.equal(getCalls(), 1);
+}
+
+function registerCorsMiddlewareTests() {
+  describe('createCorsMiddleware', () => {
+    it('handles OPTIONS preflight', () => {
+      testHandlesOptionsPreflight();
+    });
+    it('passes through non-OPTIONS requests', () => {
+      testPassesThroughNonOptionsRequests();
+    });
   });
+}
 
-  it('passes through non-OPTIONS requests', () => {
-    const middleware = createCorsMiddleware();
-
-    const res = {
-      header: () => res,
-      sendStatus: () => res,
-    };
-    const req = {
-      headers: { origin: 'https://client.test' },
-      method: 'POST',
-    };
-    let nextCalled = 0;
-    const next = () => {
-      nextCalled += 1;
-    };
-
-    middleware(req as never, res as never, next);
-
-    assert.equal(nextCalled, 1);
-  });
-});
+registerCorsMiddlewareTests();

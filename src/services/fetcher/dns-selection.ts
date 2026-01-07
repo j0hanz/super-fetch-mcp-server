@@ -56,6 +56,19 @@ function createNoDnsResultsError(hostname: string): NodeJS.ErrnoException {
   );
 }
 
+function createEmptySelection(hostname: string): {
+  address: string | LookupAddress[];
+  family?: number;
+  error?: NodeJS.ErrnoException;
+  fallback: LookupAddress[];
+} {
+  return {
+    error: createNoDnsResultsError(hostname),
+    fallback: [],
+    address: [],
+  };
+}
+
 function selectLookupResult(
   list: LookupAddress[],
   useAll: boolean,
@@ -66,32 +79,27 @@ function selectLookupResult(
   error?: NodeJS.ErrnoException;
   fallback: LookupAddress[];
 } {
-  if (list.length === 0) {
-    return {
-      error: createNoDnsResultsError(hostname),
-      fallback: [],
-      address: [],
-    };
-  }
+  if (list.length === 0) return createEmptySelection(hostname);
 
-  if (useAll) {
-    return { address: list, fallback: list };
-  }
+  if (useAll) return { address: list, fallback: list };
 
   const first = list.at(0);
-  if (!first) {
-    return {
-      error: createNoDnsResultsError(hostname),
-      fallback: [],
-      address: [],
-    };
-  }
+  if (!first) return createEmptySelection(hostname);
 
   return {
     address: first.address,
     family: first.family,
     fallback: list,
   };
+}
+
+function findLookupError(
+  list: LookupAddress[],
+  hostname: string
+): NodeJS.ErrnoException | null {
+  return (
+    findInvalidFamilyError(list, hostname) ?? findBlockedIpError(list, hostname)
+  );
 }
 
 export function handleLookupResult(
@@ -112,15 +120,9 @@ export function handleLookupResult(
   }
 
   const list = normalizeLookupResults(addresses, resolvedFamily);
-  const invalidFamilyError = findInvalidFamilyError(list, hostname);
-  if (invalidFamilyError) {
-    callback(invalidFamilyError, list);
-    return;
-  }
-
-  const blockedError = findBlockedIpError(list, hostname);
-  if (blockedError) {
-    callback(blockedError, list);
+  const lookupError = findLookupError(list, hostname);
+  if (lookupError) {
+    callback(lookupError, list);
     return;
   }
 

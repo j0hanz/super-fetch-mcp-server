@@ -161,6 +161,44 @@ async function connectTransportOrThrow(
   }
 }
 
+function resolveSessionIdOrRespond(
+  transport: StreamableHTTPServerTransport,
+  res: Response,
+  clearInitTimeout: () => void,
+  releaseSlot: () => void
+): string | null {
+  const { sessionId } = transport;
+  if (typeof sessionId === 'string') return sessionId;
+  clearInitTimeout();
+  releaseSlot();
+  respondBadRequest(res);
+  return null;
+}
+
+function finalizeSessionInitialization(
+  sessionId: string,
+  transport: StreamableHTTPServerTransport,
+  tracker: SlotTracker,
+  releaseSlot: () => void,
+  clearInitTimeout: () => void,
+  store: SessionStore
+): void {
+  clearInitTimeout();
+  tracker.markInitialized();
+  releaseSlot();
+  const now = Date.now();
+  store.set(sessionId, {
+    transport,
+    createdAt: now,
+    lastSeen: now,
+  });
+  transport.onclose = () => {
+    store.remove(sessionId);
+    logInfo('Session closed');
+  };
+  logInfo('Session initialized');
+}
+
 async function createAndConnectTransport(
   options: McpSessionOptions,
   res: Response
@@ -172,28 +210,22 @@ async function createAndConnectTransport(
     createTransportForNewSession();
   await connectTransportOrThrow(transport, clearInitTimeout, releaseSlot);
 
-  const { sessionId } = transport;
-  if (typeof sessionId !== 'string') {
-    clearInitTimeout();
-    releaseSlot();
-    respondBadRequest(res);
-    return null;
-  }
-
-  clearInitTimeout();
-  tracker.markInitialized();
-  releaseSlot();
-  const now = Date.now();
-  options.sessionStore.set(sessionId, {
+  const sessionId = resolveSessionIdOrRespond(
     transport,
-    createdAt: now,
-    lastSeen: now,
-  });
-  transport.onclose = () => {
-    options.sessionStore.remove(sessionId);
-    logInfo('Session closed');
-  };
-  logInfo('Session initialized');
+    res,
+    clearInitTimeout,
+    releaseSlot
+  );
+  if (!sessionId) return null;
+
+  finalizeSessionInitialization(
+    sessionId,
+    transport,
+    tracker,
+    releaseSlot,
+    clearInitTimeout,
+    options.sessionStore
+  );
 
   return transport;
 }

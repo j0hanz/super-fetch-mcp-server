@@ -66,14 +66,7 @@ function resolveOptionalScopes(
   return requiredScopes.length > 0 ? [...requiredScopes] : undefined;
 }
 
-function buildOAuthMetadata(params: {
-  issuerUrl: URL;
-  authorizationUrl: URL;
-  tokenUrl: URL;
-  revocationUrl?: URL;
-  registrationUrl?: URL;
-  requiredScopes: readonly string[];
-}): {
+interface OAuthMetadata extends Record<string, unknown> {
   issuer: string;
   authorization_endpoint: string;
   response_types_supported: string[];
@@ -84,19 +77,21 @@ function buildOAuthMetadata(params: {
   scopes_supported?: string[];
   revocation_endpoint?: string;
   registration_endpoint?: string;
-} {
-  const oauthMetadata: {
-    issuer: string;
-    authorization_endpoint: string;
-    response_types_supported: string[];
-    code_challenge_methods_supported: string[];
-    token_endpoint: string;
-    token_endpoint_auth_methods_supported: string[];
-    grant_types_supported: string[];
-    scopes_supported?: string[];
-    revocation_endpoint?: string;
-    registration_endpoint?: string;
-  } = {
+}
+
+interface OAuthMetadataParams {
+  issuerUrl: URL;
+  authorizationUrl: URL;
+  tokenUrl: URL;
+  revocationUrl?: URL;
+  registrationUrl?: URL;
+  requiredScopes: readonly string[];
+}
+
+type OptionalEndpointKey = 'revocation_endpoint' | 'registration_endpoint';
+
+function buildBaseOAuthMetadata(params: OAuthMetadataParams): OAuthMetadata {
+  return {
     issuer: params.issuerUrl.href,
     authorization_endpoint: params.authorizationUrl.href,
     response_types_supported: ['code'],
@@ -105,19 +100,40 @@ function buildOAuthMetadata(params: {
     token_endpoint_auth_methods_supported: ['client_secret_post', 'none'],
     grant_types_supported: ['authorization_code', 'refresh_token'],
   };
+}
 
-  const scopesSupported = resolveOptionalScopes(params.requiredScopes);
+function applyOptionalScopes(
+  metadata: OAuthMetadata,
+  requiredScopes: readonly string[]
+): void {
+  const scopesSupported = resolveOptionalScopes(requiredScopes);
   if (scopesSupported !== undefined) {
-    oauthMetadata.scopes_supported = scopesSupported;
+    metadata.scopes_supported = scopesSupported;
   }
+}
 
-  if (params.revocationUrl) {
-    oauthMetadata.revocation_endpoint = params.revocationUrl.href;
-  }
-  if (params.registrationUrl) {
-    oauthMetadata.registration_endpoint = params.registrationUrl.href;
-  }
+function applyOptionalEndpoint(
+  metadata: OAuthMetadata,
+  key: OptionalEndpointKey,
+  url: URL | undefined
+): void {
+  if (!url) return;
+  metadata[key] = url.href;
+}
 
+function buildOAuthMetadata(params: OAuthMetadataParams): OAuthMetadata {
+  const oauthMetadata = buildBaseOAuthMetadata(params);
+  applyOptionalScopes(oauthMetadata, params.requiredScopes);
+  applyOptionalEndpoint(
+    oauthMetadata,
+    'revocation_endpoint',
+    params.revocationUrl
+  );
+  applyOptionalEndpoint(
+    oauthMetadata,
+    'registration_endpoint',
+    params.registrationUrl
+  );
   return oauthMetadata;
 }
 

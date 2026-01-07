@@ -15,8 +15,7 @@ import { isRecord } from '../utils/guards.js';
 
 let turndownInstance: TurndownService | null = null;
 
-function getTurndown(): TurndownService {
-  if (turndownInstance) return turndownInstance;
+function createTurndownInstance(): TurndownService {
   const instance = new TurndownService({
     headingStyle: 'atx',
     codeBlockStyle: 'fenced',
@@ -27,7 +26,11 @@ function getTurndown(): TurndownService {
   addNoiseRule(instance);
   addFencedCodeRule(instance);
 
-  turndownInstance = instance;
+  return instance;
+}
+
+function getTurndown(): TurndownService {
+  turndownInstance ??= createTurndownInstance();
   return turndownInstance;
 }
 
@@ -74,15 +77,14 @@ function isStructuralNoiseTag(tagName: string): boolean {
   );
 }
 
-function isHiddenElement(element: HTMLElement): boolean {
+function isElementHidden(element: HTMLElement): boolean {
   return (
     element.getAttribute('hidden') !== null ||
     element.getAttribute('aria-hidden') === 'true'
   );
 }
 
-function hasNoiseRole(element: HTMLElement): boolean {
-  const role = element.getAttribute('role');
+function hasNoiseRole(role: string | null): boolean {
   return role ? NAVIGATION_ROLES.has(role) : false;
 }
 
@@ -112,17 +114,35 @@ function isNoiseNode(node: TurndownService.Node): boolean {
   return isNoiseElement(node);
 }
 
+interface ElementMetadata {
+  tagName: string;
+  className: string;
+  id: string;
+  role: string | null;
+  isHidden: boolean;
+}
+
+function readElementMetadata(element: HTMLElement): ElementMetadata {
+  const className = element.getAttribute('class') ?? '';
+  const id = element.getAttribute('id') ?? '';
+  const role = element.getAttribute('role');
+  const isHidden = isElementHidden(element);
+  return {
+    tagName: element.tagName.toLowerCase(),
+    className,
+    id,
+    role,
+    isHidden,
+  };
+}
+
 function isNoiseElement(node: HTMLElement): boolean {
-  const tagName = node.tagName.toLowerCase();
-  if (isStructuralNoiseTag(tagName)) return true;
-  if (isHiddenElement(node)) return true;
-  if (hasNoiseRole(node)) return true;
-
-  const className = node.getAttribute('class') ?? '';
-  if (matchesFixedOrHighZIsolate(className)) return true;
-
-  const id = node.getAttribute('id') ?? '';
-  return matchesPromoIdOrClass(className, id);
+  const metadata = readElementMetadata(node);
+  if (isStructuralNoiseTag(metadata.tagName)) return true;
+  if (metadata.isHidden) return true;
+  if (hasNoiseRole(metadata.role)) return true;
+  if (matchesFixedOrHighZIsolate(metadata.className)) return true;
+  return matchesPromoIdOrClass(metadata.className, metadata.id);
 }
 
 function addFencedCodeRule(instance: TurndownService): void {
@@ -153,10 +173,22 @@ function formatFencedCodeBlock(node: TurndownService.Node): string {
 }
 
 function resolveCodeLanguage(codeNode: HTMLElement, code: string): string {
-  const className = codeNode.getAttribute('class') ?? '';
-  const dataLang = codeNode.getAttribute('data-language') ?? '';
-  const attributeLanguage = resolveLanguageFromAttributes(className, dataLang);
+  const { className, dataLanguage } = readCodeAttributes(codeNode);
+  const attributeLanguage = resolveLanguageFromAttributes(
+    className,
+    dataLanguage
+  );
   return attributeLanguage ?? detectLanguageFromCode(code) ?? '';
+}
+
+function readCodeAttributes(codeNode: HTMLElement): {
+  className: string;
+  dataLanguage: string;
+} {
+  return {
+    className: codeNode.getAttribute('class') ?? '',
+    dataLanguage: codeNode.getAttribute('data-language') ?? '',
+  };
 }
 
 const YAML_SPECIAL_CHARS = /[:[\]{}"\r\t'|>&*!?,#]|\n/;
@@ -196,15 +228,20 @@ function escapeYamlValue(value: string): string {
   return `"${escaped}"`;
 }
 
+function appendFrontmatterField(
+  lines: string[],
+  key: string,
+  value: string | undefined
+): void {
+  if (!value) return;
+  lines.push(`${key}: ${escapeYamlValue(value)}`);
+}
+
 function createFrontmatter(metadata: MetadataBlock): string {
   const lines: string[] = [FRONTMATTER_DELIMITER];
 
-  if (metadata.title) {
-    lines.push(`title: ${escapeYamlValue(metadata.title)}`);
-  }
-  if (metadata.url) {
-    lines.push(`source: ${escapeYamlValue(metadata.url)}`);
-  }
+  appendFrontmatterField(lines, 'title', metadata.title);
+  appendFrontmatterField(lines, 'source', metadata.url);
 
   lines.push(FRONTMATTER_DELIMITER);
   return joinLines(lines);

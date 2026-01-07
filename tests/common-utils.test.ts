@@ -7,84 +7,132 @@ import {
   isExtractionSufficient,
 } from '../dist/tools/utils/content-shaping.js';
 
-describe('determineContentExtractionSource', () => {
-  it('returns true when extraction is enabled and article exists', () => {
-    const result = determineContentExtractionSource({
-      content: '<p>content</p>',
-      textContent: 'content',
+type ExtractionCase = {
+  name: string;
+  article: { content: string; textContent: string } | null;
+  original: string;
+  expected: boolean;
+};
+
+const retainedText = {
+  longText: 'a'.repeat(200),
+  articleText: 'a'.repeat(100),
+};
+
+const lowRetentionText = {
+  longText: 'a'.repeat(500),
+  articleText: 'a'.repeat(50),
+};
+
+const extractionCases: ExtractionCase[] = [
+  {
+    name: 'returns false for null article',
+    article: null,
+    original: '<p>some content</p>',
+    expected: false,
+  },
+  {
+    name: 'returns true for short original HTML (below threshold)',
+    article: { content: '<p>x</p>', textContent: 'x' },
+    original: '<p>short</p>',
+    expected: true,
+  },
+  {
+    name: 'returns true when article retains sufficient content (>30%)',
+    article: {
+      content: `<p>${retainedText.articleText}</p>`,
+      textContent: retainedText.articleText,
+    },
+    original: `<div><p>${retainedText.longText}</p></div>`,
+    expected: true,
+  },
+  {
+    name: 'returns false when article retains too little content (<30%)',
+    article: {
+      content: `<p>${lowRetentionText.articleText}</p>`,
+      textContent: lowRetentionText.articleText,
+    },
+    original: `<div><p>${lowRetentionText.longText}</p></div>`,
+    expected: false,
+  },
+  {
+    name: 'handles article with empty textContent',
+    article: { content: '<p></p>', textContent: '' },
+    original: '<div><p>test content here</p></div>'.repeat(10),
+    expected: false,
+  },
+];
+
+function testExtractionSourceEnabledWithArticle() {
+  const result = determineContentExtractionSource({
+    content: '<p>content</p>',
+    textContent: 'content',
+  });
+  assert.equal(result, true);
+}
+
+function registerDetermineContentExtractionSourceTests() {
+  describe('determineContentExtractionSource', () => {
+    it('returns true when extraction is enabled and article exists', () => {
+      testExtractionSourceEnabledWithArticle();
     });
-    assert.equal(result, true);
   });
-});
+}
 
-describe('createContentMetadataBlock', () => {
-  it('builds metadata when enabled', () => {
-    const metadata = createContentMetadataBlock(
-      'https://example.com',
-      { title: 'Example', content: '', textContent: '' },
-      { title: 'Fallback' },
-      true,
-      true
-    );
-    assert.equal(metadata?.url, 'https://example.com');
-    assert.equal(metadata?.title, 'Example');
-    assert.equal(typeof metadata?.fetchedAt, 'string');
-  });
+function testBuildsMetadataWhenEnabled() {
+  const metadata = createContentMetadataBlock(
+    'https://example.com',
+    { title: 'Example', content: '', textContent: '' },
+    { title: 'Fallback' },
+    true,
+    true
+  );
+  assert.equal(metadata?.url, 'https://example.com');
+  assert.equal(metadata?.title, 'Example');
+  assert.equal(typeof metadata?.fetchedAt, 'string');
+}
 
-  it('returns undefined when metadata is disabled', () => {
-    const metadata = createContentMetadataBlock(
-      'https://example.com',
-      null,
-      { title: 'Fallback' },
-      false,
-      false
-    );
-    assert.equal(metadata, undefined);
-  });
-});
+function testReturnsUndefinedWhenMetadataDisabled() {
+  const metadata = createContentMetadataBlock(
+    'https://example.com',
+    null,
+    { title: 'Fallback' },
+    false,
+    false
+  );
+  assert.equal(metadata, undefined);
+}
 
-describe('isExtractionSufficient', () => {
-  it('returns false for null article', () => {
-    const result = isExtractionSufficient(null, '<p>some content</p>');
-    assert.equal(result, false);
+function registerCreateContentMetadataBlockTests() {
+  describe('createContentMetadataBlock', () => {
+    it('builds metadata when enabled', () => {
+      testBuildsMetadataWhenEnabled();
+    });
+    it('returns undefined when metadata is disabled', () => {
+      testReturnsUndefinedWhenMetadataDisabled();
+    });
   });
+}
 
-  it('returns true for short original HTML (below threshold)', () => {
-    const result = isExtractionSufficient(
-      { content: '<p>x</p>', textContent: 'x' },
-      '<p>short</p>' // Less than 100 chars estimated
-    );
-    assert.equal(result, true);
-  });
+function runExtractionCase(testCase: ExtractionCase) {
+  const result = isExtractionSufficient(testCase.article, testCase.original);
+  assert.equal(result, testCase.expected);
+}
 
-  it('returns true when article retains sufficient content (>30%)', () => {
-    // Original: 200 chars of text, Article: 100 chars = 50% retained
-    const longText = 'a'.repeat(200);
-    const articleText = 'a'.repeat(100);
-    const result = isExtractionSufficient(
-      { content: `<p>${articleText}</p>`, textContent: articleText },
-      `<div><p>${longText}</p></div>`
-    );
-    assert.equal(result, true);
+function registerExtractionCases() {
+  extractionCases.forEach((testCase) => {
+    it(testCase.name, () => {
+      runExtractionCase(testCase);
+    });
   });
+}
 
-  it('returns false when article retains too little content (<30%)', () => {
-    // Original: 500 chars of text, Article: 50 chars = 10% retained
-    const longText = 'a'.repeat(500);
-    const articleText = 'a'.repeat(50);
-    const result = isExtractionSufficient(
-      { content: `<p>${articleText}</p>`, textContent: articleText },
-      `<div><p>${longText}</p></div>`
-    );
-    assert.equal(result, false);
+function registerIsExtractionSufficientTests() {
+  describe('isExtractionSufficient', () => {
+    registerExtractionCases();
   });
+}
 
-  it('handles article with empty textContent', () => {
-    const result = isExtractionSufficient(
-      { content: '<p></p>', textContent: '' },
-      '<div><p>test content here</p></div>'.repeat(10)
-    );
-    // textContent is empty (0 length) so ratio = 0, should return false
-    assert.equal(result, false);
-  });
-});
+registerDetermineContentExtractionSourceTests();
+registerCreateContentMetadataBlockTests();
+registerIsExtractionSufficientTests();

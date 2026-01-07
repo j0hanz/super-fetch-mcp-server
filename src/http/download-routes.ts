@@ -101,16 +101,25 @@ function buildContentDisposition(fileName: string): string {
   return `attachment; filename="${fileName}"; filename*=UTF-8''${encodedName}`;
 }
 
-function handleDownload(req: Request, res: Response): Promise<void> {
+function sendDownloadPayload(res: Response, payload: DownloadPayload): void {
+  const disposition = buildContentDisposition(payload.fileName);
+  res.setHeader('Content-Type', payload.contentType);
+  res.setHeader('Content-Disposition', disposition);
+  res.setHeader('Cache-Control', `private, max-age=${config.cache.ttl}`);
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.send(payload.content);
+}
+
+function handleDownload(req: Request, res: Response): void {
   if (!config.cache.enabled) {
     respondServiceUnavailable(res);
-    return Promise.resolve();
+    return;
   }
 
   const params = parseDownloadParams(req);
   if (!params) {
     respondBadRequest(res, 'Invalid namespace or hash format');
-    return Promise.resolve();
+    return;
   }
 
   const cacheKey = buildCacheKeyFromParams(params);
@@ -119,26 +128,18 @@ function handleDownload(req: Request, res: Response): Promise<void> {
   if (!cacheEntry) {
     logDebug('Download request for missing cache key', { cacheKey });
     respondNotFound(res);
-    return Promise.resolve();
+    return;
   }
 
   const payload = resolveDownloadPayload(params, cacheEntry);
   if (!payload) {
     logDebug('Download payload unavailable', { cacheKey });
     respondNotFound(res);
-    return Promise.resolve();
+    return;
   }
 
-  const disposition = buildContentDisposition(payload.fileName);
-
-  res.setHeader('Content-Type', payload.contentType);
-  res.setHeader('Content-Disposition', disposition);
-  res.setHeader('Cache-Control', `private, max-age=${config.cache.ttl}`);
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-
   logDebug('Serving download', { cacheKey, fileName: payload.fileName });
-  res.send(payload.content);
-  return Promise.resolve();
+  sendDownloadPayload(res, payload);
 }
 
 export function registerDownloadRoutes(app: Express): void {

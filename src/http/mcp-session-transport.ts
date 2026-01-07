@@ -36,39 +36,63 @@ function buildTransportAdapter(
   };
 }
 
+function createAccessorDescriptor<T>(
+  getter: () => T,
+  setter?: (value: T) => void
+): PropertyDescriptor {
+  return {
+    get: getter,
+    ...(setter ? { set: setter } : {}),
+    enumerable: true,
+    configurable: true,
+  };
+}
+
+type CloseHandler = (() => void) | undefined;
+type ErrorHandler = ((error: Error) => void) | undefined;
+type MessageHandler = Transport['onmessage'];
+
+function createOnCloseDescriptor(
+  transport: StreamableHTTPServerTransport
+): PropertyDescriptor {
+  return createAccessorDescriptor(
+    () => transport.onclose,
+    (handler: CloseHandler) => {
+      transport.onclose = handler;
+    }
+  );
+}
+
+function createOnErrorDescriptor(
+  transport: StreamableHTTPServerTransport
+): PropertyDescriptor {
+  return createAccessorDescriptor(
+    () => transport.onerror,
+    (handler: ErrorHandler) => {
+      transport.onerror = handler;
+    }
+  );
+}
+
+function createOnMessageDescriptor(
+  transport: StreamableHTTPServerTransport
+): PropertyDescriptor {
+  return createAccessorDescriptor(
+    () => transport.onmessage,
+    (handler: MessageHandler) => {
+      transport.onmessage = handler;
+    }
+  );
+}
+
 function attachTransportAccessors(
   adapter: Transport,
   transport: StreamableHTTPServerTransport
 ): void {
   Object.defineProperties(adapter, {
-    onclose: {
-      get: () => transport.onclose,
-      set: (handler: (() => void) | undefined) => {
-        transport.onclose = handler;
-      },
-      enumerable: true,
-      configurable: true,
-    },
-    onerror: {
-      get: () => transport.onerror,
-      set: (handler: ((error: Error) => void) | undefined) => {
-        transport.onerror = handler;
-      },
-      enumerable: true,
-      configurable: true,
-    },
-    onmessage: {
-      get: () => transport.onmessage,
-      set: (handler: Transport['onmessage']) => {
-        transport.onmessage = handler;
-      },
-      enumerable: true,
-      configurable: true,
-    },
-    sessionId: {
-      get: () => transport.sessionId,
-      enumerable: true,
-      configurable: true,
-    },
+    onclose: createOnCloseDescriptor(transport),
+    onerror: createOnErrorDescriptor(transport),
+    onmessage: createOnMessageDescriptor(transport),
+    sessionId: createAccessorDescriptor(() => transport.sessionId),
   });
 }

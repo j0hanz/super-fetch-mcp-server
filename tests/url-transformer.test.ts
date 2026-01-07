@@ -3,230 +3,203 @@ import { describe, it } from 'node:test';
 
 import { transformToRawUrl } from '../dist/utils/url-transformer.js';
 
-describe('url-transformer', () => {
+type TransformCase = {
+  name: string;
+  url: string;
+  expected: string;
+  platform?: string;
+};
+
+type PassThroughCase = {
+  name: string;
+  url: string;
+};
+
+const GITHUB_BLOB_CASES: readonly TransformCase[] = [
+  {
+    name: 'transforms standard GitHub blob URL',
+    url: 'https://github.com/dfinke/awesome-copilot-chatmodes/blob/main/chatmodes/bullet-points.chatmode.md',
+    expected:
+      'https://raw.githubusercontent.com/dfinke/awesome-copilot-chatmodes/main/chatmodes/bullet-points.chatmode.md',
+    platform: 'github',
+  },
+  {
+    name: 'transforms GitHub blob URL with different branch',
+    url: 'https://github.com/owner/repo/blob/develop/src/index.ts',
+    expected:
+      'https://raw.githubusercontent.com/owner/repo/develop/src/index.ts',
+  },
+  {
+    name: 'transforms GitHub blob URL with commit SHA',
+    url: 'https://github.com/owner/repo/blob/abc123def456/README.md',
+    expected:
+      'https://raw.githubusercontent.com/owner/repo/abc123def456/README.md',
+  },
+  {
+    name: 'transforms GitHub blob URL with www prefix',
+    url: 'https://www.github.com/owner/repo/blob/main/file.js',
+    expected: 'https://raw.githubusercontent.com/owner/repo/main/file.js',
+  },
+  {
+    name: 'transforms GitHub blob URL with nested path',
+    url: 'https://github.com/owner/repo/blob/main/src/deep/nested/path/file.ts',
+    expected:
+      'https://raw.githubusercontent.com/owner/repo/main/src/deep/nested/path/file.ts',
+  },
+  {
+    name: 'handles GitHub blob URL with query string',
+    url: 'https://github.com/owner/repo/blob/main/file.js?raw=true',
+    expected: 'https://raw.githubusercontent.com/owner/repo/main/file.js',
+  },
+];
+
+const GITHUB_GIST_CASES: readonly TransformCase[] = [
+  {
+    name: 'transforms basic Gist URL',
+    url: 'https://gist.github.com/user/abc123def456789',
+    expected: 'https://gist.githubusercontent.com/user/abc123def456789/raw',
+    platform: 'github-gist',
+  },
+  {
+    name: 'transforms Gist URL with file hash',
+    url: 'https://gist.github.com/user/abc123def456789#file-example-js',
+    expected:
+      'https://gist.githubusercontent.com/user/abc123def456789/raw/example.js',
+  },
+];
+
+const GITLAB_BLOB_CASES: readonly TransformCase[] = [
+  {
+    name: 'transforms standard GitLab blob URL',
+    url: 'https://gitlab.com/owner/project/-/blob/main/src/index.ts',
+    expected: 'https://gitlab.com/owner/project/-/raw/main/src/index.ts',
+    platform: 'gitlab',
+  },
+  {
+    name: 'transforms GitLab blob URL with subdomain',
+    url: 'https://code.gitlab.com/owner/project/-/blob/develop/README.md',
+    expected: 'https://code.gitlab.com/owner/project/-/raw/develop/README.md',
+  },
+];
+
+const BITBUCKET_SRC_CASES: readonly TransformCase[] = [
+  {
+    name: 'transforms standard Bitbucket src URL',
+    url: 'https://bitbucket.org/owner/repo/src/main/package.json',
+    expected: 'https://bitbucket.org/owner/repo/raw/main/package.json',
+    platform: 'bitbucket',
+  },
+  {
+    name: 'transforms Bitbucket src URL with www',
+    url: 'https://www.bitbucket.org/owner/repo/src/develop/src/app.ts',
+    expected: 'https://www.bitbucket.org/owner/repo/raw/develop/src/app.ts',
+  },
+];
+
+const RAW_URL_CASES: readonly PassThroughCase[] = [
+  {
+    name: 'skips raw.githubusercontent.com URLs',
+    url: 'https://raw.githubusercontent.com/owner/repo/main/file.js',
+  },
+  {
+    name: 'skips gist.githubusercontent.com URLs',
+    url: 'https://gist.githubusercontent.com/user/abc123/raw/file.js',
+  },
+  {
+    name: 'skips GitLab raw URLs',
+    url: 'https://gitlab.com/owner/project/-/raw/main/file.ts',
+  },
+  {
+    name: 'skips Bitbucket raw URLs',
+    url: 'https://bitbucket.org/owner/repo/raw/main/file.ts',
+  },
+];
+
+const NON_MATCHING_CASES: readonly PassThroughCase[] = [
+  {
+    name: 'passes through regular URLs unchanged',
+    url: 'https://example.com/page.html',
+  },
+  {
+    name: 'passes through GitHub non-blob URLs unchanged',
+    url: 'https://github.com/owner/repo',
+  },
+  {
+    name: 'passes through GitHub issues URLs unchanged',
+    url: 'https://github.com/owner/repo/issues/123',
+  },
+  {
+    name: 'handles empty string',
+    url: '',
+  },
+];
+
+function assertTransformCase(testCase: TransformCase): void {
+  const result = transformToRawUrl(testCase.url);
+
+  assert.equal(result.transformed, true);
+  if (testCase.platform) {
+    assert.equal(result.platform, testCase.platform);
+  }
+  assert.equal(result.url, testCase.expected);
+}
+
+function assertPassThroughCase(testCase: PassThroughCase): void {
+  const result = transformToRawUrl(testCase.url);
+
+  assert.equal(result.transformed, false);
+  assert.equal(result.url, testCase.url);
+}
+
+function registerTransformCases(
+  title: string,
+  cases: readonly TransformCase[]
+): void {
+  describe(title, () => {
+    for (const testCase of cases) {
+      it(testCase.name, () => {
+        assertTransformCase(testCase);
+      });
+    }
+  });
+}
+
+function registerPassThroughCases(
+  title: string,
+  cases: readonly PassThroughCase[]
+): void {
+  describe(title, () => {
+    for (const testCase of cases) {
+      it(testCase.name, () => {
+        assertPassThroughCase(testCase);
+      });
+    }
+  });
+}
+
+function registerTransformToRawUrlTests(): void {
   describe('transformToRawUrl', () => {
-    describe('GitHub blob URLs', () => {
-      it('transforms standard GitHub blob URL', () => {
-        const url =
-          'https://github.com/dfinke/awesome-copilot-chatmodes/blob/main/chatmodes/bullet-points.chatmode.md';
-        const result = transformToRawUrl(url);
+    registerTransformCases('GitHub blob URLs', GITHUB_BLOB_CASES);
+    registerTransformCases('GitHub Gist URLs', GITHUB_GIST_CASES);
+    registerTransformCases('GitLab blob URLs', GITLAB_BLOB_CASES);
+    registerTransformCases('Bitbucket src URLs', BITBUCKET_SRC_CASES);
+    registerPassThroughCases(
+      'Already raw URLs (no transformation)',
+      RAW_URL_CASES
+    );
+    registerPassThroughCases(
+      'Non-matching URLs (no transformation)',
+      NON_MATCHING_CASES
+    );
 
-        assert.equal(result.transformed, true);
-        assert.equal(result.platform, 'github');
-        assert.equal(
-          result.url,
-          'https://raw.githubusercontent.com/dfinke/awesome-copilot-chatmodes/main/chatmodes/bullet-points.chatmode.md'
-        );
-      });
-
-      it('transforms GitHub blob URL with different branch', () => {
-        const url = 'https://github.com/owner/repo/blob/develop/src/index.ts';
-        const result = transformToRawUrl(url);
-
-        assert.equal(result.transformed, true);
-        assert.equal(
-          result.url,
-          'https://raw.githubusercontent.com/owner/repo/develop/src/index.ts'
-        );
-      });
-
-      it('transforms GitHub blob URL with commit SHA', () => {
-        const url = 'https://github.com/owner/repo/blob/abc123def456/README.md';
-        const result = transformToRawUrl(url);
-
-        assert.equal(result.transformed, true);
-        assert.equal(
-          result.url,
-          'https://raw.githubusercontent.com/owner/repo/abc123def456/README.md'
-        );
-      });
-
-      it('transforms GitHub blob URL with www prefix', () => {
-        const url = 'https://www.github.com/owner/repo/blob/main/file.js';
-        const result = transformToRawUrl(url);
-
-        assert.equal(result.transformed, true);
-        assert.equal(
-          result.url,
-          'https://raw.githubusercontent.com/owner/repo/main/file.js'
-        );
-      });
-
-      it('transforms GitHub blob URL with nested path', () => {
-        const url =
-          'https://github.com/owner/repo/blob/main/src/deep/nested/path/file.ts';
-        const result = transformToRawUrl(url);
-
-        assert.equal(result.transformed, true);
-        assert.equal(
-          result.url,
-          'https://raw.githubusercontent.com/owner/repo/main/src/deep/nested/path/file.ts'
-        );
-      });
-
-      it('handles GitHub blob URL with query string', () => {
-        const url = 'https://github.com/owner/repo/blob/main/file.js?raw=true';
-        const result = transformToRawUrl(url);
-
-        assert.equal(result.transformed, true);
-        assert.equal(
-          result.url,
-          'https://raw.githubusercontent.com/owner/repo/main/file.js'
-        );
-      });
-    });
-
-    describe('GitHub Gist URLs', () => {
-      it('transforms basic Gist URL', () => {
-        const url = 'https://gist.github.com/user/abc123def456789';
-        const result = transformToRawUrl(url);
-
-        assert.equal(result.transformed, true);
-        assert.equal(result.platform, 'github-gist');
-        assert.equal(
-          result.url,
-          'https://gist.githubusercontent.com/user/abc123def456789/raw'
-        );
-      });
-
-      it('transforms Gist URL with file hash', () => {
-        const url =
-          'https://gist.github.com/user/abc123def456789#file-example-js';
-        const result = transformToRawUrl(url);
-
-        assert.equal(result.transformed, true);
-        assert.equal(
-          result.url,
-          'https://gist.githubusercontent.com/user/abc123def456789/raw/example.js'
-        );
-      });
-    });
-
-    describe('GitLab blob URLs', () => {
-      it('transforms standard GitLab blob URL', () => {
-        const url = 'https://gitlab.com/owner/project/-/blob/main/src/index.ts';
-        const result = transformToRawUrl(url);
-
-        assert.equal(result.transformed, true);
-        assert.equal(result.platform, 'gitlab');
-        assert.equal(
-          result.url,
-          'https://gitlab.com/owner/project/-/raw/main/src/index.ts'
-        );
-      });
-
-      it('transforms GitLab blob URL with subdomain', () => {
-        const url =
-          'https://code.gitlab.com/owner/project/-/blob/develop/README.md';
-        const result = transformToRawUrl(url);
-
-        assert.equal(result.transformed, true);
-        assert.equal(
-          result.url,
-          'https://code.gitlab.com/owner/project/-/raw/develop/README.md'
-        );
-      });
-    });
-
-    describe('Bitbucket src URLs', () => {
-      it('transforms standard Bitbucket src URL', () => {
-        const url = 'https://bitbucket.org/owner/repo/src/main/package.json';
-        const result = transformToRawUrl(url);
-
-        assert.equal(result.transformed, true);
-        assert.equal(result.platform, 'bitbucket');
-        assert.equal(
-          result.url,
-          'https://bitbucket.org/owner/repo/raw/main/package.json'
-        );
-      });
-
-      it('transforms Bitbucket src URL with www', () => {
-        const url =
-          'https://www.bitbucket.org/owner/repo/src/develop/src/app.ts';
-        const result = transformToRawUrl(url);
-
-        assert.equal(result.transformed, true);
-        assert.equal(
-          result.url,
-          'https://www.bitbucket.org/owner/repo/raw/develop/src/app.ts'
-        );
-      });
-    });
-
-    describe('Already raw URLs (no transformation)', () => {
-      it('skips raw.githubusercontent.com URLs', () => {
-        const url = 'https://raw.githubusercontent.com/owner/repo/main/file.js';
-        const result = transformToRawUrl(url);
-
-        assert.equal(result.transformed, false);
-        assert.equal(result.url, url);
-      });
-
-      it('skips gist.githubusercontent.com URLs', () => {
-        const url =
-          'https://gist.githubusercontent.com/user/abc123/raw/file.js';
-        const result = transformToRawUrl(url);
-
-        assert.equal(result.transformed, false);
-        assert.equal(result.url, url);
-      });
-
-      it('skips GitLab raw URLs', () => {
-        const url = 'https://gitlab.com/owner/project/-/raw/main/file.ts';
-        const result = transformToRawUrl(url);
-
-        assert.equal(result.transformed, false);
-        assert.equal(result.url, url);
-      });
-
-      it('skips Bitbucket raw URLs', () => {
-        const url = 'https://bitbucket.org/owner/repo/raw/main/file.ts';
-        const result = transformToRawUrl(url);
-
-        assert.equal(result.transformed, false);
-        assert.equal(result.url, url);
-      });
-    });
-
-    describe('Non-matching URLs (no transformation)', () => {
-      it('passes through regular URLs unchanged', () => {
-        const url = 'https://example.com/page.html';
-        const result = transformToRawUrl(url);
-
-        assert.equal(result.transformed, false);
-        assert.equal(result.url, url);
-      });
-
-      it('passes through GitHub non-blob URLs unchanged', () => {
-        const url = 'https://github.com/owner/repo';
-        const result = transformToRawUrl(url);
-
-        assert.equal(result.transformed, false);
-        assert.equal(result.url, url);
-      });
-
-      it('passes through GitHub issues URLs unchanged', () => {
-        const url = 'https://github.com/owner/repo/issues/123';
-        const result = transformToRawUrl(url);
-
-        assert.equal(result.transformed, false);
-        assert.equal(result.url, url);
-      });
-
-      it('handles empty string', () => {
-        const result = transformToRawUrl('');
-
-        assert.equal(result.transformed, false);
-        assert.equal(result.url, '');
-      });
-
-      it('handles non-string input gracefully', () => {
-        // @ts-expect-error - Testing invalid input
-        const result = transformToRawUrl(null);
-
-        assert.equal(result.transformed, false);
-      });
+    it('handles non-string input gracefully', () => {
+      // @ts-expect-error - Testing invalid input
+      const result = transformToRawUrl(null);
+      assert.equal(result.transformed, false);
     });
   });
+}
+
+describe('url-transformer', () => {
+  registerTransformToRawUrlTests();
 });
