@@ -27,11 +27,19 @@ export function resolveCachedPayloadContent(
   return null;
 }
 
+function hasOptionalStringProperty(
+  value: Record<string, unknown>,
+  key: string
+): boolean {
+  const prop = value[key];
+  if (prop === undefined) return true;
+  return typeof prop === 'string';
+}
+
 function isCachedPayload(value: unknown): value is CachedPayload {
   if (!isRecord(value)) return false;
-  return (
-    (value.content === undefined || typeof value.content === 'string') &&
-    (value.markdown === undefined || typeof value.markdown === 'string') &&
-    (value.title === undefined || typeof value.title === 'string')
-  );
+  if (!hasOptionalStringProperty(value, 'content')) return false;
+  if (!hasOptionalStringProperty(value, 'markdown')) return false;
+  if (!hasOptionalStringProperty(value, 'title')) return false;
+  return true;
 }

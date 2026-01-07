@@ -25,22 +25,30 @@ export function generateSafeFilename(
   return `download-${Date.now()}${extension}`;
 }
 
+function getLastPathSegment(url: URL): string | null {
+  const segments = url.pathname.split('/').filter(Boolean);
+  if (segments.length === 0) return null;
+  const lastSegment = segments[segments.length - 1];
+  return lastSegment ?? null;
+}
+
+function stripCommonPageExtension(segment: string): string {
+  return segment.replace(/\.(html?|php|aspx?|jsp)$/i, '');
+}
+
+function normalizeUrlFilenameSegment(segment: string): string | null {
+  const cleaned = stripCommonPageExtension(segment);
+  if (!cleaned) return null;
+  if (cleaned === 'index') return null;
+  return cleaned;
+}
+
 function extractFilenameFromUrl(url: string): string | null {
   try {
     const urlObj = new URL(url);
-    const { pathname } = urlObj;
-
-    const segments = pathname.split('/').filter(Boolean);
-    if (segments.length === 0) return null;
-
-    const lastSegment = segments[segments.length - 1];
+    const lastSegment = getLastPathSegment(urlObj);
     if (!lastSegment) return null;
-
-    const cleaned = lastSegment.replace(/\.(html?|php|aspx?|jsp)$/i, '');
-
-    if (!cleaned || cleaned === 'index') return null;
-
-    return cleaned;
+    return normalizeUrlFilenameSegment(lastSegment);
   } catch {
     return null;
   }
@@ -55,7 +63,7 @@ function slugifyTitle(title: string): string | null {
     .replace(/-+/g, '-')
     .replace(/^-|-$/g, '');
 
-  return slug.length > 0 ? slug : null;
+  return slug || null;
 }
 
 function sanitizeFilename(name: string, extension: string): string {

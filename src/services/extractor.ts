@@ -8,16 +8,17 @@ import type {
 } from '../config/types/content.js';
 
 import { getErrorMessage } from '../utils/error-utils.js';
+import { isRecord } from '../utils/guards.js';
 import { truncateHtml } from '../utils/html-truncator.js';
 
 import { logError, logInfo, logWarn } from './logger.js';
 import { extractMetadata } from './metadata-collector.js';
 
 function isReadabilityCompatible(doc: unknown): doc is Document {
-  if (!doc || typeof doc !== 'object') return false;
+  if (!isRecord(doc)) return false;
   if (!('documentElement' in doc)) return false;
-  if (!('querySelectorAll' in doc)) return false;
-  if (!('querySelector' in doc)) return false;
+  if (typeof doc.querySelectorAll !== 'function') return false;
+  if (typeof doc.querySelector !== 'function') return false;
   return true;
 }
 

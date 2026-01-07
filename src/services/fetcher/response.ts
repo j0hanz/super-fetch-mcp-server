@@ -64,6 +64,26 @@ function createAbortError(url: string): FetchError {
   });
 }
 
+async function cancelReaderQuietly(
+  reader: ReadableStreamDefaultReader<Uint8Array>
+): Promise<void> {
+  try {
+    await reader.cancel();
+  } catch {
+    // Ignore cancel errors; we're already failing this read.
+  }
+}
+
+async function throwIfAborted(
+  signal: AbortSignal | undefined,
+  url: string,
+  reader: ReadableStreamDefaultReader<Uint8Array>
+): Promise<void> {
+  if (!signal?.aborted) return;
+  await cancelReaderQuietly(reader);
+  throw createAbortError(url);
+}
+
 async function readStreamWithLimit(
   stream: ReadableStream<Uint8Array>,
   url: string,
@@ -74,29 +94,19 @@ async function readStreamWithLimit(
   const reader = stream.getReader();
 
   try {
-    if (signal?.aborted) {
-      await reader.cancel();
-      throw createAbortError(url);
-    }
+    await throwIfAborted(signal, url, reader);
 
     let result = await reader.read();
     while (!result.done) {
       appendChunk(state, result.value, maxBytes, url);
 
-      if (signal?.aborted) {
-        await reader.cancel();
-        throw createAbortError(url);
-      }
+      await throwIfAborted(signal, url, reader);
 
       result = await reader.read();
     }
   } catch (error) {
     if (!signal?.aborted) {
-      try {
-        await reader.cancel();
-      } catch {
-        // Ignore cancel errors; we're already failing this read.
-      }
+      await cancelReaderQuietly(reader);
     }
     if (signal?.aborted) {
       throw createAbortError(url);

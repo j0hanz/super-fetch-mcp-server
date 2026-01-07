@@ -29,6 +29,16 @@ function isLogLevel(value: string): value is LogLevel {
   return ALLOWED_LOG_LEVELS.has(value);
 }
 
+function isBelowMin(value: number, min: number | undefined): boolean {
+  if (min === undefined) return false;
+  return value < min;
+}
+
+function isAboveMax(value: number, max: number | undefined): boolean {
+  if (max === undefined) return false;
+  return value > max;
+}
+
 export function parseInteger(
   envValue: string | undefined,
   defaultValue: number,
@@ -38,8 +48,8 @@ export function parseInteger(
   if (!envValue) return defaultValue;
   const parsed = parseInt(envValue, 10);
   if (Number.isNaN(parsed)) return defaultValue;
-  if (min !== undefined && parsed < min) return defaultValue;
-  if (max !== undefined && parsed > max) return defaultValue;
+  if (isBelowMin(parsed, min)) return defaultValue;
+  if (isAboveMax(parsed, max)) return defaultValue;
   return parsed;
 }
 

@@ -16,49 +16,68 @@ import { getSessionId } from './sessions.js';
 
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
 
+function takeFirstHostValue(value: string): string | null {
+  const first = value.split(',')[0];
+  if (!first) return null;
+  const trimmed = first.trim();
+  return trimmed ? trimmed : null;
+}
+
+function stripIpv6Brackets(value: string): string | null {
+  if (!value.startsWith('[')) return null;
+  const end = value.indexOf(']');
+  if (end === -1) return null;
+  return value.slice(1, end);
+}
+
+function stripPortIfPresent(value: string): string {
+  const colonIndex = value.indexOf(':');
+  if (colonIndex === -1) return value;
+  return value.slice(0, colonIndex);
+}
+
 function normalizeHost(value: string): string | null {
   const trimmed = value.trim().toLowerCase();
   if (!trimmed) return null;
 
-  const first = trimmed.split(',')[0]?.trim();
+  const first = takeFirstHostValue(trimmed);
   if (!first) return null;
 
-  if (first.startsWith('[')) {
-    const end = first.indexOf(']');
-    if (end === -1) return null;
-    return first.slice(1, end);
-  }
+  const ipv6 = stripIpv6Brackets(first);
+  if (ipv6) return ipv6;
 
-  const colonIndex = first.indexOf(':');
-  if (colonIndex !== -1) {
-    return first.slice(0, colonIndex);
-  }
+  return stripPortIfPresent(first);
+}
 
-  return first;
+function isWildcardHost(host: string): boolean {
+  return host === '0.0.0.0' || host === '::';
+}
+
+function addLoopbackHosts(allowedHosts: Set<string>): void {
+  for (const host of LOOPBACK_HOSTS) {
+    allowedHosts.add(host);
+  }
+}
+
+function addConfiguredHost(allowedHosts: Set<string>): void {
+  const configuredHost = normalizeHost(config.server.host);
+  if (!configuredHost) return;
+  if (isWildcardHost(configuredHost)) return;
+  allowedHosts.add(configuredHost);
+}
+
+function addExplicitAllowedHosts(allowedHosts: Set<string>): void {
+  for (const host of config.security.allowedHosts) {
+    allowedHosts.add(host);
+  }
 }
 
 function buildAllowedHosts(): Set<string> {
   const allowedHosts = new Set<string>();
 
-  // Always allow loopback
-  for (const host of LOOPBACK_HOSTS) {
-    allowedHosts.add(host);
-  }
-
-  // Allow the configured host (unless it's a wildcard)
-  const configuredHost = normalizeHost(config.server.host);
-  if (
-    configuredHost &&
-    configuredHost !== '0.0.0.0' &&
-    configuredHost !== '::'
-  ) {
-    allowedHosts.add(configuredHost);
-  }
-
-  // Allow explicitly configured hosts
-  for (const host of config.security.allowedHosts) {
-    allowedHosts.add(host);
-  }
+  addLoopbackHosts(allowedHosts);
+  addConfiguredHost(allowedHosts);
+  addExplicitAllowedHosts(allowedHosts);
 
   return allowedHosts;
 }

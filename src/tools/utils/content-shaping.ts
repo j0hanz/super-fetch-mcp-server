@@ -34,6 +34,27 @@ export function determineContentExtractionSource(
   return !!article;
 }
 
+function applyArticleMetadata(
+  metadata: MetadataBlock,
+  article: ExtractedArticle
+): void {
+  if (article.title !== undefined) metadata.title = article.title;
+  if (article.byline !== undefined) metadata.author = article.byline;
+}
+
+function applyExtractedMetadata(
+  metadata: MetadataBlock,
+  extractedMeta: ExtractedMetadata
+): void {
+  if (extractedMeta.title !== undefined) metadata.title = extractedMeta.title;
+  if (extractedMeta.description !== undefined) {
+    metadata.description = extractedMeta.description;
+  }
+  if (extractedMeta.author !== undefined) {
+    metadata.author = extractedMeta.author;
+  }
+}
+
 export function createContentMetadataBlock(
   url: string,
   article: ExtractedArticle | null,
@@ -50,18 +71,11 @@ export function createContentMetadataBlock(
   };
 
   if (shouldExtractFromArticle && article) {
-    if (article.title !== undefined) metadata.title = article.title;
-    if (article.byline !== undefined) metadata.author = article.byline;
+    applyArticleMetadata(metadata, article);
     return metadata;
   }
 
-  if (extractedMeta.title !== undefined) metadata.title = extractedMeta.title;
-  if (extractedMeta.description !== undefined) {
-    metadata.description = extractedMeta.description;
-  }
-  if (extractedMeta.author !== undefined) {
-    metadata.author = extractedMeta.author;
-  }
+  applyExtractedMetadata(metadata, extractedMeta);
 
   return metadata;
 }

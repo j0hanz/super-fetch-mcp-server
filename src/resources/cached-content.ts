@@ -67,22 +67,9 @@ function resolveCacheParams(params: unknown): {
   namespace: string;
   urlHash: string;
 } {
-  if (!isRecord(params)) {
-    throw new McpError(
-      ErrorCode.InvalidParams,
-      'Invalid cache resource parameters'
-    );
-  }
-
-  const namespace = resolveStringParam(params.namespace);
-  const urlHash = resolveStringParam(params.urlHash);
-
-  if (!namespace || !urlHash) {
-    throw new McpError(
-      ErrorCode.InvalidParams,
-      'Both namespace and urlHash parameters are required'
-    );
-  }
+  const parsed = requireRecordParams(params);
+  const namespace = requireParamString(parsed, 'namespace');
+  const urlHash = requireParamString(parsed, 'urlHash');
 
   if (!isValidNamespace(namespace) || !isValidHash(urlHash)) {
     throw new McpError(
@@ -92,6 +79,31 @@ function resolveCacheParams(params: unknown): {
   }
 
   return { namespace, urlHash };
+}
+
+function requireRecordParams(value: unknown): Record<string, unknown> {
+  if (!isRecord(value)) {
+    throw new McpError(
+      ErrorCode.InvalidParams,
+      'Invalid cache resource parameters'
+    );
+  }
+  return value;
+}
+
+function requireParamString(
+  params: Record<string, unknown>,
+  key: 'namespace' | 'urlHash'
+): string {
+  const raw = params[key];
+  const resolved = resolveStringParam(raw);
+  if (!resolved) {
+    throw new McpError(
+      ErrorCode.InvalidParams,
+      'Both namespace and urlHash parameters are required'
+    );
+  }
+  return resolved;
 }
 
 function buildCachedContentResponse(

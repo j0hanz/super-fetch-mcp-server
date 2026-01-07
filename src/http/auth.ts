@@ -55,11 +55,74 @@ async function verifyAccessToken(token: string): Promise<AuthInfo> {
   return verifyStaticToken(token);
 }
 
+function resolveMetadataUrl(): string | null {
+  if (config.auth.mode !== 'oauth') return null;
+  return getOAuthProtectedResourceMetadataUrl(new URL(config.auth.resourceUrl));
+}
+
+function resolveOptionalScopes(
+  requiredScopes: readonly string[]
+): string[] | undefined {
+  return requiredScopes.length > 0 ? [...requiredScopes] : undefined;
+}
+
+function buildOAuthMetadata(params: {
+  issuerUrl: URL;
+  authorizationUrl: URL;
+  tokenUrl: URL;
+  revocationUrl?: URL;
+  registrationUrl?: URL;
+  requiredScopes: readonly string[];
+}): {
+  issuer: string;
+  authorization_endpoint: string;
+  response_types_supported: string[];
+  code_challenge_methods_supported: string[];
+  token_endpoint: string;
+  token_endpoint_auth_methods_supported: string[];
+  grant_types_supported: string[];
+  scopes_supported?: string[];
+  revocation_endpoint?: string;
+  registration_endpoint?: string;
+} {
+  const oauthMetadata: {
+    issuer: string;
+    authorization_endpoint: string;
+    response_types_supported: string[];
+    code_challenge_methods_supported: string[];
+    token_endpoint: string;
+    token_endpoint_auth_methods_supported: string[];
+    grant_types_supported: string[];
+    scopes_supported?: string[];
+    revocation_endpoint?: string;
+    registration_endpoint?: string;
+  } = {
+    issuer: params.issuerUrl.href,
+    authorization_endpoint: params.authorizationUrl.href,
+    response_types_supported: ['code'],
+    code_challenge_methods_supported: ['S256'],
+    token_endpoint: params.tokenUrl.href,
+    token_endpoint_auth_methods_supported: ['client_secret_post', 'none'],
+    grant_types_supported: ['authorization_code', 'refresh_token'],
+  };
+
+  const scopesSupported = resolveOptionalScopes(params.requiredScopes);
+  if (scopesSupported !== undefined) {
+    oauthMetadata.scopes_supported = scopesSupported;
+  }
+
+  if (params.revocationUrl) {
+    oauthMetadata.revocation_endpoint = params.revocationUrl.href;
+  }
+  if (params.registrationUrl) {
+    oauthMetadata.registration_endpoint = params.registrationUrl.href;
+  }
+
+  return oauthMetadata;
+}
+
 export function createAuthMiddleware(): RequestHandler {
-  const metadataUrl =
-    config.auth.mode === 'oauth'
-      ? getOAuthProtectedResourceMetadataUrl(config.auth.resourceUrl)
-      : null;
+  const metadataUrl = resolveMetadataUrl();
   const authHandler = requireBearerAuth({
     verifier: { verifyAccessToken },
     requiredScopes: config.auth.requiredScopes,
@@ -87,25 +150,17 @@ export function createAuthMetadataRouter(): Router | null {
     resourceUrl,
   } = config.auth;
 
-  if (!issuerUrl || !authorizationUrl || !tokenUrl) {
-    return null;
-  }
-
-  const oauthMetadata = {
-    issuer: issuerUrl.href,
-    authorization_endpoint: authorizationUrl.href,
-    response_types_supported: ['code'],
-    code_challenge_methods_supported: ['S256'],
-    token_endpoint: tokenUrl.href,
-    token_endpoint_auth_methods_supported: ['client_secret_post', 'none'],
-    grant_types_supported: ['authorization_code', 'refresh_token'],
-    scopes_supported: requiredScopes.length > 0 ? requiredScopes : undefined,
-    revocation_endpoint: revocationUrl?.href,
-    registration_endpoint: registrationUrl?.href,
-  };
+  if (!issuerUrl || !authorizationUrl || !tokenUrl) return null;
 
   return mcpAuthMetadataRouter({
-    oauthMetadata,
+    oauthMetadata: buildOAuthMetadata({
+      issuerUrl,
+      authorizationUrl,
+      tokenUrl,
+      ...(revocationUrl ? { revocationUrl } : {}),
+      ...(registrationUrl ? { registrationUrl } : {}),
+      requiredScopes,
+    }),
     resourceServerUrl: resourceUrl,
     scopesSupported: requiredScopes,
     resourceName: config.server.name,

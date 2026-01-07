@@ -35,11 +35,7 @@ function parseResourceUrl(value: unknown): URL | undefined {
   return new URL(value);
 }
 
-function extractResource(data: Record<string, unknown>): URL | undefined {
-  const resource = parseResourceUrl(data.resource);
-  if (resource) return resource;
-
-  const { aud } = data;
+function parseAudResource(aud: unknown): URL | undefined {
   if (typeof aud === 'string') {
     return parseResourceUrl(aud);
   }
@@ -52,6 +48,13 @@ function extractResource(data: Record<string, unknown>): URL | undefined {
   }
 
   return undefined;
+}
+
+function extractResource(data: Record<string, unknown>): URL | undefined {
+  const resource = parseResourceUrl(data.resource);
+  if (resource) return resource;
+
+  return parseAudResource(data.aud);
 }
 
 function extractScopes(data: Record<string, unknown>): string[] {

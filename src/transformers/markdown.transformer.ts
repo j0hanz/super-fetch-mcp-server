@@ -68,6 +68,38 @@ const FIXED_PATTERN = /\b(fixed|sticky)\b/;
 const HIGH_Z_PATTERN = /\bz-(?:4[0-9]|50)\b/;
 const ISOLATE_PATTERN = /\bisolate\b/;
 
+function isStructuralNoiseTag(tagName: string): boolean {
+  return (
+    STRUCTURAL_TAGS.has(tagName) || tagName === 'svg' || tagName === 'canvas'
+  );
+}
+
+function isHiddenElement(element: HTMLElement): boolean {
+  return (
+    element.getAttribute('hidden') !== null ||
+    element.getAttribute('aria-hidden') === 'true'
+  );
+}
+
+function hasNoiseRole(element: HTMLElement): boolean {
+  const role = element.getAttribute('role');
+  return role ? NAVIGATION_ROLES.has(role) : false;
+}
+
+function matchesPromoIdOrClass(className: string, id: string): boolean {
+  const combined = `${className} ${id}`.toLowerCase();
+  return PROMO_PATTERN.test(combined);
+}
+
+function matchesHighZIsolate(className: string): boolean {
+  return HIGH_Z_PATTERN.test(className) && ISOLATE_PATTERN.test(className);
+}
+
+function matchesFixedOrHighZIsolate(className: string): boolean {
+  if (FIXED_PATTERN.test(className)) return true;
+  return matchesHighZIsolate(className);
+}
+
 function addNoiseRule(instance: TurndownService): void {
   instance.addRule('removeNoise', {
     filter: (node) => isNoiseNode(node),
@@ -77,26 +109,20 @@ function addNoiseRule(instance: TurndownService): void {
 
 function isNoiseNode(node: TurndownService.Node): boolean {
   if (!isElement(node)) return false;
+  return isNoiseElement(node);
+}
+
+function isNoiseElement(node: HTMLElement): boolean {
   const tagName = node.tagName.toLowerCase();
-  if (STRUCTURAL_TAGS.has(tagName)) return true;
-  if (tagName === 'svg' || tagName === 'canvas') return true;
-
-  const hidden =
-    node.getAttribute('hidden') !== null ||
-    node.getAttribute('aria-hidden') === 'true';
-  if (hidden) return true;
-
-  const role = node.getAttribute('role');
-  if (role && NAVIGATION_ROLES.has(role)) return true;
+  if (isStructuralNoiseTag(tagName)) return true;
+  if (isHiddenElement(node)) return true;
+  if (hasNoiseRole(node)) return true;
 
   const className = node.getAttribute('class') ?? '';
-  if (FIXED_PATTERN.test(className)) return true;
+  if (matchesFixedOrHighZIsolate(className)) return true;
 
   const id = node.getAttribute('id') ?? '';
-  const combined = `${className} ${id}`.toLowerCase();
-  if (PROMO_PATTERN.test(combined)) return true;
-
-  return HIGH_Z_PATTERN.test(className) && ISOLATE_PATTERN.test(className);
+  return matchesPromoIdOrClass(className, id);
 }
 
 function addFencedCodeRule(instance: TurndownService): void {
@@ -185,10 +211,8 @@ function createFrontmatter(metadata: MetadataBlock): string {
 }
 
 export function htmlToMarkdown(html: string, metadata?: MetadataBlock): string {
-  const frontmatter = metadata ? createFrontmatter(metadata) : '';
-  if (!html || typeof html !== 'string') {
-    return frontmatter;
-  }
+  const frontmatter = buildFrontmatter(metadata);
+  if (!html) return frontmatter;
 
   try {
     const content = getTurndown().turndown(html).trim();
@@ -196,4 +220,9 @@ export function htmlToMarkdown(html: string, metadata?: MetadataBlock): string {
   } catch {
     return frontmatter;
   }
+}
+
+function buildFrontmatter(metadata?: MetadataBlock): string {
+  if (!metadata) return '';
+  return createFrontmatter(metadata);
 }

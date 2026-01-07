@@ -7,11 +7,11 @@ import type {
 
 import { logDebug, logError } from '../../services/logger.js';
 
-import { isRecord } from '../../utils/guards.js';
 import {
   createToolErrorResponse,
   handleToolError,
 } from '../../utils/tool-error-handler.js';
+import { parseCachedMarkdownResult } from '../utils/cached-markdown.js';
 import { transformHtmlToMarkdown } from '../utils/content-transform.js';
 
 import {
@@ -31,29 +31,7 @@ type MarkdownPipelineResult = MarkdownTransformResult & {
 function deserializeMarkdownResult(
   cached: string
 ): MarkdownPipelineResult | undefined {
-  try {
-    const parsed: unknown = JSON.parse(cached);
-    if (!isRecord(parsed)) return undefined;
-
-    const { content, markdown, title, truncated } = parsed;
-    const resolvedContent =
-      typeof markdown === 'string'
-        ? markdown
-        : typeof content === 'string'
-          ? content
-          : undefined;
-    if (resolvedContent === undefined) return undefined;
-    if (title !== undefined && typeof title !== 'string') return undefined;
-
-    return {
-      content: resolvedContent,
-      markdown: resolvedContent,
-      title: typeof title === 'string' ? title : undefined,
-      truncated: typeof truncated === 'boolean' ? truncated : false,
-    };
-  } catch {
-    return undefined;
-  }
+  return parseCachedMarkdownResult(cached);
 }
 
 function buildMarkdownTransform() {

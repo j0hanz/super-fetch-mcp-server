@@ -110,6 +110,43 @@ function buildEmbeddedResource(
   };
 }
 
+function resolveContentToEmbed(
+  inlineResult: InlineResult,
+  fullContent: string | undefined,
+  useInlineInHttpMode: boolean
+): unknown {
+  if (useInlineInHttpMode) {
+    return inlineResult.content;
+  }
+  return fullContent ?? inlineResult.content;
+}
+
+function maybeAppendEmbeddedResource(
+  blocks: ToolContentBlock[],
+  contentToEmbed: unknown,
+  url: string | undefined,
+  title: string | undefined
+): void {
+  if (typeof contentToEmbed !== 'string') return;
+  if (!url) return;
+
+  const embeddedResource = buildEmbeddedResource(contentToEmbed, url, title);
+  if (embeddedResource) {
+    blocks.push(embeddedResource);
+  }
+}
+
+function maybeAppendResourceLink(
+  blocks: ToolContentBlock[],
+  inlineResult: InlineResult,
+  resourceName: string
+): void {
+  const resourceLink = buildResourceLink(inlineResult, resourceName);
+  if (resourceLink) {
+    blocks.push(resourceLink);
+  }
+}
+
 export function buildToolContentBlocks(
   structuredContent: Record<string, unknown>,
   fromCache: boolean,
@@ -127,21 +164,13 @@ export function buildToolContentBlocks(
 
   const blocks: ToolContentBlock[] = [textBlock];
 
-  const contentToEmbed = config.runtime.httpMode
-    ? inlineResult.content
-    : (fullContent ?? inlineResult.content);
-
-  if (typeof contentToEmbed === 'string' && url) {
-    const embeddedResource = buildEmbeddedResource(contentToEmbed, url, title);
-    if (embeddedResource) {
-      blocks.push(embeddedResource);
-    }
-  }
-
-  const resourceLink = buildResourceLink(inlineResult, resourceName);
-  if (resourceLink) {
-    blocks.push(resourceLink);
-  }
+  const contentToEmbed = resolveContentToEmbed(
+    inlineResult,
+    fullContent,
+    config.runtime.httpMode
+  );
+  maybeAppendEmbeddedResource(blocks, contentToEmbed, url, title);
+  maybeAppendResourceLink(blocks, inlineResult, resourceName);
 
   return blocks;
 }

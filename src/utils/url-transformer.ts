@@ -88,10 +88,12 @@ function getUrlWithoutParams(url: string): {
   const hashIndex = url.indexOf('#');
   const queryIndex = url.indexOf('?');
   let endIndex = url.length;
-  if (queryIndex !== -1 && hashIndex !== -1) {
-    endIndex = Math.min(queryIndex, hashIndex);
-  } else if (queryIndex !== -1) {
-    endIndex = queryIndex;
+  if (queryIndex !== -1) {
+    if (hashIndex !== -1) {
+      endIndex = Math.min(queryIndex, hashIndex);
+    } else {
+      endIndex = queryIndex;
+    }
   } else if (hashIndex !== -1) {
     endIndex = hashIndex;
   }
@@ -104,39 +106,52 @@ function getUrlWithoutParams(url: string): {
   };
 }
 
-export function transformToRawUrl(url: string): TransformResult {
-  if (!url || typeof url !== 'string') {
-    return { url, transformed: false };
+function resolveUrlToMatch(
+  rule: TransformRule,
+  base: string,
+  hash: string
+): string {
+  if (rule.name !== 'github-gist') return base;
+  if (!hash.startsWith('#file-')) return base;
+  return base + hash;
+}
+
+function applyTransformRules(
+  base: string,
+  hash: string
+): { url: string; platform: string } | null {
+  for (const rule of TRANSFORM_RULES) {
+    const urlToMatch = resolveUrlToMatch(rule, base, hash);
+
+    const match = rule.pattern.exec(urlToMatch);
+    if (match) {
+      return { url: rule.transform(match), platform: rule.name };
+    }
   }
+
+  return null;
+}
+
+export function transformToRawUrl(url: string): TransformResult {
+  if (!url) return { url, transformed: false };
   if (isRawUrl(url)) {
     return { url, transformed: false };
   }
 
   const { base, hash } = getUrlWithoutParams(url);
+  const result = applyTransformRules(base, hash);
+  if (!result) return { url, transformed: false };
 
-  for (const rule of TRANSFORM_RULES) {
-    const urlToMatch =
-      rule.name === 'github-gist' && hash.startsWith('#file-')
-        ? base + hash
-        : base;
-
-    const match = rule.pattern.exec(urlToMatch);
-    if (match) {
-      const rawUrl = rule.transform(match);
-      logDebug('URL transformed to raw content URL', {
-        platform: rule.name,
-        original: url.substring(0, 100),
-        transformed: rawUrl.substring(0, 100),
-      });
-      return {
-        url: rawUrl,
-        transformed: true,
-        platform: rule.name,
-      };
-    }
-  }
-
-  return { url, transformed: false };
+  logDebug('URL transformed to raw content URL', {
+    platform: result.platform,
+    original: url.substring(0, 100),
+    transformed: result.url.substring(0, 100),
+  });
+  return {
+    url: result.url,
+    transformed: true,
+    platform: result.platform,
+  };
 }
 
 const RAW_TEXT_EXTENSIONS = new Set([
@@ -155,14 +170,18 @@ const RAW_TEXT_EXTENSIONS = new Set([
 ]);
 
 export function isRawTextContentUrl(url: string): boolean {
-  if (!url || typeof url !== 'string') return false;
+  if (!url) return false;
   if (isRawUrl(url)) return true;
 
   const { base } = getUrlWithoutParams(url);
   const lowerBase = base.toLowerCase();
 
+  return hasKnownRawTextExtension(lowerBase);
+}
+
+function hasKnownRawTextExtension(urlBaseLower: string): boolean {
   for (const ext of RAW_TEXT_EXTENSIONS) {
-    if (lowerBase.endsWith(ext)) return true;
+    if (urlBaseLower.endsWith(ext)) return true;
   }
   return false;
 }

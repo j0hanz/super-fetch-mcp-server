@@ -1,4 +1,6 @@
 import type {
+  ExtractedArticle,
+  ExtractedMetadata,
   MarkdownTransformResult,
   TransformOptions,
 } from '../../config/types/content.js';
@@ -22,6 +24,62 @@ interface ContentSource {
   readonly metadata: ReturnType<typeof createContentMetadataBlock>;
 }
 
+function buildArticleContentSource(
+  url: string,
+  article: ExtractedArticle,
+  extractedMeta: ExtractedMetadata,
+  includeMetadata: boolean
+): ContentSource {
+  const metadata = createContentMetadataBlock(
+    url,
+    article,
+    extractedMeta,
+    true,
+    includeMetadata
+  );
+
+  return {
+    sourceHtml: article.content,
+    title: article.title,
+    metadata,
+  };
+}
+
+function buildFullHtmlContentSource(
+  html: string,
+  url: string,
+  article: ExtractedArticle | null,
+  extractedMeta: ExtractedMetadata,
+  includeMetadata: boolean
+): ContentSource {
+  const metadata = createContentMetadataBlock(
+    url,
+    article,
+    extractedMeta,
+    false,
+    includeMetadata
+  );
+
+  return {
+    sourceHtml: html,
+    title: extractedMeta.title,
+    metadata,
+  };
+}
+
+function logQualityGateFallback(
+  url: string,
+  article: { textContent: string }
+): void {
+  logDebug(
+    'Quality gate: Readability extraction below threshold, using full HTML',
+    {
+      url: url.substring(0, 80),
+      articleLength: article.textContent.length,
+    }
+  );
+}
+
 function resolveContentSource(
   html: string,
   url: string,
@@ -31,31 +89,26 @@ function resolveContentSource(
     extractArticle: true,
   });
 
-  const hasArticle = determineContentExtractionSource(article);
-  const shouldExtractFromArticle =
-    hasArticle && isExtractionSufficient(article, html);
+  if (determineContentExtractionSource(article)) {
+    if (isExtractionSufficient(article, html)) {
+      return buildArticleContentSource(
+        url,
+        article,
+        extractedMeta,
+        options.includeMetadata
+      );
+    }
 
-  if (hasArticle && !shouldExtractFromArticle) {
-    logDebug(
-      'Quality gate: Readability extraction below threshold, using full HTML',
-      {
-        url: url.substring(0, 80),
-        articleLength: article.textContent.length,
-      }
-    );
+    logQualityGateFallback(url, article);
   }
 
-  const sourceHtml = shouldExtractFromArticle ? article.content : html;
-  const metadata = createContentMetadataBlock(
+  return buildFullHtmlContentSource(
+    html,
     url,
     article,
     extractedMeta,
-    shouldExtractFromArticle,
     options.includeMetadata
   );
-  const title = shouldExtractFromArticle ? article.title : extractedMeta.title;
-
-  return { sourceHtml, title, metadata };
 }
 
 function buildMarkdownPayload(context: ContentSource): string {
@@ -106,29 +159,47 @@ function addSourceToMarkdown(content: string, url: string): string {
   return `---\nsource: "${url}"\n---\n\n${content}`;
 }
 
-function isRawTextContent(content: string): boolean {
-  const trimmed = content.trim();
+function looksLikeHtmlDocument(trimmed: string): boolean {
+  return (
+    trimmed.startsWith('<!DOCTYPE') ||
+    trimmed.startsWith('<!doctype') ||
+    trimmed.startsWith('<html') ||
+    trimmed.startsWith('<HTML')
+  );
+}
 
-  if (trimmed.startsWith('<!DOCTYPE') || trimmed.startsWith('<!doctype')) {
-    return false;
-  }
-  if (trimmed.startsWith('<html') || trimmed.startsWith('<HTML')) {
-    return false;
-  }
+function hasFrontmatter(trimmed: string): boolean {
+  return /^---\r?\n/.test(trimmed);
+}
 
-  if (/^---\r?\n/.test(trimmed)) {
-    return true;
-  }
-  const htmlTagCount = (
-    content.match(/<(html|head|body|div|span|script|style|meta|link)\b/gi) ?? []
-  ).length;
-  if (htmlTagCount > 2) {
-    return false;
-  }
+function countCommonHtmlTags(content: string): number {
+  const matches =
+    content.match(/<(html|head|body|div|span|script|style|meta|link)\b/gi) ??
+    [];
+  return matches.length;
+}
+
+function looksLikeMarkdown(content: string): boolean {
   const hasMarkdownHeadings = /^#{1,6}\s+/m.test(content);
   const hasMarkdownLists = /^[\s]*[-*+]\s+/m.test(content);
   const hasMarkdownCodeBlocks = /```[\s\S]*?```/.test(content);
-  if (hasMarkdownHeadings || hasMarkdownLists || hasMarkdownCodeBlocks) {
+  return hasMarkdownHeadings || hasMarkdownLists || hasMarkdownCodeBlocks;
+}
+
+function isRawTextContent(content: string): boolean {
+  const trimmed = content.trim();
+
+  if (looksLikeHtmlDocument(trimmed)) {
+    return false;
+  }
+
+  if (hasFrontmatter(trimmed)) {
+    return true;
+  }
+  if (countCommonHtmlTags(content) > 2) {
+    return false;
+  }
+  if (looksLikeMarkdown(content)) {
     return true;
   }
 

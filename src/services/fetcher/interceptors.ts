@@ -160,14 +160,16 @@ function logSlowRequestIfNeeded(
   });
 }
 
-export function recordFetchError(
+function normalizeError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
+}
+
+function buildFetchErrorEvent(
   context: FetchTelemetryContext,
-  error: unknown,
+  err: Error,
+  duration: number,
   status?: number
-): void {
-  const duration = performance.now() - context.startTime;
-  const err = error instanceof Error ? error : new Error(String(error));
-  const code = isSystemError(err) ? err.code : undefined;
+): FetchChannelEvent {
   const event: FetchChannelEvent = {
     v: 1,
     type: 'error',
@@ -177,17 +179,34 @@ export function recordFetchError(
     duration,
   };
 
+  const code = isSystemError(err) ? err.code : undefined;
   if (code !== undefined) {
     event.code = code;
   }
-
   if (status !== undefined) {
     event.status = status;
   }
 
+  return event;
+}
+
+function selectErrorLogger(status?: number): typeof logWarn {
+  return status === 429 ? logWarn : logError;
+}
+
+export function recordFetchError(
+  context: FetchTelemetryContext,
+  error: unknown,
+  status?: number
+): void {
+  const duration = performance.now() - context.startTime;
+  const err = normalizeError(error);
+  const event = buildFetchErrorEvent(context, err, duration, status);
+
   publishFetchEvent(event);
 
-  const log = status === 429 ? logWarn : logError;
+  const log = selectErrorLogger(status);
+  const code = isSystemError(err) ? err.code : undefined;
   log('HTTP Request Error', {
     requestId: context.requestId,
     url: context.url,

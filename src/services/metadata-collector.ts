@@ -25,31 +25,50 @@ function resolveMetaField(
   return sources.og ?? sources.twitter ?? sources.standard;
 }
 
+type ParsedMetaKey = 'title' | 'description' | 'author';
+
+function parseOpenGraphKey(
+  property: string | null
+): Exclude<ParsedMetaKey, 'author'> | null {
+  if (!property?.startsWith('og:')) return null;
+  const key = property.replace('og:', '');
+  return key === 'title' || key === 'description' ? key : null;
+}
+
+function parseTwitterKey(
+  name: string | null
+): Exclude<ParsedMetaKey, 'author'> | null {
+  if (!name?.startsWith('twitter:')) return null;
+  const key = name.replace('twitter:', '');
+  return key === 'title' || key === 'description' ? key : null;
+}
+
+function parseStandardKey(name: string | null): ParsedMetaKey | null {
+  if (name === 'description') return 'description';
+  if (name === 'author') return 'author';
+  return null;
+}
+
 function collectMetaTag(state: MetaCollectorState, tag: HTMLMetaElement): void {
   const content = tag.getAttribute('content')?.trim();
   if (!content) return;
 
-  const property = tag.getAttribute('property');
-  if (property?.startsWith('og:')) {
-    const key = property.replace('og:', '');
-    if (key === 'title') state.title.og = content;
-    if (key === 'description') state.description.og = content;
+  const ogKey = parseOpenGraphKey(tag.getAttribute('property'));
+  if (ogKey) {
+    state[ogKey].og = content;
     return;
   }
 
   const name = tag.getAttribute('name');
-  if (name?.startsWith('twitter:')) {
-    const key = name.replace('twitter:', '');
-    if (key === 'title') state.title.twitter = content;
-    if (key === 'description') state.description.twitter = content;
+  const twitterKey = parseTwitterKey(name);
+  if (twitterKey) {
+    state[twitterKey].twitter = content;
     return;
   }
 
-  if (name === 'description') {
-    state.description.standard = content;
-  }
-  if (name === 'author') {
-    state.author.standard = content;
+  const standardKey = parseStandardKey(name);
+  if (standardKey) {
+    state[standardKey].standard = content;
   }
 }
 
