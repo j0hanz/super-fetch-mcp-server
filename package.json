@@ -71,7 +71,6 @@
     "eslint-plugin-unused-imports": "^4.3.0",
     "knip": "^5.80.0",
     "prettier": "^3.7.4",
-    "shx": "^0.4.0",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.52.0"

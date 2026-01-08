@@ -24,29 +24,11 @@ export function splitLines(content: string): string[] {
   return content.split('\n');
 }
 
-export function splitByWhitespace(content: string): string[] {
-  const tokens: string[] = [];
-  let current = '';
-
-  for (const char of content) {
-    if (char === ' ' || char === '\t' || char === '\n' || char === '\r') {
-      if (current) {
-        tokens.push(current);
-        current = '';
-      }
-      continue;
-    }
-    current += char;
-  }
-
-  if (current) tokens.push(current);
-  return tokens;
-}
-
 export function extractLanguageFromClassName(
   className: string
 ): string | undefined {
-  const tokens = splitByWhitespace(className);
+  const tokens = className.match(/\S+/g);
+  if (!tokens) return undefined;
   for (const token of tokens) {
     const lower = token.toLowerCase();
     if (lower.startsWith('language-')) return token.slice('language-'.length);
