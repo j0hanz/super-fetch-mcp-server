@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import * as cache from '../dist/services/cache.js';
-import { registerDownloadRoutes } from '../dist/http/download-routes.js';
+import { registerDownloadRoutes } from '../dist/http/server.js';
 
 type ResponseState = {
   headers: Record<string, string>;

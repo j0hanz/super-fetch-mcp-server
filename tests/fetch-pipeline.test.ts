@@ -3,7 +3,7 @@ import { describe, it } from 'node:test';
 
 import * as cache from '../dist/services/cache.js';
 import { createCacheKey } from '../dist/services/cache-keys.js';
-import { executeFetchPipeline } from '../dist/tools/utils/fetch-pipeline.js';
+import { executeFetchPipeline } from '../dist/tools/handlers/fetch-single.shared.js';
 import { normalizeUrl } from '../dist/utils/url-validator.js';
 
 type CachedPayload = { value: string };

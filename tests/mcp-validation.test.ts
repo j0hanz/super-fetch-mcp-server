@@ -4,7 +4,7 @@ import { describe, it } from 'node:test';
 import {
   isJsonRpcBatchRequest,
   isMcpRequestBody,
-} from '../dist/http/mcp-validation.js';
+} from '../dist/http/mcp-routes.js';
 
 type Case<T> = {
   input: T;

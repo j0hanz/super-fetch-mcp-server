@@ -5,8 +5,8 @@ import {
   createSlotTracker,
   ensureSessionCapacity,
   reserveSessionSlot,
-} from '../dist/http/mcp-session-slots.js';
-import type { SessionStore } from '../dist/http/sessions.js';
+} from '../dist/http/mcp-sessions.js';
+import type { SessionStore } from '../dist/http/mcp-sessions.js';
 
 function createStore(initialSize: number) {
   let currentSize = initialSize;

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
-import { fetchWithRedirects } from '../dist/services/fetcher/redirects.js';
+import { fetchWithRedirects } from '../dist/services/fetcher.js';
 
 let originalFetch: typeof globalThis.fetch;
 

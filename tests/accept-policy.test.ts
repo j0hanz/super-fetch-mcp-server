@@ -4,7 +4,7 @@ import { describe, it } from 'node:test';
 import {
   acceptsEventStream,
   ensurePostAcceptHeader,
-} from '../dist/http/accept-policy.js';
+} from '../dist/http/mcp-routes.js';
 
 type AcceptCase = {
   header?: string;

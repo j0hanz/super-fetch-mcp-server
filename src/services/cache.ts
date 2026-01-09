@@ -5,7 +5,7 @@ import type { CacheEntry } from '../config/types/content.js';
 
 import { getErrorMessage } from '../utils/error-details.js';
 
-import { notifyCacheUpdate } from './cache-events.js';
+import { parseCacheKey } from './cache-keys.js';
 import { logWarn } from './logger.js';
 
 interface CacheItem {
@@ -14,6 +14,33 @@ interface CacheItem {
 }
 const contentCache = new Map<string, CacheItem>();
 let cleanupController: AbortController | null = null;
+
+export interface CacheUpdateEvent {
+  cacheKey: string;
+  namespace: string;
+  urlHash: string;
+}
+
+type CacheUpdateListener = (event: CacheUpdateEvent) => void;
+
+const updateListeners = new Set<CacheUpdateListener>();
+
+export function onCacheUpdate(listener: CacheUpdateListener): () => void {
+  updateListeners.add(listener);
+  return () => {
+    updateListeners.delete(listener);
+  };
+}
+
+function notifyCacheUpdate(cacheKey: string): void {
+  if (updateListeners.size === 0) return;
+  const parts = parseCacheKey(cacheKey);
+  if (!parts) return;
+  const event: CacheUpdateEvent = { cacheKey, ...parts };
+  for (const listener of updateListeners) {
+    listener(event);
+  }
+}
 
 function startCleanupLoop(): void {
   if (cleanupController) return;
@@ -48,8 +75,6 @@ interface CacheEntryMetadata {
   url: string;
   title?: string;
 }
-
-export { onCacheUpdate } from './cache-events.js';
 
 export function get(cacheKey: string | null): CacheEntry | undefined {
   if (!isCacheReadable(cacheKey)) return undefined;

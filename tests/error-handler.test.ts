@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { FetchError } from '../dist/errors/app-error.js';
-import { errorHandler } from '../dist/middleware/error-handler.js';
+import { errorHandler } from '../dist/http/server.js';
 
 function createMockResponse() {
   const headers = new Map();

@@ -1,4 +1,5 @@
-import type { Express, Request, Response } from 'express';
+import type { Express, NextFunction, Request, Response } from 'express';
+import { z } from 'zod';
 
 import type { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 
@@ -6,16 +7,39 @@ import type { McpRequestBody } from '../config/types/runtime.js';
 
 import { logError, logInfo } from '../services/logger.js';
 
-import { acceptsEventStream, ensurePostAcceptHeader } from './accept-policy.js';
-import { wrapAsync } from './async-handler.js';
-import { sendJsonRpcError } from './jsonrpc-http.js';
-import type { McpSessionOptions } from './mcp-session-types.js';
-import { resolveTransportForPost } from './mcp-session.js';
-import { isJsonRpcBatchRequest, isMcpRequestBody } from './mcp-validation.js';
-import { ensureMcpProtocolVersionHeader } from './protocol-policy.js';
-import { getSessionId } from './sessions.js';
+import {
+  getSessionId,
+  type McpSessionOptions,
+  resolveTransportForPost,
+  sendJsonRpcError,
+} from './mcp-sessions.js';
+
+const paramsSchema = z.looseObject({});
+
+const mcpRequestSchema = z.looseObject({
+  jsonrpc: z.literal('2.0'),
+  method: z.string().min(1),
+  id: z.union([z.string(), z.number()]).optional(),
+  params: paramsSchema.optional(),
+});
 
 type RequestWithUnknownBody = Omit<Request, 'body'> & { body: unknown };
+
+function wrapAsync(
+  fn: (req: Request, res: Response) => void | Promise<void>
+): (req: Request, res: Response, next: NextFunction) => void {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    Promise.resolve(fn(req, res)).catch(next);
+  };
+}
+
+export function isJsonRpcBatchRequest(body: unknown): boolean {
+  return Array.isArray(body);
+}
+
+export function isMcpRequestBody(body: unknown): body is McpRequestBody {
+  return mcpRequestSchema.safeParse(body).success;
+}
 
 function respondInvalidRequestBody(res: Response): void {
   sendJsonRpcError(res, -32600, 'Invalid Request: Malformed request body', 400);
@@ -112,6 +136,111 @@ function resolveSessionTransport(
 
   sessionStore.touch(sessionId);
   return session.transport;
+}
+
+const MCP_PROTOCOL_VERSION_HEADER = 'mcp-protocol-version';
+
+const MCP_PROTOCOL_VERSIONS = {
+  defaultVersion: '2025-03-26',
+  supported: new Set<string>(['2025-03-26', '2025-11-25']),
+};
+
+function getHeaderValue(req: Request, headerNameLower: string): string | null {
+  const value = req.headers[headerNameLower];
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return value[0] ?? null;
+  return null;
+}
+
+function setHeaderValue(
+  req: Request,
+  headerNameLower: string,
+  value: string
+): void {
+  // Express exposes req.headers as a plain object, but the type is readonly-ish.
+  req.headers[headerNameLower] = value;
+}
+
+export function ensureMcpProtocolVersionHeader(
+  req: Request,
+  res: Response
+): boolean {
+  const raw = getHeaderValue(req, MCP_PROTOCOL_VERSION_HEADER);
+  const version = raw?.trim();
+
+  if (!version) {
+    setHeaderValue(
+      req,
+      MCP_PROTOCOL_VERSION_HEADER,
+      MCP_PROTOCOL_VERSIONS.defaultVersion
+    );
+    return true;
+  }
+
+  if (!MCP_PROTOCOL_VERSIONS.supported.has(version)) {
+    sendJsonRpcError(
+      res,
+      -32600,
+      `Unsupported MCP-Protocol-Version: ${version}`,
+      400
+    );
+    return false;
+  }
+
+  return true;
+}
+
+function getAcceptHeader(req: Request): string {
+  const value = req.headers.accept;
+  if (typeof value === 'string') return value;
+  return '';
+}
+
+function setAcceptHeader(req: Request, value: string): void {
+  req.headers.accept = value;
+
+  const { rawHeaders } = req;
+  if (!Array.isArray(rawHeaders)) return;
+
+  for (let i = 0; i + 1 < rawHeaders.length; i += 2) {
+    const key = rawHeaders[i];
+    if (typeof key === 'string' && key.toLowerCase() === 'accept') {
+      rawHeaders[i + 1] = value;
+      return;
+    }
+  }
+
+  rawHeaders.push('Accept', value);
+}
+
+function hasToken(header: string, token: string): boolean {
+  return header
+    .split(',')
+    .map((part) => part.trim().toLowerCase())
+    .some((part) => part === token || part.startsWith(`${token};`));
+}
+
+export function ensurePostAcceptHeader(req: Request): void {
+  const accept = getAcceptHeader(req);
+
+  // Some clients send */* or omit Accept; the SDK transport is picky.
+  if (!accept || hasToken(accept, '*/*')) {
+    setAcceptHeader(req, 'application/json, text/event-stream');
+    return;
+  }
+
+  const hasJson = hasToken(accept, 'application/json');
+  const hasSse = hasToken(accept, 'text/event-stream');
+
+  if (!hasJson || !hasSse) {
+    setAcceptHeader(req, 'application/json, text/event-stream');
+  }
+}
+
+export function acceptsEventStream(req: Request): boolean {
+  const accept = getAcceptHeader(req);
+  if (!accept) return false;
+  return hasToken(accept, 'text/event-stream');
 }
 
 async function handlePost(

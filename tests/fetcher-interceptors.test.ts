@@ -6,7 +6,7 @@ import {
   recordFetchError,
   recordFetchResponse,
   startFetchTelemetry,
-} from '../dist/services/fetcher/interceptors.js';
+} from '../dist/services/fetcher.js';
 
 function createCapture() {
   const channel = diagnosticsChannel.channel('superfetch.fetch');

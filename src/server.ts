@@ -3,7 +3,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 
 import { config } from './config/index.js';
 
-import { destroyAgents } from './services/fetcher/agents.js';
+import { destroyAgents } from './services/fetcher.js';
 import { logError, logInfo } from './services/logger.js';
 
 import { registerTools } from './tools/index.js';
