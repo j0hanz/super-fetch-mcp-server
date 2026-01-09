@@ -1,6 +1,6 @@
 import type { LookupAddress } from 'node:dns';
 
-import { createErrorWithCode } from '../../utils/error-utils.js';
+import { createErrorWithCode } from '../../utils/error-details.js';
 import { isBlockedIp } from '../../utils/url-validator.js';
 
 function normalizeLookupResults(

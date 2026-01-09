@@ -7,13 +7,6 @@ import {
   isExtractionSufficient,
 } from '../dist/tools/utils/content-shaping.js';
 
-type ExtractionCase = {
-  name: string;
-  article: { content: string; textContent: string } | null;
-  original: string;
-  expected: boolean;
-};
-
 const retainedText = {
   longText: 'a'.repeat(200),
   articleText: 'a'.repeat(100),
@@ -24,59 +17,12 @@ const lowRetentionText = {
   articleText: 'a'.repeat(50),
 };
 
-const extractionCases: ExtractionCase[] = [
-  {
-    name: 'returns false for null article',
-    article: null,
-    original: '<p>some content</p>',
-    expected: false,
-  },
-  {
-    name: 'returns true for short original HTML (below threshold)',
-    article: { content: '<p>x</p>', textContent: 'x' },
-    original: '<p>short</p>',
-    expected: true,
-  },
-  {
-    name: 'returns true when article retains sufficient content (>30%)',
-    article: {
-      content: `<p>${retainedText.articleText}</p>`,
-      textContent: retainedText.articleText,
-    },
-    original: `<div><p>${retainedText.longText}</p></div>`,
-    expected: true,
-  },
-  {
-    name: 'returns false when article retains too little content (<30%)',
-    article: {
-      content: `<p>${lowRetentionText.articleText}</p>`,
-      textContent: lowRetentionText.articleText,
-    },
-    original: `<div><p>${lowRetentionText.longText}</p></div>`,
-    expected: false,
-  },
-  {
-    name: 'handles article with empty textContent',
-    article: { content: '<p></p>', textContent: '' },
-    original: '<div><p>test content here</p></div>'.repeat(10),
-    expected: false,
-  },
-];
-
 function testExtractionSourceEnabledWithArticle() {
   const result = determineContentExtractionSource({
     content: '<p>content</p>',
     textContent: 'content',
   });
   assert.equal(result, true);
-}
-
-function registerDetermineContentExtractionSourceTests() {
-  describe('determineContentExtractionSource', () => {
-    it('returns true when extraction is enabled and article exists', () => {
-      testExtractionSourceEnabledWithArticle();
-    });
-  });
 }
 
 function testBuildsMetadataWhenEnabled() {
@@ -103,36 +49,62 @@ function testReturnsUndefinedWhenMetadataDisabled() {
   assert.equal(metadata, undefined);
 }
 
-function registerCreateContentMetadataBlockTests() {
-  describe('createContentMetadataBlock', () => {
-    it('builds metadata when enabled', () => {
-      testBuildsMetadataWhenEnabled();
-    });
-    it('returns undefined when metadata is disabled', () => {
-      testReturnsUndefinedWhenMetadataDisabled();
-    });
+describe('determineContentExtractionSource', () => {
+  it('returns true when extraction is enabled and article exists', () => {
+    testExtractionSourceEnabledWithArticle();
   });
-}
+});
 
-function runExtractionCase(testCase: ExtractionCase) {
-  const result = isExtractionSufficient(testCase.article, testCase.original);
-  assert.equal(result, testCase.expected);
-}
-
-function registerExtractionCases() {
-  extractionCases.forEach((testCase) => {
-    it(testCase.name, () => {
-      runExtractionCase(testCase);
-    });
+describe('createContentMetadataBlock', () => {
+  it('builds metadata when enabled', () => {
+    testBuildsMetadataWhenEnabled();
   });
-}
-
-function registerIsExtractionSufficientTests() {
-  describe('isExtractionSufficient', () => {
-    registerExtractionCases();
+  it('returns undefined when metadata is disabled', () => {
+    testReturnsUndefinedWhenMetadataDisabled();
   });
-}
+});
 
-registerDetermineContentExtractionSourceTests();
-registerCreateContentMetadataBlockTests();
-registerIsExtractionSufficientTests();
+describe('isExtractionSufficient', () => {
+  it('returns false for null article', () => {
+    const result = isExtractionSufficient(null, '<p>some content</p>');
+    assert.equal(result, false);
+  });
+
+  it('returns true for short original HTML (below threshold)', () => {
+    const result = isExtractionSufficient(
+      { content: '<p>x</p>', textContent: 'x' },
+      '<p>short</p>'
+    );
+    assert.equal(result, true);
+  });
+
+  it('returns true when article retains sufficient content (>30%)', () => {
+    const result = isExtractionSufficient(
+      {
+        content: `<p>${retainedText.articleText}</p>`,
+        textContent: retainedText.articleText,
+      },
+      `<div><p>${retainedText.longText}</p></div>`
+    );
+    assert.equal(result, true);
+  });
+
+  it('returns false when article retains too little content (<30%)', () => {
+    const result = isExtractionSufficient(
+      {
+        content: `<p>${lowRetentionText.articleText}</p>`,
+        textContent: lowRetentionText.articleText,
+      },
+      `<div><p>${lowRetentionText.longText}</p></div>`
+    );
+    assert.equal(result, false);
+  });
+
+  it('handles article with empty textContent', () => {
+    const result = isExtractionSufficient(
+      { content: '<p></p>', textContent: '' },
+      '<div><p>test content here</p></div>'.repeat(10)
+    );
+    assert.equal(result, false);
+  });
+});

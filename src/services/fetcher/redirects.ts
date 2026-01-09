@@ -1,6 +1,6 @@
 import { FetchError } from '../../errors/app-error.js';
 
-import { createErrorWithCode } from '../../utils/error-utils.js';
+import { createErrorWithCode } from '../../utils/error-details.js';
 import { isRecord } from '../../utils/guards.js';
 import { validateAndNormalizeUrl } from '../../utils/url-validator.js';
 

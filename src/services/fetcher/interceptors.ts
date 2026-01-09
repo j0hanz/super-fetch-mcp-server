@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import diagnosticsChannel from 'node:diagnostics_channel';
 import { performance } from 'node:perf_hooks';
 
-import { isSystemError } from '../../utils/error-utils.js';
+import { isSystemError } from '../../utils/error-details.js';
 
 import { logDebug, logError, logWarn } from '../logger.js';
 
@@ -31,8 +31,6 @@ type FetchChannelEvent =
       status?: number;
       duration: number;
     };
-
-type FetchErrorChannelEvent = Extract<FetchChannelEvent, { type: 'error' }>;
 
 const fetchChannel = diagnosticsChannel.channel('superfetch.fetch');
 
@@ -65,7 +63,18 @@ interface FetchTelemetryContext {
   method: string;
 }
 
-function publishAndLogFetchStart(context: FetchTelemetryContext): void {
+export function startFetchTelemetry(
+  url: string,
+  method: string
+): FetchTelemetryContext {
+  const safeUrl = redactUrl(url);
+  const context: FetchTelemetryContext = {
+    requestId: randomUUID(),
+    startTime: performance.now(),
+    url: safeUrl,
+    method: method.toUpperCase(),
+  };
+
   publishFetchEvent({
     v: 1,
     type: 'start',
@@ -79,21 +88,6 @@ function publishAndLogFetchStart(context: FetchTelemetryContext): void {
     method: context.method,
     url: context.url,
   });
-}
-
-export function startFetchTelemetry(
-  url: string,
-  method: string
-): FetchTelemetryContext {
-  const safeUrl = redactUrl(url);
-  const context: FetchTelemetryContext = {
-    requestId: randomUUID(),
-    startTime: performance.now(),
-    url: safeUrl,
-    method: method.toUpperCase(),
-  };
-
-  publishAndLogFetchStart(context);
 
   return context;
 }
@@ -104,109 +98,36 @@ export function recordFetchResponse(
   contentSize?: number
 ): void {
   const duration = performance.now() - context.startTime;
-  publishFetchEnd(context, response.status, duration);
+  const durationLabel = `${Math.round(duration)}ms`;
+  publishFetchEvent({
+    v: 1,
+    type: 'end',
+    requestId: context.requestId,
+    status: response.status,
+    duration,
+  });
+
+  const contentType = response.headers.get('content-type');
+  const contentLength =
+    response.headers.get('content-length') ??
+    (contentSize === undefined ? undefined : String(contentSize));
 
   logDebug('HTTP Response', {
     requestId: context.requestId,
     status: response.status,
     url: context.url,
-    ...buildResponseMeta(response, contentSize, duration),
+    duration: durationLabel,
+    ...(contentType ? { contentType } : {}),
+    ...(contentLength ? { size: contentLength } : {}),
   });
 
-  logSlowRequestIfNeeded(context, duration);
-}
-
-function publishFetchEnd(
-  context: FetchTelemetryContext,
-  status: number,
-  duration: number
-): void {
-  publishFetchEvent({
-    v: 1,
-    type: 'end',
-    requestId: context.requestId,
-    status,
-    duration,
-  });
-}
-
-function formatDuration(duration: number): string {
-  return `${Math.round(duration)}ms`;
-}
-
-function buildResponseMeta(
-  response: Response,
-  contentSize: number | undefined,
-  duration: number
-): { contentType?: string; duration: string; size?: string } {
-  const meta: { contentType?: string; duration: string; size?: string } = {
-    duration: formatDuration(duration),
-  };
-  const contentType = response.headers.get('content-type');
-  if (contentType) {
-    meta.contentType = contentType;
+  if (duration > 5000) {
+    logWarn('Slow HTTP request detected', {
+      requestId: context.requestId,
+      url: context.url,
+      duration: durationLabel,
+    });
   }
-  const contentLength =
-    response.headers.get('content-length') ??
-    (contentSize === undefined ? undefined : String(contentSize));
-  if (contentLength) {
-    meta.size = contentLength;
-  }
-  return meta;
-}
-
-function logSlowRequestIfNeeded(
-  context: FetchTelemetryContext,
-  duration: number
-): void {
-  if (duration <= 5000) return;
-  logWarn('Slow HTTP request detected', {
-    requestId: context.requestId,
-    url: context.url,
-    duration: formatDuration(duration),
-  });
-}
-
-function normalizeError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
-}
-
-function buildFetchErrorEvent(
-  context: FetchTelemetryContext,
-  err: Error,
-  duration: number,
-  status?: number
-): FetchChannelEvent {
-  const event: FetchErrorChannelEvent = {
-    v: 1,
-    type: 'error',
-    requestId: context.requestId,
-    url: context.url,
-    error: err.message,
-    duration,
-  };
-
-  addOptionalErrorFields(event, err, status);
-
-  return event;
-}
-
-function addOptionalErrorFields(
-  event: FetchErrorChannelEvent,
-  err: Error,
-  status?: number
-): void {
-  const code = isSystemError(err) ? err.code : undefined;
-  if (code !== undefined) {
-    event.code = code;
-  }
-  if (status !== undefined) {
-    event.status = status;
-  }
-}
-
-function selectErrorLogger(status?: number): typeof logWarn {
-  return status === 429 ? logWarn : logError;
 }
 
 export function recordFetchError(
@@ -215,13 +136,28 @@ export function recordFetchError(
   status?: number
 ): void {
   const duration = performance.now() - context.startTime;
-  const err = normalizeError(error);
-  const event = buildFetchErrorEvent(context, err, duration, status);
+  const err = error instanceof Error ? error : new Error(String(error));
+
+  const event: FetchChannelEvent = {
+    v: 1,
+    type: 'error',
+    requestId: context.requestId,
+    url: context.url,
+    error: err.message,
+    duration,
+  };
+
+  const code = isSystemError(err) ? err.code : undefined;
+  if (code !== undefined) {
+    event.code = code;
+  }
+  if (status !== undefined) {
+    event.status = status;
+  }
 
   publishFetchEvent(event);
 
-  const log = selectErrorLogger(status);
-  const code = isSystemError(err) ? err.code : undefined;
+  const log = status === 429 ? logWarn : logError;
   log('HTTP Request Error', {
     requestId: context.requestId,
     url: context.url,

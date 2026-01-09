@@ -42,7 +42,12 @@ function captureMiddleware() {
   const rateLimit = () => undefined;
   const cors = () => undefined;
 
-  attachBaseMiddleware(app as never, jsonParser, rateLimit, cors);
+  attachBaseMiddleware({
+    app: app as never,
+    jsonParser,
+    rateLimitMiddleware: rateLimit,
+    corsMiddleware: cors,
+  });
 
   return { uses, routes };
 }

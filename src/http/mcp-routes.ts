@@ -9,10 +9,8 @@ import { logError, logInfo } from '../services/logger.js';
 import { acceptsEventStream, ensurePostAcceptHeader } from './accept-policy.js';
 import { wrapAsync } from './async-handler.js';
 import { sendJsonRpcError } from './jsonrpc-http.js';
-import {
-  type McpSessionOptions,
-  resolveTransportForPost,
-} from './mcp-session.js';
+import type { McpSessionOptions } from './mcp-session-types.js';
+import { resolveTransportForPost } from './mcp-session.js';
 import { isJsonRpcBatchRequest, isMcpRequestBody } from './mcp-validation.js';
 import { ensureMcpProtocolVersionHeader } from './protocol-policy.js';
 import { getSessionId } from './sessions.js';
@@ -130,13 +128,12 @@ async function handlePost(
 
   logPostRequest(payload, sessionId, options);
 
-  const transport = await resolveTransportForPost(
-    req,
+  const transport = await resolveTransportForPost({
     res,
-    payload,
+    body: payload,
     sessionId,
-    options
-  );
+    options,
+  });
   if (!transport) return;
 
   await handleTransportRequest(transport, req, res, payload);

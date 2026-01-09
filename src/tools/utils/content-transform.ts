@@ -8,8 +8,6 @@ import type {
 import { extractContent } from '../../services/extractor.js';
 import { logDebug } from '../../services/logger.js';
 
-import { isRawTextContentUrl } from '../../utils/url-transformer.js';
-
 import { htmlToMarkdown } from '../../transformers/markdown.transformer.js';
 
 import {
@@ -17,12 +15,7 @@ import {
   determineContentExtractionSource,
   isExtractionSufficient,
 } from './content-shaping.js';
-import {
-  addSourceToMarkdown,
-  extractTitleFromRawMarkdown,
-  hasFrontmatter,
-} from './frontmatter.js';
-import { looksLikeMarkdown } from './markdown-heuristics.js';
+import { tryTransformRawContent } from './raw-markdown.js';
 
 interface ContentSource {
   readonly sourceHtml: string;
@@ -30,12 +23,17 @@ interface ContentSource {
   readonly metadata: ReturnType<typeof createContentMetadataBlock>;
 }
 
-function buildArticleContentSource(
-  url: string,
-  article: ExtractedArticle,
-  extractedMeta: ExtractedMetadata,
-  includeMetadata: boolean
-): ContentSource {
+function buildArticleContentSource({
+  url,
+  article,
+  extractedMeta,
+  includeMetadata,
+}: {
+  url: string;
+  article: ExtractedArticle;
+  extractedMeta: ExtractedMetadata;
+  includeMetadata: boolean;
+}): ContentSource {
   const metadata = createContentMetadataBlock(
     url,
     article,
@@ -51,13 +49,19 @@ function buildArticleContentSource(
   };
 }
 
-function buildFullHtmlContentSource(
-  html: string,
-  url: string,
-  article: ExtractedArticle | null,
-  extractedMeta: ExtractedMetadata,
-  includeMetadata: boolean
-): ContentSource {
+function buildFullHtmlContentSource({
+  html,
+  url,
+  article,
+  extractedMeta,
+  includeMetadata,
+}: {
+  html: string;
+  url: string;
+  article: ExtractedArticle | null;
+  extractedMeta: ExtractedMetadata;
+  includeMetadata: boolean;
+}): ContentSource {
   const metadata = createContentMetadataBlock(
     url,
     article,
@@ -73,135 +77,86 @@ function buildFullHtmlContentSource(
   };
 }
 
-function logQualityGateFallback(
-  url: string,
-  article: { textContent: string }
-): void {
+function logQualityGateFallback({
+  url,
+  articleLength,
+}: {
+  url: string;
+  articleLength: number;
+}): void {
   logDebug(
     'Quality gate: Readability extraction below threshold, using full HTML',
     {
       url: url.substring(0, 80),
-      articleLength: article.textContent.length,
+      articleLength,
     }
   );
 }
 
-function tryBuildExtractedArticleContentSource(
-  html: string,
-  url: string,
-  article: ExtractedArticle | null,
-  extractedMeta: ExtractedMetadata,
-  options: TransformOptions
-): ContentSource | null {
+function tryBuildExtractedArticleContentSource({
+  html,
+  url,
+  article,
+  extractedMeta,
+  includeMetadata,
+}: {
+  html: string;
+  url: string;
+  article: ExtractedArticle | null;
+  extractedMeta: ExtractedMetadata;
+  includeMetadata: boolean;
+}): ContentSource | null {
   if (!article) return null;
 
   const shouldExtractFromArticle = determineContentExtractionSource(article);
   if (shouldExtractFromArticle && isExtractionSufficient(article, html)) {
-    return buildArticleContentSource(
+    return buildArticleContentSource({
       url,
       article,
       extractedMeta,
-      options.includeMetadata
-    );
+      includeMetadata,
+    });
   }
 
   if (shouldExtractFromArticle) {
-    logQualityGateFallback(url, article);
+    logQualityGateFallback({
+      url,
+      articleLength: article.textContent.length,
+    });
   }
 
   return null;
 }
 
-function resolveContentSource(
-  html: string,
-  url: string,
-  options: TransformOptions
-): ContentSource {
+function resolveContentSource({
+  html,
+  url,
+  includeMetadata,
+}: {
+  html: string;
+  url: string;
+  includeMetadata: boolean;
+}): ContentSource {
   const { article, metadata: extractedMeta } = extractContent(html, url, {
     extractArticle: true,
   });
 
-  const extracted = tryBuildExtractedArticleContentSource(
+  const extracted = tryBuildExtractedArticleContentSource({
     html,
     url,
     article,
     extractedMeta,
-    options
-  );
+    includeMetadata,
+  });
   if (extracted) return extracted;
 
-  return buildFullHtmlContentSource(
+  return buildFullHtmlContentSource({
     html,
     url,
     article,
     extractedMeta,
-    options.includeMetadata
-  );
-}
-
-function buildMarkdownPayload(context: ContentSource): string {
-  return htmlToMarkdown(context.sourceHtml, context.metadata);
-}
-
-function buildRawMarkdownPayload(
-  rawContent: string,
-  url: string,
-  includeMetadata: boolean
-): { content: string; title: string | undefined } {
-  const title = extractTitleFromRawMarkdown(rawContent);
-  const content = includeMetadata
-    ? addSourceToMarkdown(rawContent, url)
-    : rawContent;
-
-  return { content, title };
-}
-
-const HTML_DOCUMENT_PATTERN = /^(<!doctype|<html)/i;
-
-function looksLikeHtmlDocument(trimmed: string): boolean {
-  return HTML_DOCUMENT_PATTERN.test(trimmed);
-}
-
-function countCommonHtmlTags(content: string): number {
-  const matches =
-    content.match(/<(html|head|body|div|span|script|style|meta|link)\b/gi) ??
-    [];
-  return matches.length;
-}
-
-function isRawTextContent(content: string): boolean {
-  const trimmed = content.trim();
-  const isHtmlDocument = looksLikeHtmlDocument(trimmed);
-  const hasMarkdownFrontmatter = hasFrontmatter(trimmed);
-  const hasTooManyHtmlTags = countCommonHtmlTags(content) > 2;
-  const isMarkdown = looksLikeMarkdown(content);
-
-  return (
-    !isHtmlDocument &&
-    (hasMarkdownFrontmatter || (!hasTooManyHtmlTags && isMarkdown))
-  );
-}
-
-function tryTransformRawContent(
-  html: string,
-  url: string,
-  options: TransformOptions
-): MarkdownTransformResult | null {
-  if (!isRawTextContentUrl(url) && !isRawTextContent(html)) {
-    return null;
-  }
-
-  logDebug('Preserving raw markdown content', { url: url.substring(0, 80) });
-  const { content, title } = buildRawMarkdownPayload(
-    html,
-    url,
-    options.includeMetadata
-  );
-  return {
-    markdown: content,
-    title,
-    truncated: false,
-  };
+    includeMetadata,
+  });
 }
 
 export function transformHtmlToMarkdown(
@@ -209,11 +164,19 @@ export function transformHtmlToMarkdown(
   url: string,
   options: TransformOptions
 ): MarkdownTransformResult {
-  const raw = tryTransformRawContent(html, url, options);
+  const raw = tryTransformRawContent({
+    html,
+    url,
+    includeMetadata: options.includeMetadata,
+  });
   if (raw) return raw;
 
-  const context = resolveContentSource(html, url, options);
-  const content = buildMarkdownPayload(context);
+  const context = resolveContentSource({
+    html,
+    url,
+    includeMetadata: options.includeMetadata,
+  });
+  const content = htmlToMarkdown(context.sourceHtml, context.metadata);
 
   return {
     markdown: content,

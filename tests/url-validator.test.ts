@@ -7,89 +7,75 @@ import {
   validateAndNormalizeUrl,
 } from '../dist/utils/url-validator.js';
 
-type ValidCase = {
-  name: string;
-  url: string;
-  expected: string;
-};
-
-type InvalidCase = {
-  name: string;
-  url: string;
-  message: string;
-};
-
-const VALID_CASES: readonly ValidCase[] = [
-  {
-    name: 'returns a normalized URL for valid input',
-    url: 'https://example.com/path',
-    expected: 'https://example.com/path',
-  },
-  {
-    name: 'trims surrounding whitespace',
-    url: '  https://example.com/path  ',
-    expected: 'https://example.com/path',
-  },
-];
-
-const INVALID_CASES: readonly InvalidCase[] = [
-  { name: 'rejects empty input', url: '', message: 'URL is required' },
-  {
-    name: 'rejects whitespace-only input',
-    url: '   ',
-    message: 'URL cannot be empty',
-  },
-  {
-    name: 'rejects overly long URLs',
-    url: `https://example.com/${'a'.repeat(2050)}`,
-    message: 'URL exceeds maximum length of 2048 characters',
-  },
-  {
-    name: 'rejects invalid URL formats',
-    url: 'http://:invalid',
-    message: 'Invalid URL format',
-  },
-  {
-    name: 'rejects unsupported protocols',
-    url: 'ftp://example.com',
-    message: 'Invalid protocol: ftp:. Only http: and https: are allowed',
-  },
-  {
-    name: 'rejects embedded credentials',
-    url: 'https://user:pass@example.com',
-    message: 'URLs with embedded credentials are not allowed',
-  },
-  {
-    name: 'rejects blocked hosts',
-    url: 'http://localhost',
-    message: 'Blocked host: localhost. Internal hosts are not allowed',
-  },
-  {
-    name: 'rejects blocked IP ranges',
-    url: 'http://10.0.0.1',
-    message: 'Blocked IP range: 10.0.0.1. Private IPs are not allowed',
-  },
-  {
-    name: 'rejects internal hostname suffixes',
-    url: 'https://example.local',
-    message:
-      'Blocked hostname pattern: example.local. Internal domain suffixes are not allowed',
-  },
-];
-
 describe('validateAndNormalizeUrl', () => {
-  VALID_CASES.forEach((testCase) => {
-    it(testCase.name, () => {
-      const result = validateAndNormalizeUrl(testCase.url);
-      assert.equal(result, testCase.expected);
+  it('returns a normalized URL for valid input', () => {
+    const result = validateAndNormalizeUrl('https://example.com/path');
+    assert.equal(result, 'https://example.com/path');
+  });
+
+  it('trims surrounding whitespace', () => {
+    const result = validateAndNormalizeUrl('  https://example.com/path  ');
+    assert.equal(result, 'https://example.com/path');
+  });
+
+  it('rejects empty input', () => {
+    assert.throws(() => validateAndNormalizeUrl(''), {
+      message: 'URL is required',
     });
   });
 
-  INVALID_CASES.forEach((testCase) => {
-    it(testCase.name, () => {
-      assert.throws(() => validateAndNormalizeUrl(testCase.url), {
-        message: testCase.message,
-      });
+  it('rejects whitespace-only input', () => {
+    assert.throws(() => validateAndNormalizeUrl('   '), {
+      message: 'URL cannot be empty',
+    });
+  });
+
+  it('rejects overly long URLs', () => {
+    assert.throws(
+      () => validateAndNormalizeUrl(`https://example.com/${'a'.repeat(2050)}`),
+      {
+        message: 'URL exceeds maximum length of 2048 characters',
+      }
+    );
+  });
+
+  it('rejects invalid URL formats', () => {
+    assert.throws(() => validateAndNormalizeUrl('http://:invalid'), {
+      message: 'Invalid URL format',
+    });
+  });
+
+  it('rejects unsupported protocols', () => {
+    assert.throws(() => validateAndNormalizeUrl('ftp://example.com'), {
+      message: 'Invalid protocol: ftp:. Only http: and https: are allowed',
+    });
+  });
+
+  it('rejects embedded credentials', () => {
+    assert.throws(
+      () => validateAndNormalizeUrl('https://user:pass@example.com'),
+      {
+        message: 'URLs with embedded credentials are not allowed',
+      }
+    );
+  });
+
+  it('rejects blocked hosts', () => {
+    assert.throws(() => validateAndNormalizeUrl('http://localhost'), {
+      message: 'Blocked host: localhost. Internal hosts are not allowed',
+    });
+  });
+
+  it('rejects blocked IP ranges', () => {
+    assert.throws(() => validateAndNormalizeUrl('http://10.0.0.1'), {
+      message: 'Blocked IP range: 10.0.0.1. Private IPs are not allowed',
+    });
+  });
+
+  it('rejects internal hostname suffixes', () => {
+    assert.throws(() => validateAndNormalizeUrl('https://example.local'), {
+      message:
+        'Blocked hostname pattern: example.local. Internal domain suffixes are not allowed',
     });
   });
 });

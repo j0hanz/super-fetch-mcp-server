@@ -3,10 +3,9 @@ import { setInterval as setIntervalPromise } from 'node:timers/promises';
 import { config } from '../config/index.js';
 import type { CacheEntry } from '../config/types/content.js';
 
-import { getErrorMessage } from '../utils/error-utils.js';
+import { getErrorMessage } from '../utils/error-details.js';
 
-import type { CacheKeyParts } from './cache-keys.js';
-import { parseCacheKey } from './cache-keys.js';
+import { notifyCacheUpdate } from './cache-events.js';
 import { logWarn } from './logger.js';
 
 interface CacheItem {
@@ -45,39 +44,12 @@ function enforceCacheLimits(now: number): void {
   trimCacheToMaxKeys();
 }
 
-interface CacheUpdateEvent extends CacheKeyParts {
-  cacheKey: string;
-}
-
 interface CacheEntryMetadata {
   url: string;
   title?: string;
 }
 
-type CacheUpdateListener = (event: CacheUpdateEvent) => void;
-
-const updateListeners = new Set<CacheUpdateListener>();
-
-export function onCacheUpdate(listener: CacheUpdateListener): () => void {
-  updateListeners.add(listener);
-  return () => {
-    updateListeners.delete(listener);
-  };
-}
-
-function emitCacheUpdate(cacheKey: string): void {
-  const event = resolveCacheUpdateEvent(cacheKey);
-  if (!event) return;
-  for (const listener of updateListeners) {
-    listener(event);
-  }
-}
-
-function resolveCacheUpdateEvent(cacheKey: string): CacheUpdateEvent | null {
-  if (updateListeners.size === 0) return null;
-  const parts = parseCacheKey(cacheKey);
-  return parts ? { cacheKey, ...parts } : null;
-}
+export { onCacheUpdate } from './cache-events.js';
 
 export function get(cacheKey: string | null): CacheEntry | undefined {
   if (!isCacheReadable(cacheKey)) return undefined;
@@ -141,7 +113,12 @@ export function set(
     startCleanupLoop();
     const now = Date.now();
     const expiresAtMs = now + config.cache.ttl * 1000;
-    const entry = buildCacheEntry(content, metadata, now, expiresAtMs);
+    const entry = buildCacheEntry({
+      content,
+      metadata,
+      fetchedAtMs: now,
+      expiresAtMs,
+    });
     persistCacheEntry(cacheKey, entry, expiresAtMs);
   });
 }
@@ -154,12 +131,17 @@ export function isEnabled(): boolean {
   return config.cache.enabled;
 }
 
-function buildCacheEntry(
-  content: string,
-  metadata: CacheEntryMetadata,
-  fetchedAtMs: number,
-  expiresAtMs: number
-): CacheEntry {
+function buildCacheEntry({
+  content,
+  metadata,
+  fetchedAtMs,
+  expiresAtMs,
+}: {
+  content: string;
+  metadata: CacheEntryMetadata;
+  fetchedAtMs: number;
+  expiresAtMs: number;
+}): CacheEntry {
   return {
     url: metadata.url,
     content,
@@ -176,7 +158,7 @@ function persistCacheEntry(
 ): void {
   contentCache.set(cacheKey, { entry, expiresAt: expiresAtMs });
   trimCacheToMaxKeys();
-  emitCacheUpdate(cacheKey);
+  notifyCacheUpdate(cacheKey);
 }
 
 function trimCacheToMaxKeys(): void {

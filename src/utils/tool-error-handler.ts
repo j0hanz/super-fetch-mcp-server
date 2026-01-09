@@ -2,7 +2,7 @@ import type { ToolErrorResponse } from '../config/types/tools.js';
 
 import { FetchError } from '../errors/app-error.js';
 
-import { isSystemError } from './error-utils.js';
+import { isSystemError } from './error-details.js';
 
 export function createToolErrorResponse(
   message: string,

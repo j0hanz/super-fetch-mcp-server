@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { FetchError } from '../dist/errors/app-error.js';
-import { createErrorWithCode } from '../dist/utils/error-utils.js';
+import { createErrorWithCode } from '../dist/utils/error-details.js';
 import {
   createToolErrorResponse,
   handleToolError,

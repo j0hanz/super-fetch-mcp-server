@@ -2,7 +2,7 @@ import { BlockList, isIP } from 'node:net';
 
 import { config } from '../config/index.js';
 
-import { createErrorWithCode } from './error-utils.js';
+import { createErrorWithCode } from './error-details.js';
 import { buildIpv4, buildIpv6 } from './ip-address.js';
 
 const BLOCK_LIST = new BlockList();

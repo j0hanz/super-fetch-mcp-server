@@ -26,6 +26,22 @@ function stripOptionalQuotes(value: string): string {
   return trimmed;
 }
 
+function parseFrontmatterEntry(
+  line: string
+): { key: string; value: string } | null {
+  const trimmed = line.trim();
+  if (!trimmed) return null;
+  const separatorIndex = trimmed.indexOf(':');
+  if (separatorIndex <= 0) return null;
+  const key = trimmed.slice(0, separatorIndex).trim().toLowerCase();
+  const value = trimmed.slice(separatorIndex + 1);
+  return { key, value };
+}
+
+function isTitleKey(key: string): boolean {
+  return key === 'title' || key === 'name';
+}
+
 export function extractTitleFromRawMarkdown(
   content: string
 ): string | undefined {
@@ -33,21 +49,13 @@ export function extractTitleFromRawMarkdown(
   if (!frontmatter) return undefined;
 
   const { lines, endIndex } = frontmatter;
-  for (const line of lines.slice(1, endIndex)) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    const separatorIndex = trimmed.indexOf(':');
-    if (separatorIndex <= 0) continue;
-
-    const key = trimmed.slice(0, separatorIndex).trim().toLowerCase();
-    if (key !== 'title' && key !== 'name') continue;
-
-    const rawValue = trimmed.slice(separatorIndex + 1);
-    const value = stripOptionalQuotes(rawValue);
-    return value || undefined;
-  }
-
-  return undefined;
+  const entry = lines
+    .slice(1, endIndex)
+    .map((line) => parseFrontmatterEntry(line))
+    .find((parsed) => parsed !== null && isTitleKey(parsed.key));
+  if (!entry) return undefined;
+  const value = stripOptionalQuotes(entry.value);
+  return value || undefined;
 }
 
 export function addSourceToMarkdown(content: string, url: string): string {

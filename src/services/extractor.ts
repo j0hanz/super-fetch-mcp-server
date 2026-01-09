@@ -7,7 +7,7 @@ import type {
   ExtractionResult,
 } from '../config/types/content.js';
 
-import { getErrorMessage } from '../utils/error-utils.js';
+import { getErrorMessage } from '../utils/error-details.js';
 import { isRecord } from '../utils/guards.js';
 import { truncateHtml } from '../utils/html-truncator.js';
 

@@ -22,64 +22,68 @@ describe('detectLanguageFromCode', () => {
     assert.equal(detectLanguageFromCode('this is not code'), undefined);
   });
 
-  const languageCases = [
-    {
-      name: 'TypeScript',
-      code: 'interface User { id: string; }',
-      expected: 'typescript',
-    },
-    {
-      name: 'Rust',
-      code: 'fn main() { let mut x = 1; }',
-      expected: 'rust',
-    },
-    {
-      name: 'Bash',
-      code: '#!/usr/bin/env bash\nnpm run build',
-      expected: 'bash',
-    },
-    {
-      name: 'CSS',
-      code: '.container { display: flex; }',
-      expected: 'css',
-    },
-    {
-      name: 'HTML',
-      code: '<!doctype html><html><body></body></html>',
-      expected: 'html',
-    },
-    {
-      name: 'JSON',
-      code: '{"name":"superfetch"}',
-      expected: 'json',
-    },
-    {
-      name: 'YAML',
-      code: 'name: superfetch\nversion: 1',
-      expected: 'yaml',
-    },
-    {
-      name: 'SQL',
-      code: 'SELECT 1;',
-      expected: 'sql',
-    },
-    {
-      name: 'Go',
-      code: 'package main\nfunc main() {}',
-      expected: 'go',
-    },
-    {
-      name: 'JSX',
-      code: 'export const App = () => <div className=\"x\" />;',
-      expected: 'jsx',
-    },
-  ];
+  it('detects TypeScript snippets', () => {
+    assert.equal(
+      detectLanguageFromCode('interface User { id: string; }'),
+      'typescript'
+    );
+  });
 
-  for (const testCase of languageCases) {
-    it(`detects ${testCase.name} snippets`, () => {
-      assert.equal(detectLanguageFromCode(testCase.code), testCase.expected);
-    });
-  }
+  it('detects Rust snippets', () => {
+    assert.equal(
+      detectLanguageFromCode('fn main() { let mut x = 1; }'),
+      'rust'
+    );
+  });
+
+  it('detects Bash snippets', () => {
+    assert.equal(
+      detectLanguageFromCode('#!/usr/bin/env bash\nnpm run build'),
+      'bash'
+    );
+  });
+
+  it('detects CSS snippets', () => {
+    assert.equal(
+      detectLanguageFromCode('.container { display: flex; }'),
+      'css'
+    );
+  });
+
+  it('detects HTML snippets', () => {
+    assert.equal(
+      detectLanguageFromCode('<!doctype html><html><body></body></html>'),
+      'html'
+    );
+  });
+
+  it('detects JSON snippets', () => {
+    assert.equal(detectLanguageFromCode('{"name":"superfetch"}'), 'json');
+  });
+
+  it('detects YAML snippets', () => {
+    assert.equal(
+      detectLanguageFromCode('name: superfetch\nversion: 1'),
+      'yaml'
+    );
+  });
+
+  it('detects SQL snippets', () => {
+    assert.equal(detectLanguageFromCode('SELECT 1;'), 'sql');
+  });
+
+  it('detects Go snippets', () => {
+    assert.equal(detectLanguageFromCode('package main\nfunc main() {}'), 'go');
+  });
+
+  it('detects JSX snippets', () => {
+    assert.equal(
+      detectLanguageFromCode(
+        'export const App = () => <div className=\"x\" />;'
+      ),
+      'jsx'
+    );
+  });
 
   it('extracts language from class names', () => {
     assert.equal(

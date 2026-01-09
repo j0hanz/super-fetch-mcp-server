@@ -1,5 +1,6 @@
 import type { Response } from 'express';
 
+import { sendJsonRpcError } from './jsonrpc-http.js';
 import type { SessionStore } from './sessions.js';
 
 export interface SlotTracker {
@@ -43,12 +44,17 @@ export function createSlotTracker(): SlotTracker {
   };
 }
 
-export function ensureSessionCapacity(
-  store: SessionStore,
-  maxSessions: number,
-  res: Response,
-  evictOldest: (store: SessionStore) => boolean
-): boolean {
+export function ensureSessionCapacity({
+  store,
+  maxSessions,
+  res,
+  evictOldest,
+}: {
+  store: SessionStore;
+  maxSessions: number;
+  res: Response;
+  evictOldest: (store: SessionStore) => boolean;
+}): boolean {
   if (!isServerAtCapacity(store, maxSessions)) {
     return true;
   }
@@ -75,22 +81,6 @@ function tryEvictSlot(
     currentSize >= maxSessions &&
     currentSize - 1 + inFlightSessions < maxSessions;
   return canFreeSlot && evictOldest(store);
-}
-
-function sendJsonRpcError(
-  res: Response,
-  code: number,
-  message: string,
-  status = 503
-): void {
-  res.status(status).json({
-    jsonrpc: '2.0',
-    error: {
-      code,
-      message,
-    },
-    id: null,
-  });
 }
 
 export function respondServerBusy(res: Response): void {

@@ -23,13 +23,11 @@ function createCapture() {
 }
 
 describe('fetch telemetry interceptors', () => {
-  let cleanup = null;
+  let cleanup = () => {};
 
   afterEach(() => {
-    if (cleanup) {
-      cleanup();
-      cleanup = null;
-    }
+    cleanup();
+    cleanup = () => {};
   });
 
   it('publishes redacted start events', () => {

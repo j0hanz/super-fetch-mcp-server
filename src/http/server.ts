@@ -122,7 +122,12 @@ async function createAppWithMiddleware(): Promise<{
     corsMiddleware,
   } = buildMiddleware();
 
-  attachBaseMiddleware(app, jsonParser, rateLimitMiddleware, corsMiddleware);
+  attachBaseMiddleware({
+    app,
+    jsonParser,
+    rateLimitMiddleware,
+    corsMiddleware,
+  });
   attachAuthMetadata(app);
   assertHttpConfiguration();
 

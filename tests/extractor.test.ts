@@ -4,7 +4,6 @@ import { describe, it } from 'node:test';
 import { extractContent } from '../dist/services/extractor.js';
 
 type MetadataCase = {
-  name: string;
   html: string;
   expected: {
     title?: string;
@@ -12,65 +11,6 @@ type MetadataCase = {
     author?: string;
   };
 };
-
-const METADATA_CASES: readonly MetadataCase[] = [
-  {
-    name: 'extracts metadata from title and meta tags',
-    html: `
-      <html>
-        <head>
-          <title>Example Title</title>
-          <meta name="description" content="Example description" />
-          <meta name="author" content="Example Author" />
-        </head>
-        <body><p>Content</p></body>
-      </html>
-    `,
-    expected: {
-      title: 'Example Title',
-      description: 'Example description',
-      author: 'Example Author',
-    },
-  },
-  {
-    name: 'prefers OpenGraph metadata over Twitter and standard metadata',
-    html: `
-      <html>
-        <head>
-          <title>Standard Title</title>
-          <meta name="description" content="Standard description" />
-          <meta name="twitter:title" content="Twitter Title" />
-          <meta name="twitter:description" content="Twitter description" />
-          <meta property="og:title" content="  OG Title  " />
-          <meta property="og:description" content="OG description" />
-        </head>
-        <body><p>Content</p></body>
-      </html>
-    `,
-    expected: {
-      title: 'OG Title',
-      description: 'OG description',
-    },
-  },
-  {
-    name: 'prefers Twitter metadata over standard metadata when OpenGraph is absent',
-    html: `
-      <html>
-        <head>
-          <title>Standard Title</title>
-          <meta name="description" content="Standard description" />
-          <meta name="twitter:title" content="Twitter Title" />
-          <meta name="twitter:description" content="Twitter description" />
-        </head>
-        <body><p>Content</p></body>
-      </html>
-    `,
-    expected: {
-      title: 'Twitter Title',
-      description: 'Twitter description',
-    },
-  },
-];
 
 function assertMetadataCase(testCase: MetadataCase): void {
   const result = extractContent(testCase.html, 'https://example.com', {
@@ -84,9 +24,65 @@ function assertMetadataCase(testCase: MetadataCase): void {
 }
 
 describe('extractContent', () => {
-  METADATA_CASES.forEach((testCase) => {
-    it(testCase.name, () => {
-      assertMetadataCase(testCase);
+  it('extracts metadata from title and meta tags', () => {
+    assertMetadataCase({
+      html: `
+      <html>
+        <head>
+          <title>Example Title</title>
+          <meta name="description" content="Example description" />
+          <meta name="author" content="Example Author" />
+        </head>
+        <body><p>Content</p></body>
+      </html>
+    `,
+      expected: {
+        title: 'Example Title',
+        description: 'Example description',
+        author: 'Example Author',
+      },
+    });
+  });
+
+  it('prefers OpenGraph metadata over Twitter and standard metadata', () => {
+    assertMetadataCase({
+      html: `
+      <html>
+        <head>
+          <title>Standard Title</title>
+          <meta name="description" content="Standard description" />
+          <meta name="twitter:title" content="Twitter Title" />
+          <meta name="twitter:description" content="Twitter description" />
+          <meta property="og:title" content="  OG Title  " />
+          <meta property="og:description" content="OG description" />
+        </head>
+        <body><p>Content</p></body>
+      </html>
+    `,
+      expected: {
+        title: 'OG Title',
+        description: 'OG description',
+      },
+    });
+  });
+
+  it('prefers Twitter metadata over standard metadata when OpenGraph is absent', () => {
+    assertMetadataCase({
+      html: `
+      <html>
+        <head>
+          <title>Standard Title</title>
+          <meta name="description" content="Standard description" />
+          <meta name="twitter:title" content="Twitter Title" />
+          <meta name="twitter:description" content="Twitter description" />
+        </head>
+        <body><p>Content</p></body>
+      </html>
+    `,
+      expected: {
+        title: 'Twitter Title',
+        description: 'Twitter description',
+      },
     });
   });
 

@@ -3,7 +3,7 @@ import type { Express } from 'express';
 import { destroyAgents } from '../services/fetcher/agents.js';
 import { logError, logInfo, logWarn } from '../services/logger.js';
 
-import { getErrorMessage } from '../utils/error-utils.js';
+import { getErrorMessage } from '../utils/error-details.js';
 
 import type { SessionStore } from './sessions.js';
 

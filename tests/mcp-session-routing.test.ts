@@ -21,13 +21,12 @@ describe('mcp-session routing', () => {
       },
     };
 
-    const transport = await resolveTransportForPost(
-      {} as never,
-      res as never,
-      { jsonrpc: '2.0', method: 'tools/list', id: 1 } as never,
-      'bogus-session-id',
-      options as never
-    );
+    const transport = await resolveTransportForPost({
+      res: res as never,
+      body: { jsonrpc: '2.0', method: 'tools/list', id: 1 } as never,
+      sessionId: 'bogus-session-id',
+      options: options as never,
+    });
 
     assert.equal(transport, null);
     assert.equal(statusCode, 404);

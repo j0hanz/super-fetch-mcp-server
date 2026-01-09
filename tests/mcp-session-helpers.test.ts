@@ -5,7 +5,7 @@ import {
   createSlotTracker,
   ensureSessionCapacity,
   reserveSessionSlot,
-} from '../dist/http/mcp-session-helpers.js';
+} from '../dist/http/mcp-session-slots.js';
 import type { SessionStore } from '../dist/http/sessions.js';
 
 function createStore(initialSize: number) {
@@ -51,12 +51,12 @@ function testRejectsWhenAtCapacityWithoutEviction() {
   const store = createStore(1);
   const { res, getStatusCode } = createStatusCapture();
 
-  const allowed = ensureSessionCapacity(
-    store as SessionStore,
-    1,
-    res as never,
-    () => false
-  );
+  const allowed = ensureSessionCapacity({
+    store: store as SessionStore,
+    maxSessions: 1,
+    res: res as never,
+    evictOldest: () => false,
+  });
 
   assert.equal(allowed, false);
   assert.equal(getStatusCode(), 503);
@@ -66,21 +66,21 @@ function testAllowsWhenEvictionFreesCapacity() {
   const store = createStore(1);
   const res = { status: () => res, json: () => res };
 
-  const allowed = ensureSessionCapacity(
-    store as SessionStore,
-    1,
-    res as never,
-    () => {
+  const allowed = ensureSessionCapacity({
+    store: store as SessionStore,
+    maxSessions: 1,
+    res: res as never,
+    evictOldest: () => {
       store.setSize(0);
       return true;
-    }
-  );
+    },
+  });
 
   assert.equal(allowed, true);
 }
 
 function registerMcpSessionHelpersTests() {
-  describe('mcp-session-helpers', () => {
+  describe('mcp-session-slots', () => {
     it('reserves and releases session slots', () => {
       testReservesAndReleasesSlots();
     });

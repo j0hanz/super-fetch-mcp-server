@@ -3,7 +3,7 @@ import os from 'node:os';
 
 import { Agent, type Dispatcher } from 'undici';
 
-import { createErrorWithCode } from '../../utils/error-utils.js';
+import { createErrorWithCode } from '../../utils/error-details.js';
 import { isRecord } from '../../utils/guards.js';
 
 import { handleLookupResult } from './dns-selection.js';
