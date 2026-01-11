@@ -8,7 +8,7 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 
 import { config } from '../config/index.js';
-import type { SessionEntry } from '../config/types/runtime.js';
+import type { McpRequestBody, SessionEntry } from '../config/types/runtime.js';
 
 import { logError, logInfo, logWarn } from '../services/logger.js';
 
@@ -36,7 +36,8 @@ export function sendJsonRpcError(
   res: Response,
   code: number,
   message: string,
-  status = 400
+  status = 400,
+  id: string | number | null = null
 ): void {
   res.status(status).json({
     jsonrpc: '2.0',
@@ -44,7 +45,7 @@ export function sendJsonRpcError(
       code,
       message,
     },
-    id: null,
+    id,
   });
 }
 
@@ -214,15 +215,22 @@ export function ensureSessionCapacity({
 }
 
 function respondServerBusy(res: Response): void {
-  sendJsonRpcError(res, -32000, 'Server busy: maximum sessions reached', 503);
+  sendJsonRpcError(
+    res,
+    -32000,
+    'Server busy: maximum sessions reached',
+    503,
+    null
+  );
 }
 
-function respondBadRequest(res: Response): void {
+function respondBadRequest(res: Response, id: string | number | null): void {
   sendJsonRpcError(
     res,
     -32000,
     'Bad Request: Missing session ID or not an initialize request',
-    400
+    400,
+    id
   );
 }
 
@@ -467,7 +475,7 @@ function resolveSessionId({
   if (typeof sessionId !== 'string') {
     clearInitTimeout();
     tracker.releaseSlot();
-    respondBadRequest(res);
+    respondBadRequest(res, null);
     return null;
   }
   return sessionId;
@@ -546,7 +554,7 @@ export async function resolveTransportForPost({
   options,
 }: {
   res: Response;
-  body: { method: string };
+  body: Pick<McpRequestBody, 'method' | 'id'>;
   sessionId: string | undefined;
   options: McpSessionOptions;
 }): Promise<StreamableHTTPServerTransport | null> {
@@ -558,11 +566,11 @@ export async function resolveTransportForPost({
     }
 
     // Client supplied a session id but it doesn't exist; Streamable HTTP: invalid session IDs => 404.
-    sendJsonRpcError(res, -32600, 'Session not found', 404);
+    sendJsonRpcError(res, -32600, 'Session not found', 404, body.id ?? null);
     return null;
   }
   if (!isInitializeRequest(body)) {
-    respondBadRequest(res);
+    respondBadRequest(res, body.id ?? null);
     return null;
   }
   evictExpiredSessionsWithClose(options.sessionStore);
