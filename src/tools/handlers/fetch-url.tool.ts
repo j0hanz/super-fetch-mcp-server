@@ -109,10 +109,13 @@ function serializeMarkdownResult(result: MarkdownPipelineResult): string {
 
 function buildStructuredContent(
   pipeline: PipelineResult<MarkdownPipelineResult>,
-  inlineResult: InlineResult
+  inlineResult: InlineResult,
+  inputUrl: string
 ): Record<string, unknown> {
   return {
     url: pipeline.url,
+    resolvedUrl: pipeline.url,
+    inputUrl,
     title: pipeline.data.title,
     markdown: inlineResult.content,
   };
@@ -153,9 +156,14 @@ async function fetchPipeline(url: string): Promise<{
 
 function buildResponse(
   pipeline: PipelineResult<MarkdownPipelineResult>,
-  inlineResult: InlineResult
+  inlineResult: InlineResult,
+  inputUrl: string
 ): ToolResponseBase {
-  const structuredContent = buildStructuredContent(pipeline, inlineResult);
+  const structuredContent = buildStructuredContent(
+    pipeline,
+    inlineResult,
+    inputUrl
+  );
   const content = buildFetchUrlContentBlocks(
     structuredContent,
     pipeline,
@@ -194,5 +202,5 @@ async function executeFetch(input: FetchUrlInput): Promise<ToolResponseBase> {
     return createToolErrorResponse(inlineResult.error, url);
   }
 
-  return buildResponse(pipeline, inlineResult);
+  return buildResponse(pipeline, inlineResult, url);
 }

@@ -6,6 +6,14 @@ export const fetchUrlInputSchema = z.strictObject({
 
 export const fetchUrlOutputSchema = z.strictObject({
   url: z.string().describe('The fetched URL'),
+  inputUrl: z
+    .string()
+    .optional()
+    .describe('The original URL provided by the caller'),
+  resolvedUrl: z
+    .string()
+    .optional()
+    .describe('The normalized or transformed URL that was fetched'),
   title: z.string().optional().describe('Page title'),
   markdown: z
     .string()

@@ -65,6 +65,9 @@ function buildFrontmatter(metadata?: MetadataBlock): string {
 
   appendFrontmatterField(lines, 'title', metadata.title);
   appendFrontmatterField(lines, 'source', metadata.url);
+  appendFrontmatterField(lines, 'author', metadata.author);
+  appendFrontmatterField(lines, 'description', metadata.description);
+  appendFrontmatterField(lines, 'fetchedAt', metadata.fetchedAt);
 
   lines.push(FRONTMATTER_DELIMITER);
   return joinLines(lines);

@@ -26,7 +26,7 @@ A [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server that f
 | Feature              | Description                                                                                                        |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------ |
 | Smart extraction     | Mozilla Readability with quality gates to strip boilerplate when it improves results                               |
-| Clean Markdown       | Markdown output with optional YAML frontmatter (title + source)                                                    |
+| Clean Markdown       | Markdown output with optional YAML frontmatter (title, source, author, description, fetchedAt)                     |
 | Raw content handling | Preserves raw markdown/text, detects common text extensions, and rewrites GitHub/GitLab/Bitbucket/Gist URLs to raw |
 | Built-in caching     | In-memory cache with TTL, max keys, and resource subscriptions                                                     |
 | Resilient fetching   | Redirect handling with validation, timeouts, and response size limits                                              |
@@ -227,7 +227,7 @@ node dist/index.js --stdio
 <details>
 <summary><strong>HTTP Mode</strong> (default)</summary>
 
-HTTP mode requires authentication. By default it binds to `127.0.0.1`. To listen on all interfaces, set `HOST=0.0.0.0` or `HOST=::` and configure OAuth (remote bindings require OAuth). Other non-loopback `HOST` values are rejected.
+HTTP mode requires authentication. By default it binds to `127.0.0.1`. Non-loopback `HOST` values require `ALLOW_REMOTE=true`. To listen on all interfaces, set `HOST=0.0.0.0` or `HOST=::`, set `ALLOW_REMOTE=true`, and configure OAuth (remote bindings require OAuth).
 
 ```bash
 API_KEY=supersecret npx -y @j0hanz/superfetch@latest
@@ -263,7 +263,7 @@ Sessions are managed via the `mcp-session-id` header (see [HTTP Mode Details](#h
 
 ### Tool Response Notes
 
-The tool returns `structuredContent` with `url`, optional `title`, and `markdown` when inline content is available. On errors, `error` is included instead of content.
+The tool returns `structuredContent` with `url`, optional `inputUrl`, optional `resolvedUrl`, optional `title`, and `markdown` when inline content is available. On errors, `error` is included instead of content.
 
 The response includes:
 
@@ -287,6 +287,8 @@ Fetches a webpage and converts it to clean Markdown format with optional frontma
 ```json
 {
   "url": "https://example.com/docs",
+  "inputUrl": "https://example.com/docs",
+  "resolvedUrl": "https://example.com/docs",
   "title": "Documentation",
   "markdown": "---\ntitle: Documentation\n---\n\n# Getting Started\n\nWelcome..."
 }
@@ -375,6 +377,7 @@ Set environment variables in your MCP client `env` or in the shell before starti
 | `CACHE_ENABLED` | `true`               | Enable response caching                                       |
 | `CACHE_TTL`     | `3600`               | Cache TTL in seconds (60-86400)                               |
 | `LOG_LEVEL`     | `info`               | `debug`, `info`, `warn`, `error`                              |
+| `ALLOW_REMOTE`  | `false`              | Allow binding to non-loopback hosts (OAuth required)          |
 | `ALLOWED_HOSTS` | (empty)              | Additional allowed Host/Origin values (comma/space separated) |
 
 ### Auth (HTTP Mode)

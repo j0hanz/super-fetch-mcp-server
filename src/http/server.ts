@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { isIP } from 'node:net';
 import { setInterval as setIntervalPromise } from 'node:timers/promises';
 
 import type {
@@ -255,6 +256,10 @@ function normalizeHost(value: string): string | null {
 
   const ipv6 = stripIpv6Brackets(first);
   if (ipv6) return ipv6;
+
+  if (isIP(first) === 6) {
+    return first;
+  }
 
   return stripPortIfPresent(first);
 }
@@ -650,7 +655,11 @@ function ensureBindAllowed(): void {
     process.exit(1);
   }
 
-  if (config.security.allowRemote && config.auth.mode !== 'oauth') {
+  if (
+    !isLoopback &&
+    config.security.allowRemote &&
+    config.auth.mode !== 'oauth'
+  ) {
     logError(
       'Remote HTTP mode requires OAuth configuration; refusing to start'
     );

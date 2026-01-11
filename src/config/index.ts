@@ -26,7 +26,7 @@ const host = process.env.HOST ?? LOOPBACK_V4;
 const port = parseInteger(process.env.PORT, 3000, 1024, 65535);
 const baseUrl = new URL(`http://${formatHostForUrl(host)}:${port}`);
 
-const isRemoteHost = host === ANY_V4 || host === '::';
+const allowRemote = parseBoolean(process.env.ALLOW_REMOTE, false);
 
 interface RuntimeState {
   httpMode: boolean;
@@ -100,7 +100,7 @@ export const config = {
     ],
     allowedHosts: parseAllowedHosts(process.env.ALLOWED_HOSTS),
     apiKey: process.env.API_KEY,
-    allowRemote: isRemoteHost,
+    allowRemote,
   },
   auth: buildAuthConfig(baseUrl),
   rateLimit: {

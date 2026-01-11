@@ -139,6 +139,20 @@ function isRawTextContent(content: string): boolean {
   );
 }
 
+function isLikelyHtmlContent(content: string): boolean {
+  const trimmed = content.trim();
+  if (!trimmed) return false;
+  if (looksLikeHtmlDocument(trimmed)) return true;
+  return countCommonHtmlTags(content) > 2;
+}
+
+function shouldPreserveRawContent(url: string, content: string): boolean {
+  if (isRawTextContentUrl(url)) {
+    return !isLikelyHtmlContent(content);
+  }
+  return isRawTextContent(content);
+}
+
 function buildRawMarkdownPayload({
   rawContent,
   url,
@@ -165,7 +179,7 @@ export function tryTransformRawContent({
   url: string;
   includeMetadata: boolean;
 }): MarkdownTransformResult | null {
-  if (!isRawTextContentUrl(url) && !isRawTextContent(html)) {
+  if (!shouldPreserveRawContent(url, html)) {
     return null;
   }
 

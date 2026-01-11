@@ -26,8 +26,8 @@ SuperFetch runs with no configuration by default. Just run with `--stdio`:
 
 **HTTP Mode Notes:**
 
-- Default bind is `127.0.0.1`. Other non-loopback `HOST` values are rejected.
-- To bind to all interfaces, set `HOST=0.0.0.0` or `HOST=::` **and** configure OAuth (remote bindings require OAuth).
+- Default bind is `127.0.0.1`. Non-loopback `HOST` values require `ALLOW_REMOTE=true`.
+- To bind to all interfaces, set `HOST=0.0.0.0` or `HOST=::`, set `ALLOW_REMOTE=true`, and configure OAuth (remote bindings require OAuth).
 - Authentication is always required via `Authorization: Bearer <token>` (static mode also accepts `X-API-Key`).
 
 ## Environment Variables
@@ -42,6 +42,7 @@ SuperFetch runs with no configuration by default. Just run with `--stdio`:
 | `CACHE_ENABLED` | `true`               | Enable response caching                                       |
 | `CACHE_TTL`     | `3600`               | Cache lifetime in seconds (60-86400)                          |
 | `LOG_LEVEL`     | `info`               | Logging verbosity: `debug`, `info`, `warn`, or `error`        |
+| `ALLOW_REMOTE`  | `false`              | Allow binding to non-loopback hosts (OAuth required)          |
 | `ALLOWED_HOSTS` | (empty)              | Additional allowed Host/Origin values (comma/space separated) |
 
 ### Auth (HTTP Mode)
@@ -170,6 +171,7 @@ Run HTTP server accessible from all interfaces (OAuth required):
 
 ```bash
 HOST=0.0.0.0 PORT=8080 \
+ALLOW_REMOTE=true \
 OAUTH_ISSUER_URL=https://issuer.example \
 OAUTH_AUTHORIZATION_URL=https://issuer.example/authorize \
 OAUTH_TOKEN_URL=https://issuer.example/token \
