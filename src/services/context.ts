@@ -3,6 +3,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 interface RequestContext {
   readonly requestId: string;
   readonly sessionId?: string;
+  readonly operationId?: string;
 }
 
 const requestContext = new AsyncLocalStorage<RequestContext>();
@@ -20,4 +21,8 @@ export function getRequestId(): string | undefined {
 
 export function getSessionId(): string | undefined {
   return requestContext.getStore()?.sessionId;
+}
+
+export function getOperationId(): string | undefined {
+  return requestContext.getStore()?.operationId;
 }

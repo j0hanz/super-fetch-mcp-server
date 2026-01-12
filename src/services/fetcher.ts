@@ -14,11 +14,13 @@ import { FetchError } from '../errors/app-error.js';
 
 import { createErrorWithCode, isSystemError } from '../utils/error-details.js';
 import { isRecord } from '../utils/guards.js';
+import { redactUrl } from '../utils/url-redactor.js';
 import {
   isBlockedIp,
   validateAndNormalizeUrl,
 } from '../utils/url-validator.js';
 
+import { getOperationId, getRequestId } from './context.js';
 import { logDebug, logError, logWarn } from './logger.js';
 
 const DNS_LOOKUP_TIMEOUT_MS = 5000;
@@ -433,6 +435,8 @@ type FetchChannelEvent =
       requestId: string;
       method: string;
       url: string;
+      contextRequestId?: string;
+      operationId?: string;
     }
   | {
       v: 1;
@@ -440,6 +444,8 @@ type FetchChannelEvent =
       requestId: string;
       status: number;
       duration: number;
+      contextRequestId?: string;
+      operationId?: string;
     }
   | {
       v: 1;
@@ -450,22 +456,11 @@ type FetchChannelEvent =
       code?: string;
       status?: number;
       duration: number;
+      contextRequestId?: string;
+      operationId?: string;
     };
 
 const fetchChannel = diagnosticsChannel.channel('superfetch.fetch');
-
-function redactUrl(rawUrl: string): string {
-  try {
-    const url = new URL(rawUrl);
-    url.username = '';
-    url.password = '';
-    url.hash = '';
-    url.search = '';
-    return url.toString();
-  } catch {
-    return rawUrl;
-  }
-}
 
 function publishFetchEvent(event: FetchChannelEvent): void {
   if (!fetchChannel.hasSubscribers) return;
@@ -481,6 +476,8 @@ interface FetchTelemetryContext {
   startTime: number;
   url: string;
   method: string;
+  contextRequestId?: string;
+  operationId?: string;
 }
 
 export function startFetchTelemetry(
@@ -488,11 +485,15 @@ export function startFetchTelemetry(
   method: string
 ): FetchTelemetryContext {
   const safeUrl = redactUrl(url);
+  const contextRequestId = getRequestId();
+  const operationId = getOperationId();
   const context: FetchTelemetryContext = {
     requestId: randomUUID(),
     startTime: performance.now(),
     url: safeUrl,
     method: method.toUpperCase(),
+    ...(contextRequestId ? { contextRequestId } : {}),
+    ...(operationId ? { operationId } : {}),
   };
 
   publishFetchEvent({
@@ -501,12 +502,20 @@ export function startFetchTelemetry(
     requestId: context.requestId,
     method: context.method,
     url: context.url,
+    ...(context.contextRequestId
+      ? { contextRequestId: context.contextRequestId }
+      : {}),
+    ...(context.operationId ? { operationId: context.operationId } : {}),
   });
 
   logDebug('HTTP Request', {
     requestId: context.requestId,
     method: context.method,
     url: context.url,
+    ...(context.contextRequestId
+      ? { contextRequestId: context.contextRequestId }
+      : {}),
+    ...(context.operationId ? { operationId: context.operationId } : {}),
   });
 
   return context;
@@ -525,6 +534,10 @@ export function recordFetchResponse(
     requestId: context.requestId,
     status: response.status,
     duration,
+    ...(context.contextRequestId
+      ? { contextRequestId: context.contextRequestId }
+      : {}),
+    ...(context.operationId ? { operationId: context.operationId } : {}),
   });
 
   const contentType = response.headers.get('content-type');
@@ -537,6 +550,10 @@ export function recordFetchResponse(
     status: response.status,
     url: context.url,
     duration: durationLabel,
+    ...(context.contextRequestId
+      ? { contextRequestId: context.contextRequestId }
+      : {}),
+    ...(context.operationId ? { operationId: context.operationId } : {}),
     ...(contentType ? { contentType } : {}),
     ...(contentLength ? { size: contentLength } : {}),
   });
@@ -546,6 +563,10 @@ export function recordFetchResponse(
       requestId: context.requestId,
       url: context.url,
       duration: durationLabel,
+      ...(context.contextRequestId
+        ? { contextRequestId: context.contextRequestId }
+        : {}),
+      ...(context.operationId ? { operationId: context.operationId } : {}),
     });
   }
 }
@@ -565,6 +586,10 @@ export function recordFetchError(
     url: context.url,
     error: err.message,
     duration,
+    ...(context.contextRequestId
+      ? { contextRequestId: context.contextRequestId }
+      : {}),
+    ...(context.operationId ? { operationId: context.operationId } : {}),
   };
 
   const code = isSystemError(err) ? err.code : undefined;
@@ -584,6 +609,10 @@ export function recordFetchError(
     status,
     code,
     error: err.message,
+    ...(context.contextRequestId
+      ? { contextRequestId: context.contextRequestId }
+      : {}),
+    ...(context.operationId ? { operationId: context.operationId } : {}),
   });
 }
 

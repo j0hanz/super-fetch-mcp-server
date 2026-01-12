@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { isIP } from 'node:net';
 import { setInterval as setIntervalPromise } from 'node:timers/promises';
 
 import type {
@@ -24,6 +23,7 @@ import * as cache from '../services/cache.js';
 import { runWithRequestContext } from '../services/context.js';
 import { destroyAgents } from '../services/fetcher.js';
 import { logDebug, logError, logInfo, logWarn } from '../services/logger.js';
+import { shutdownTransformWorkerPool } from '../services/transform-worker-pool.js';
 
 import {
   parseCachedPayload,
@@ -31,6 +31,7 @@ import {
 } from '../utils/cached-payload.js';
 import { getErrorMessage } from '../utils/error-details.js';
 import { generateSafeFilename } from '../utils/filename-generator.js';
+import { normalizeHost } from '../utils/host-normalizer.js';
 
 import { createAuthMetadataRouter, createAuthMiddleware } from './auth.js';
 import { registerMcpRoutes } from './mcp-routes.js';
@@ -40,6 +41,67 @@ import {
   type SessionStore,
   startSessionCleanupLoop,
 } from './mcp-sessions.js';
+
+interface HttpServerTuningTarget {
+  headersTimeout?: number;
+  requestTimeout?: number;
+  keepAliveTimeout?: number;
+  closeIdleConnections?: () => void;
+  closeAllConnections?: () => void;
+}
+
+export function applyHttpServerTuning(server: HttpServerTuningTarget): void {
+  const { headersTimeoutMs, requestTimeoutMs, keepAliveTimeoutMs } =
+    config.server.http;
+
+  if (headersTimeoutMs !== undefined) {
+    server.headersTimeout = headersTimeoutMs;
+  }
+  if (requestTimeoutMs !== undefined) {
+    server.requestTimeout = requestTimeoutMs;
+  }
+  if (keepAliveTimeoutMs !== undefined) {
+    server.keepAliveTimeout = keepAliveTimeoutMs;
+  }
+
+  if (
+    headersTimeoutMs !== undefined ||
+    requestTimeoutMs !== undefined ||
+    keepAliveTimeoutMs !== undefined
+  ) {
+    logDebug('Applied HTTP server tuning', {
+      headersTimeoutMs,
+      requestTimeoutMs,
+      keepAliveTimeoutMs,
+    });
+  }
+}
+
+export function drainConnectionsOnShutdown(
+  server: HttpServerTuningTarget
+): void {
+  const { shutdownCloseAllConnections, shutdownCloseIdleConnections } =
+    config.server.http;
+
+  if (shutdownCloseAllConnections) {
+    if (typeof server.closeAllConnections === 'function') {
+      server.closeAllConnections();
+      logDebug('Closed all HTTP connections during shutdown');
+    } else {
+      logDebug('HTTP server does not support closeAllConnections()');
+    }
+    return;
+  }
+
+  if (shutdownCloseIdleConnections) {
+    if (typeof server.closeIdleConnections === 'function') {
+      server.closeIdleConnections();
+      logDebug('Closed idle HTTP connections during shutdown');
+    } else {
+      logDebug('HTTP server does not support closeIdleConnections()');
+    }
+  }
+}
 
 interface RateLimitConfig extends RateLimiterOptions {
   enabled: boolean;
@@ -227,43 +289,6 @@ function tryParseOriginHostname(originHeader: string): string | null {
   }
 }
 
-function takeFirstHostValue(value: string): string | null {
-  const first = value.split(',')[0];
-  if (!first) return null;
-  const trimmed = first.trim();
-  return trimmed ? trimmed : null;
-}
-
-function stripIpv6Brackets(value: string): string | null {
-  if (!value.startsWith('[')) return null;
-  const end = value.indexOf(']');
-  if (end === -1) return null;
-  return value.slice(1, end);
-}
-
-function stripPortIfPresent(value: string): string {
-  const colonIndex = value.indexOf(':');
-  if (colonIndex === -1) return value;
-  return value.slice(0, colonIndex);
-}
-
-function normalizeHost(value: string): string | null {
-  const trimmed = value.trim().toLowerCase();
-  if (!trimmed) return null;
-
-  const first = takeFirstHostValue(trimmed);
-  if (!first) return null;
-
-  const ipv6 = stripIpv6Brackets(first);
-  if (ipv6) return ipv6;
-
-  if (isIP(first) === 6) {
-    return first;
-  }
-
-  return stripPortIfPresent(first);
-}
-
 function isWildcardHost(host: string): boolean {
   return host === '0.0.0.0' || host === '::';
 }
@@ -283,7 +308,12 @@ function addConfiguredHost(allowedHosts: Set<string>): void {
 
 function addExplicitAllowedHosts(allowedHosts: Set<string>): void {
   for (const host of config.security.allowedHosts) {
-    allowedHosts.add(host);
+    const normalized = normalizeHost(host);
+    if (!normalized) {
+      logDebug('Ignoring invalid allowed host entry', { host });
+      continue;
+    }
+    allowedHosts.add(normalized);
   }
 }
 
@@ -372,7 +402,9 @@ function createContextMiddleware(): (
     const sessionId = getSessionId(req);
 
     const context =
-      sessionId === undefined ? { requestId } : { requestId, sessionId };
+      sessionId === undefined
+        ? { requestId, operationId: requestId }
+        : { requestId, operationId: requestId, sessionId };
 
     runWithRequestContext(context, () => {
       next();
@@ -699,14 +731,35 @@ function createShutdownHandler(
   sessionCleanupController: AbortController,
   stopRateLimitCleanup: () => void
 ): (signal: string) => Promise<void> {
-  return (signal: string): Promise<void> =>
-    shutdownServer(
+  let inFlight: Promise<void> | null = null;
+  let initialSignal: string | null = null;
+
+  return (signal: string): Promise<void> => {
+    if (inFlight) {
+      logWarn('Shutdown already in progress; ignoring signal', {
+        signal,
+        initialSignal,
+      });
+      return inFlight;
+    }
+
+    initialSignal = signal;
+    inFlight = shutdownServer(
       signal,
       server,
       sessionStore,
       sessionCleanupController,
       stopRateLimitCleanup
-    );
+    ).catch((error: unknown) => {
+      logError(
+        'Shutdown handler failed',
+        error instanceof Error ? error : { error: getErrorMessage(error) }
+      );
+      throw error;
+    });
+
+    return inFlight;
+  };
 }
 
 async function shutdownServer(
@@ -723,6 +776,8 @@ async function shutdownServer(
 
   await closeSessions(sessionStore);
   destroyAgents();
+  await shutdownTransformWorkerPool();
+  drainConnectionsOnShutdown(server);
   closeServer(server);
   scheduleForcedShutdown(10000);
 }
@@ -757,10 +812,10 @@ function scheduleForcedShutdown(timeoutMs: number): void {
 function registerSignalHandlers(
   shutdown: (signal: string) => Promise<void>
 ): void {
-  process.on('SIGINT', () => {
+  process.once('SIGINT', () => {
     void shutdown('SIGINT');
   });
-  process.on('SIGTERM', () => {
+  process.once('SIGTERM', () => {
     void shutdown('SIGTERM');
   });
 }
@@ -899,6 +954,7 @@ export async function startHttpServer(): Promise<{
   const { app, sessionStore, sessionCleanupController, stopRateLimitCleanup } =
     await buildServerContext();
   const server = startListening(app);
+  applyHttpServerTuning(server);
   const shutdown = createShutdownHandler(
     server,
     sessionStore,

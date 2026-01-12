@@ -53,6 +53,19 @@ export function parseInteger(
   return parsed;
 }
 
+export function parseOptionalInteger(
+  envValue: string | undefined,
+  min?: number,
+  max?: number
+): number | undefined {
+  if (!envValue) return undefined;
+  const parsed = parseInt(envValue, 10);
+  if (Number.isNaN(parsed)) return undefined;
+  if (isBelowMin(parsed, min)) return undefined;
+  if (isAboveMax(parsed, max)) return undefined;
+  return parsed;
+}
+
 export function parseBoolean(
   envValue: string | undefined,
   defaultValue: boolean

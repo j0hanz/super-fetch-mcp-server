@@ -45,6 +45,20 @@ SuperFetch runs with no configuration by default. Just run with `--stdio`:
 | `ALLOW_REMOTE`  | `false`              | Allow binding to non-loopback hosts (OAuth required)          |
 | `ALLOWED_HOSTS` | (empty)              | Additional allowed Host/Origin values (comma/space separated) |
 
+### HTTP Server Tuning (HTTP Mode, Advanced)
+
+These settings tune the underlying Node.js `http.Server` created by Express. All defaults are **no-op** unless you set the variables.
+
+> Caution: `SERVER_REQUEST_TIMEOUT_MS` can break long-lived Streamable HTTP / MCP sessions. Prefer `SERVER_HEADERS_TIMEOUT_MS` and `SERVER_KEEP_ALIVE_TIMEOUT_MS` unless you know you want a hard request deadline.
+
+| Variable                       | Default | Description                                                  |
+| ------------------------------ | ------- | ------------------------------------------------------------ |
+| `SERVER_HEADERS_TIMEOUT_MS`    | (unset) | Sets `server.headersTimeout` (1000-600000)                   |
+| `SERVER_REQUEST_TIMEOUT_MS`    | (unset) | Sets `server.requestTimeout` (1000-600000)                   |
+| `SERVER_KEEP_ALIVE_TIMEOUT_MS` | (unset) | Sets `server.keepAliveTimeout` (1000-600000)                 |
+| `SERVER_SHUTDOWN_CLOSE_IDLE`   | `false` | On shutdown, call `server.closeIdleConnections()` if present |
+| `SERVER_SHUTDOWN_CLOSE_ALL`    | `false` | On shutdown, call `server.closeAllConnections()` if present  |
+
 ### Auth (HTTP Mode)
 
 | Variable        | Default | Description                                                  |

@@ -8,6 +8,7 @@ import {
   parseBoolean,
   parseInteger,
   parseLogLevel,
+  parseOptionalInteger,
 } from './env-parsers.js';
 
 function formatHostForUrl(hostname: string): string {
@@ -45,6 +46,31 @@ export const config = {
     sessionTtlMs: TIMEOUT.DEFAULT_SESSION_TTL_MS,
     sessionInitTimeoutMs: 10000,
     maxSessions: 200,
+    http: {
+      headersTimeoutMs: parseOptionalInteger(
+        process.env.SERVER_HEADERS_TIMEOUT_MS,
+        1000,
+        600000
+      ),
+      requestTimeoutMs: parseOptionalInteger(
+        process.env.SERVER_REQUEST_TIMEOUT_MS,
+        1000,
+        600000
+      ),
+      keepAliveTimeoutMs: parseOptionalInteger(
+        process.env.SERVER_KEEP_ALIVE_TIMEOUT_MS,
+        1000,
+        600000
+      ),
+      shutdownCloseIdleConnections: parseBoolean(
+        process.env.SERVER_SHUTDOWN_CLOSE_IDLE,
+        false
+      ),
+      shutdownCloseAllConnections: parseBoolean(
+        process.env.SERVER_SHUTDOWN_CLOSE_ALL,
+        false
+      ),
+    },
   },
   fetcher: {
     timeout: TIMEOUT.DEFAULT_FETCH_TIMEOUT_MS,

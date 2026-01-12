@@ -99,6 +99,9 @@ export function normalizeUrl(urlString: string): {
   const hostname = normalizeHostname(url);
   assertHostnameAllowed(hostname);
 
+  // Canonicalize hostname to avoid trailing-dot variants and keep url.href consistent.
+  url.hostname = hostname;
+
   return { normalizedUrl: url.href, hostname };
 }
 
@@ -133,11 +136,10 @@ function assertUrlLength(url: string): void {
 }
 
 function parseUrl(urlString: string): URL {
-  try {
-    return new URL(urlString);
-  } catch {
+  if (!URL.canParse(urlString)) {
     throw createValidationError('Invalid URL format');
   }
+  return new URL(urlString);
 }
 
 function assertHttpProtocol(url: URL): void {
@@ -153,7 +155,10 @@ function assertNoCredentials(url: URL): void {
 }
 
 function normalizeHostname(url: URL): string {
-  const hostname = url.hostname.toLowerCase();
+  let hostname = url.hostname.toLowerCase();
+  while (hostname.endsWith('.')) {
+    hostname = hostname.slice(0, -1);
+  }
   if (!hostname) {
     throw createValidationError('URL must have a valid hostname');
   }

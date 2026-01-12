@@ -1,9 +1,15 @@
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { after, describe, it } from 'node:test';
 
+import { FetchError } from '../dist/errors/app-error.js';
+import { shutdownTransformWorkerPool } from '../dist/services/transform-worker-pool.js';
 import { transformHtmlToMarkdown } from '../dist/tools/utils/content-transform.js';
 
-type TransformResult = ReturnType<typeof transformHtmlToMarkdown>;
+after(async () => {
+  await shutdownTransformWorkerPool();
+});
+
+type TransformResult = Awaited<ReturnType<typeof transformHtmlToMarkdown>>;
 
 type RawContentCase = {
   input: string;
@@ -12,8 +18,8 @@ type RawContentCase = {
   assert: (result: TransformResult) => void;
 };
 
-function runRawContentCase(testCase: RawContentCase) {
-  const result = transformHtmlToMarkdown(testCase.input, testCase.url, {
+async function runRawContentCase(testCase: RawContentCase) {
+  const result = await transformHtmlToMarkdown(testCase.input, testCase.url, {
     includeMetadata: testCase.includeMetadata,
   });
 
@@ -22,7 +28,7 @@ function runRawContentCase(testCase: RawContentCase) {
 
 describe('transformHtmlToMarkdown raw content detection', () => {
   it('preserves markdown with frontmatter and adds source when missing', () => {
-    runRawContentCase({
+    return runRawContentCase({
       input: `---\ntitle: "Hello"\n---\n\n# Heading`,
       url: 'https://example.com/file.md',
       includeMetadata: true,
@@ -36,7 +42,7 @@ describe('transformHtmlToMarkdown raw content detection', () => {
   });
 
   it('treats doctype/html documents as HTML (not raw)', () => {
-    runRawContentCase({
+    return runRawContentCase({
       input: '<!DOCTYPE html><html><body><p>Hello</p></body></html>',
       url: 'https://example.com',
       includeMetadata: false,
@@ -48,7 +54,7 @@ describe('transformHtmlToMarkdown raw content detection', () => {
   });
 
   it('treats <=2 common HTML tags + markdown patterns as raw', () => {
-    runRawContentCase({
+    return runRawContentCase({
       input: '<div>one</div><span>two</span>\n# Heading',
       url: 'https://example.com/raw',
       includeMetadata: true,
@@ -63,7 +69,7 @@ describe('transformHtmlToMarkdown raw content detection', () => {
   });
 
   it('treats >2 common HTML tags as HTML even if markdown patterns exist', () => {
-    runRawContentCase({
+    return runRawContentCase({
       input:
         '<div>one</div><span>two</span><meta name="x" content="y">\n# Heading',
       url: 'https://example.com/html',
@@ -72,5 +78,22 @@ describe('transformHtmlToMarkdown raw content detection', () => {
         assert.ok(!result.markdown.includes('<div>'));
       },
     });
+  });
+
+  it('throws when cancelled via AbortSignal', async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    await assert.rejects(
+      () =>
+        transformHtmlToMarkdown('<p>Hello</p>', 'https://example.com', {
+          includeMetadata: false,
+          signal: controller.signal,
+        }),
+      (error: unknown) =>
+        error instanceof FetchError &&
+        error.statusCode === 499 &&
+        error.message.includes('canceled')
+    );
   });
 });

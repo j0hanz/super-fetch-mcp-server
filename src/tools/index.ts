@@ -1,5 +1,9 @@
+import { randomUUID } from 'node:crypto';
+
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
+
+import { getRequestId, runWithRequestContext } from '../services/context.js';
 
 import {
   FETCH_URL_TOOL_DESCRIPTION,
@@ -23,6 +27,22 @@ const TOOL_DEFINITION = {
   } satisfies ToolAnnotations,
 };
 
+export function withRequestContextIfMissing<TParams, TResult>(
+  handler: (params: TParams) => Promise<TResult>
+): (params: TParams) => Promise<TResult> {
+  return async (params) => {
+    const existingRequestId = getRequestId();
+    if (existingRequestId) {
+      return handler(params);
+    }
+
+    const requestId = randomUUID();
+    return runWithRequestContext({ requestId, operationId: requestId }, () =>
+      handler(params)
+    );
+  };
+}
+
 export function registerTools(server: McpServer): void {
   server.registerTool(
     TOOL_DEFINITION.name,
@@ -33,6 +53,6 @@ export function registerTools(server: McpServer): void {
       outputSchema: TOOL_DEFINITION.outputSchema,
       annotations: TOOL_DEFINITION.annotations,
     },
-    TOOL_DEFINITION.handler
+    withRequestContextIfMissing(TOOL_DEFINITION.handler)
   );
 }

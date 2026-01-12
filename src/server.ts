@@ -5,6 +5,7 @@ import { config } from './config/index.js';
 
 import { destroyAgents } from './services/fetcher.js';
 import { logError, logInfo } from './services/logger.js';
+import { shutdownTransformWorkerPool } from './services/transform-worker-pool.js';
 
 import { registerTools } from './tools/index.js';
 
@@ -55,9 +56,13 @@ function handleShutdownSignal(server: McpServer, signal: string): void {
   process.stderr.write(
     `\n${signal} received, shutting down superFetch MCP server...\n`
   );
-  destroyAgents();
-  server
-    .close()
+
+  Promise.resolve()
+    .then(async () => {
+      destroyAgents();
+      await shutdownTransformWorkerPool();
+      await server.close();
+    })
     .catch((err: unknown) => {
       logError('Error during shutdown', err instanceof Error ? err : undefined);
     })
@@ -67,16 +72,29 @@ function handleShutdownSignal(server: McpServer, signal: string): void {
 }
 
 function createShutdownHandler(server: McpServer): (signal: string) => void {
+  let shuttingDown = false;
+  let initialSignal: string | null = null;
+
   return (signal: string): void => {
+    if (shuttingDown) {
+      logInfo('Shutdown already in progress; ignoring signal', {
+        signal,
+        initialSignal,
+      });
+      return;
+    }
+
+    shuttingDown = true;
+    initialSignal = signal;
     handleShutdownSignal(server, signal);
   };
 }
 
 function registerSignalHandlers(handler: (signal: string) => void): void {
-  process.on('SIGINT', () => {
+  process.once('SIGINT', () => {
     handler('SIGINT');
   });
-  process.on('SIGTERM', () => {
+  process.once('SIGTERM', () => {
     handler('SIGTERM');
   });
 }

@@ -43,4 +43,5 @@ export interface MarkdownTransformResult {
 
 export interface TransformOptions {
   includeMetadata: boolean;
+  signal?: AbortSignal;
 }

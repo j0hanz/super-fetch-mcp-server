@@ -12,6 +12,14 @@ import {
 } from '../config/formatting.js';
 import type { MetadataBlock } from '../config/types/content.js';
 
+import { FetchError } from '../errors/app-error.js';
+
+import {
+  endTransformStage,
+  startTransformStage,
+} from '../services/telemetry.js';
+
+import { throwIfAborted } from '../utils/cancellation.js';
 import {
   detectLanguageFromCode,
   resolveLanguageFromAttributes,
@@ -382,15 +390,34 @@ function getMarkdownConverter(): NodeHtmlMarkdown {
   return markdownInstance;
 }
 
-export function htmlToMarkdown(html: string, metadata?: MetadataBlock): string {
+export function htmlToMarkdown(
+  html: string,
+  metadata?: MetadataBlock,
+  options?: { url?: string; signal?: AbortSignal }
+): string {
+  const url = options?.url ?? metadata?.url ?? '';
   const frontmatter = buildFrontmatter(metadata);
   if (!html) return frontmatter;
 
   try {
+    throwIfAborted(options?.signal, url, 'markdown:begin');
+
+    const noiseStage = startTransformStage(url, 'markdown:noise');
     const cleanedHtml = removeNoiseFromHtml(html);
+    endTransformStage(noiseStage);
+
+    throwIfAborted(options?.signal, url, 'markdown:cleaned');
+
+    const translateStage = startTransformStage(url, 'markdown:translate');
     const content = getMarkdownConverter().translate(cleanedHtml).trim();
+    endTransformStage(translateStage);
+
+    throwIfAborted(options?.signal, url, 'markdown:translated');
     return frontmatter ? `${frontmatter}\n${content}` : content;
-  } catch {
+  } catch (error) {
+    if (error instanceof FetchError) {
+      throw error;
+    }
     return frontmatter;
   }
 }

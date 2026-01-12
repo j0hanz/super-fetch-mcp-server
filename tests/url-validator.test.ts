@@ -66,10 +66,21 @@ describe('validateAndNormalizeUrl', () => {
     });
   });
 
+  it('rejects blocked hosts with trailing dot', () => {
+    assert.throws(() => validateAndNormalizeUrl('http://localhost.'), {
+      message: 'Blocked host: localhost. Internal hosts are not allowed',
+    });
+  });
+
   it('rejects blocked IP ranges', () => {
     assert.throws(() => validateAndNormalizeUrl('http://10.0.0.1'), {
       message: 'Blocked IP range: 10.0.0.1. Private IPs are not allowed',
     });
+  });
+
+  it('normalizes trailing-dot hostnames', () => {
+    const result = validateAndNormalizeUrl('https://example.com./path');
+    assert.equal(result, 'https://example.com/path');
   });
 
   it('rejects internal hostname suffixes', () => {

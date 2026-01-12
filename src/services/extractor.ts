@@ -7,12 +7,16 @@ import type {
   ExtractionResult,
 } from '../config/types/content.js';
 
+import { FetchError } from '../errors/app-error.js';
+
+import { throwIfAborted } from '../utils/cancellation.js';
 import { getErrorMessage } from '../utils/error-details.js';
 import { isRecord } from '../utils/guards.js';
 import { truncateHtml } from '../utils/html-truncator.js';
 
 import { logError, logInfo, logWarn } from './logger.js';
 import { extractMetadata } from './metadata-collector.js';
+import { endTransformStage, startTransformStage } from './telemetry.js';
 
 function isReadabilityCompatible(doc: unknown): doc is Document {
   if (!isRecord(doc)) return false;
@@ -97,7 +101,9 @@ function addOptionalField<Key extends keyof ExtractedArticle>(
 export function extractContent(
   html: string,
   url: string,
-  options: { extractArticle?: boolean } = { extractArticle: true }
+  options: { extractArticle?: boolean; signal?: AbortSignal } = {
+    extractArticle: true,
+  }
 ): ExtractionResult {
   if (!isValidInput(html, url)) {
     return { article: null, metadata: {} };
@@ -109,19 +115,43 @@ export function extractContent(
 function tryExtractContent(
   html: string,
   url: string,
-  options: { extractArticle?: boolean }
+  options: { extractArticle?: boolean; signal?: AbortSignal }
 ): ExtractionResult {
   try {
+    throwIfAborted(options.signal, url, 'extract:begin');
+    const parseStage = startTransformStage(url, 'extract:parse');
     const { document } = parseHTML(truncateHtml(html));
+    endTransformStage(parseStage);
+
+    throwIfAborted(options.signal, url, 'extract:parsed');
 
     applyBaseUri(document, url);
 
+    const metadataStage = startTransformStage(url, 'extract:metadata');
     const metadata = extractMetadata(document);
+    endTransformStage(metadataStage);
+
+    throwIfAborted(options.signal, url, 'extract:metadata');
+
+    let article: ExtractedArticle | null;
+    if (options.extractArticle) {
+      const articleStage = startTransformStage(url, 'extract:article');
+      article = resolveArticleExtraction(document, options.extractArticle);
+      endTransformStage(articleStage);
+    } else {
+      article = null;
+    }
+
+    throwIfAborted(options.signal, url, 'extract:article');
     return {
-      article: resolveArticleExtraction(document, options.extractArticle),
+      article,
       metadata,
     };
   } catch (error) {
+    if (error instanceof FetchError) {
+      throw error;
+    }
+    throwIfAborted(options.signal, url, 'extract:error');
     logError(
       'Failed to extract content',
       error instanceof Error ? error : undefined

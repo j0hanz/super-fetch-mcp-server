@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { after, describe, it } from 'node:test';
 
+import { shutdownTransformWorkerPool } from '../dist/services/transform-worker-pool.js';
 import { fetchUrlToolHandler } from '../dist/tools/handlers/fetch-url.tool.js';
+
+after(async () => {
+  await shutdownTransformWorkerPool();
+});
 
 function withMockedFetch(mock, execute) {
   const originalFetch = globalThis.fetch;

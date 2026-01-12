@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import diagnosticsChannel from 'node:diagnostics_channel';
 import { afterEach, describe, it } from 'node:test';
 
+import { runWithRequestContext } from '../dist/services/context.js';
 import {
   recordFetchError,
   recordFetchResponse,
@@ -78,5 +79,29 @@ describe('fetch telemetry interceptors', () => {
     assert.equal(errorEvent.status, 502);
     assert.equal(errorEvent.code, 'ECONNRESET');
     assert.equal(errorEvent.error, 'boom');
+  });
+
+  it('includes request context correlation fields when available', async () => {
+    const capture = createCapture();
+    cleanup = capture.dispose;
+
+    await runWithRequestContext(
+      { requestId: 'context-request', operationId: 'context-operation' },
+      async () => {
+        const context = startFetchTelemetry('https://example.com', 'get');
+        recordFetchResponse(context, new Response('ok', { status: 200 }));
+      }
+    );
+
+    const startEvent = capture.events.find((event) => event.type === 'start');
+    assert.ok(startEvent);
+    assert.equal(startEvent.contextRequestId, 'context-request');
+    assert.equal(startEvent.operationId, 'context-operation');
+    assert.notEqual(startEvent.requestId, 'context-request');
+
+    const endEvent = capture.events.find((event) => event.type === 'end');
+    assert.ok(endEvent);
+    assert.equal(endEvent.contextRequestId, 'context-request');
+    assert.equal(endEvent.operationId, 'context-operation');
   });
 });

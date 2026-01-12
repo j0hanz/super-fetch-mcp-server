@@ -1,15 +1,17 @@
 import { config } from '../config/index.js';
 import type { LogLevel, LogMetadata } from '../config/types/runtime.js';
 
-import { getRequestId, getSessionId } from './context.js';
+import { getOperationId, getRequestId, getSessionId } from './context.js';
 
 function formatMetadata(meta?: LogMetadata): string {
   const requestId = getRequestId();
   const sessionId = getSessionId();
+  const operationId = getOperationId();
 
   const contextMeta: LogMetadata = {};
   if (requestId) contextMeta.requestId = requestId;
   if (sessionId) contextMeta.sessionId = sessionId;
+  if (operationId) contextMeta.operationId = operationId;
 
   const merged = { ...contextMeta, ...meta };
   return Object.keys(merged).length > 0 ? ` ${JSON.stringify(merged)}` : '';
