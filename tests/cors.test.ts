@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { createCorsMiddleware } from '../dist/http/server.js';
+import { createCorsMiddleware } from '../dist/http/cors.js';
 
 function createNextTracker() {
   let nextCalled = 0;

@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import diagnosticsChannel from 'node:diagnostics_channel';
 import os from 'node:os';
 import { Worker } from 'node:worker_threads';
 
@@ -8,26 +7,6 @@ import type { MarkdownTransformResult } from '../config/types/content.js';
 import { FetchError } from '../errors/app-error.js';
 
 import { getErrorMessage } from '../utils/error-details.js';
-
-interface WorkerDispatchEvent {
-  v: 1;
-  type: 'dispatch' | 'result' | 'error';
-  task: 'transform';
-  workerIndex: number;
-  id: string;
-  durationMs?: number;
-}
-
-const workerChannel = diagnosticsChannel.channel('superfetch.worker');
-
-function publishWorkerEvent(event: WorkerDispatchEvent): void {
-  if (!workerChannel.hasSubscribers) return;
-  try {
-    workerChannel.publish(event);
-  } catch {
-    // Avoid crashing the publisher if a subscriber throws.
-  }
-}
 
 interface WorkerResultMessage {
   type: 'result';
@@ -59,14 +38,31 @@ interface PendingTask {
   reject: (error: unknown) => void;
 }
 
+interface InflightTask {
+  resolve: PendingTask['resolve'];
+  reject: PendingTask['reject'];
+  timer: NodeJS.Timeout;
+  signal: AbortSignal | undefined;
+  abortListener: (() => void) | undefined;
+  workerIndex: number;
+}
+
 interface WorkerSlot {
   worker: Worker;
   busy: boolean;
   currentTaskId: string | null;
-  startTimeMs: number;
 }
 
-let pool: TransformWorkerPool | null = null;
+interface TransformWorkerPool {
+  transform(
+    html: string,
+    url: string,
+    options: { includeMetadata: boolean; signal?: AbortSignal }
+  ): Promise<MarkdownTransformResult>;
+  close(): Promise<void>;
+}
+
+let pool: WorkerPool | null = null;
 
 function resolveDefaultWorkerCount(): number {
   const parallelism =
@@ -74,17 +70,14 @@ function resolveDefaultWorkerCount(): number {
       ? os.availableParallelism()
       : os.cpus().length;
 
-  // Leave 1 core for the main thread / event loop; cap to avoid runaway memory.
-  return Math.min(16, Math.max(2, parallelism - 1));
+  // Leave 1 core for the event loop; cap to avoid runaway memory.
+  return Math.min(16, Math.max(1, parallelism - 1));
 }
 
 const DEFAULT_TIMEOUT_MS = 30000;
 
 export function getOrCreateTransformWorkerPool(): TransformWorkerPool {
-  pool ??= new TransformWorkerPool({
-    size: resolveDefaultWorkerCount(),
-    timeoutMs: DEFAULT_TIMEOUT_MS,
-  });
+  pool ??= new WorkerPool(resolveDefaultWorkerCount(), DEFAULT_TIMEOUT_MS);
   return pool;
 }
 
@@ -94,24 +87,20 @@ export async function shutdownTransformWorkerPool(): Promise<void> {
   pool = null;
 }
 
-export class TransformWorkerPool {
+class WorkerPool implements TransformWorkerPool {
   private readonly workers: WorkerSlot[] = [];
   private readonly queue: PendingTask[] = [];
+  private readonly inflight = new Map<string, InflightTask>();
   private readonly timeoutMs: number;
   private readonly queueMax: number;
-  private readonly size: number;
+  private closed = false;
 
-  constructor(options: { size: number; timeoutMs: number; queueMax?: number }) {
-    this.size = Math.max(0, options.size);
-    this.timeoutMs = options.timeoutMs;
-    const defaultQueueMax = this.size > 0 ? this.size * 2 : 0;
-    this.queueMax = options.queueMax ?? defaultQueueMax;
+  constructor(size: number, timeoutMs: number) {
+    const safeSize = Math.max(1, size);
+    this.timeoutMs = timeoutMs;
+    this.queueMax = safeSize * 2;
 
-    if (this.size <= 0) {
-      return;
-    }
-
-    for (let index = 0; index < this.size; index += 1) {
+    for (let index = 0; index < safeSize; index += 1) {
       this.workers.push(this.spawnWorker(index));
     }
   }
@@ -121,40 +110,44 @@ export class TransformWorkerPool {
       new URL('../workers/transform-worker.js', import.meta.url)
     );
 
-    // Workers should not keep the process alive by themselves.
+    // Workers must not keep the process alive by themselves.
     worker.unref();
 
     const slot: WorkerSlot = {
       worker,
       busy: false,
       currentTaskId: null,
-      startTimeMs: 0,
     };
 
     worker.on('message', (raw: unknown) => {
-      this.onWorkerMessage(workerIndex, raw as WorkerMessage);
+      this.onWorkerMessage(workerIndex, raw);
     });
 
     worker.on('error', (error: unknown) => {
-      this.onWorkerFatal(workerIndex, error);
+      this.onWorkerBroken(
+        workerIndex,
+        `Transform worker error: ${getErrorMessage(error)}`
+      );
     });
 
     worker.on('exit', (code: number) => {
-      this.onWorkerExit(workerIndex, code);
+      this.onWorkerBroken(
+        workerIndex,
+        `Transform worker exited (code ${code})`
+      );
     });
 
     return slot;
   }
 
-  private onWorkerFatal(workerIndex: number, error: unknown): void {
+  private onWorkerBroken(workerIndex: number, message: string): void {
+    if (this.closed) return;
+
     const slot = this.workers[workerIndex];
     if (!slot) return;
 
     if (slot.busy && slot.currentTaskId) {
-      this.failTask(
-        slot.currentTaskId,
-        new Error(`Transform worker error: ${getErrorMessage(error)}`)
-      );
+      this.failTask(slot.currentTaskId, new Error(message));
     }
 
     void slot.worker.terminate();
@@ -162,38 +155,19 @@ export class TransformWorkerPool {
     this.drainQueue();
   }
 
-  private onWorkerExit(workerIndex: number, code: number): void {
-    const slot = this.workers[workerIndex];
-    if (!slot) return;
-
-    if (slot.busy && slot.currentTaskId) {
-      this.failTask(
-        slot.currentTaskId,
-        new Error(`Transform worker exited (code ${code})`)
-      );
+  private onWorkerMessage(workerIndex: number, raw: unknown): void {
+    if (
+      !raw ||
+      typeof raw !== 'object' ||
+      !('type' in raw) ||
+      !('id' in raw) ||
+      typeof (raw as { id: unknown }).id !== 'string' ||
+      typeof (raw as { type: unknown }).type !== 'string'
+    ) {
+      return;
     }
 
-    // Respawn to keep pool healthy.
-    this.workers[workerIndex] = this.spawnWorker(workerIndex);
-    this.drainQueue();
-  }
-
-  private readonly inflight = new Map<
-    string,
-    {
-      resolve: PendingTask['resolve'];
-      reject: PendingTask['reject'];
-      timer: NodeJS.Timeout;
-      signal: AbortSignal | undefined;
-      abortListener: (() => void) | undefined;
-      workerIndex: number;
-    }
-  >();
-
-  private onWorkerMessage(workerIndex: number, message: WorkerMessage): void {
-    const slot = this.workers[workerIndex];
-    if (!slot) return;
-
+    const message = raw as WorkerMessage;
     const inflight = this.inflight.get(message.id);
     if (!inflight) return;
 
@@ -201,29 +175,17 @@ export class TransformWorkerPool {
     if (inflight.signal && inflight.abortListener) {
       inflight.signal.removeEventListener('abort', inflight.abortListener);
     }
+    this.inflight.delete(message.id);
 
-    const durationMs = Date.now() - slot.startTimeMs;
+    const slot = this.workers[workerIndex];
+    if (slot) {
+      slot.busy = false;
+      slot.currentTaskId = null;
+    }
 
     if (message.type === 'result') {
-      publishWorkerEvent({
-        v: 1,
-        type: 'result',
-        task: 'transform',
-        workerIndex,
-        id: message.id,
-        durationMs,
-      });
       inflight.resolve(message.result);
     } else {
-      publishWorkerEvent({
-        v: 1,
-        type: 'error',
-        task: 'transform',
-        workerIndex,
-        id: message.id,
-        durationMs,
-      });
-
       const { error } = message;
       if (error.name === 'FetchError') {
         inflight.reject(
@@ -238,11 +200,6 @@ export class TransformWorkerPool {
         inflight.reject(new Error(error.message));
       }
     }
-
-    this.inflight.delete(message.id);
-    slot.busy = false;
-    slot.currentTaskId = null;
-    slot.startTimeMs = 0;
 
     this.drainQueue();
   }
@@ -262,10 +219,7 @@ export class TransformWorkerPool {
     if (slot) {
       slot.busy = false;
       slot.currentTaskId = null;
-      slot.startTimeMs = 0;
     }
-
-    this.drainQueue();
   }
 
   async transform(
@@ -273,16 +227,16 @@ export class TransformWorkerPool {
     url: string,
     options: { includeMetadata: boolean; signal?: AbortSignal }
   ): Promise<MarkdownTransformResult> {
-    if (this.size <= 0) {
-      throw new Error('TransformWorkerPool is disabled');
+    if (this.closed) {
+      throw new Error('Transform worker pool closed');
     }
 
-    if (this.queueMax > 0 && this.queue.length >= this.queueMax) {
+    if (this.queue.length >= this.queueMax) {
       throw new Error('Transform worker queue is full');
     }
 
     return new Promise<MarkdownTransformResult>((resolve, reject) => {
-      const task: PendingTask = {
+      this.queue.push({
         id: randomUUID(),
         html,
         url,
@@ -290,9 +244,8 @@ export class TransformWorkerPool {
         signal: options.signal,
         resolve,
         reject,
-      };
+      });
 
-      this.queue.push(task);
       this.drainQueue();
     });
   }
@@ -311,13 +264,13 @@ export class TransformWorkerPool {
       const task = this.queue.shift();
       if (!task) return;
 
-      this.dispatchToWorker(workerIndex, slot, task);
+      this.dispatch(workerIndex, slot, task);
 
       if (this.queue.length === 0) return;
     }
   }
 
-  private dispatchToWorker(
+  private dispatch(
     workerIndex: number,
     slot: WorkerSlot,
     task: PendingTask
@@ -334,18 +287,8 @@ export class TransformWorkerPool {
 
     slot.busy = true;
     slot.currentTaskId = task.id;
-    slot.startTimeMs = Date.now();
-
-    publishWorkerEvent({
-      v: 1,
-      type: 'dispatch',
-      task: 'transform',
-      workerIndex,
-      id: task.id,
-    });
 
     const timer = setTimeout(() => {
-      // Don't reuse a possibly-stuck worker: terminate and respawn.
       try {
         slot.worker.postMessage({ type: 'cancel', id: task.id });
       } catch {
@@ -368,9 +311,11 @@ export class TransformWorkerPool {
         })
       );
 
-      void slot.worker.terminate();
-      this.workers[workerIndex] = this.spawnWorker(workerIndex);
-      this.drainQueue();
+      if (!this.closed) {
+        void slot.worker.terminate();
+        this.workers[workerIndex] = this.spawnWorker(workerIndex);
+        this.drainQueue();
+      }
     }, this.timeoutMs).unref();
 
     let abortListener: (() => void) | undefined;
@@ -404,6 +349,9 @@ export class TransformWorkerPool {
   }
 
   async close(): Promise<void> {
+    if (this.closed) return;
+    this.closed = true;
+
     const terminations = this.workers.map((slot) => slot.worker.terminate());
     this.workers.length = 0;
 
@@ -416,6 +364,9 @@ export class TransformWorkerPool {
       this.inflight.delete(id);
     }
 
+    for (const task of this.queue) {
+      task.reject(new Error('Transform worker pool closed'));
+    }
     this.queue.length = 0;
 
     await Promise.allSettled(terminations);

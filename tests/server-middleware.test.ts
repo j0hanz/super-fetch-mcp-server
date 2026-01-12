@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { attachBaseMiddleware } from '../dist/http/server.js';
+import { attachBaseMiddleware } from '../dist/http/base-middleware.js';
 
 type HeaderRequest = { headers?: Record<string, string> };
 type JsonResponder = { json: (payload: unknown) => void };

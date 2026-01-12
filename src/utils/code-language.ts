@@ -1,4 +1,4 @@
-export function containsJsxTag(code: string): boolean {
+function containsJsxTag(code: string): boolean {
   for (let index = 0; index < code.length - 1; index += 1) {
     if (code[index] !== '<') continue;
     const next = code[index + 1];
@@ -8,7 +8,7 @@ export function containsJsxTag(code: string): boolean {
   return false;
 }
 
-export function containsWord(source: string, word: string): boolean {
+function containsWord(source: string, word: string): boolean {
   let startIndex = source.indexOf(word);
   while (startIndex !== -1) {
     const before = startIndex === 0 ? '' : source[startIndex - 1];
@@ -20,13 +20,11 @@ export function containsWord(source: string, word: string): boolean {
   return false;
 }
 
-export function splitLines(content: string): string[] {
+function splitLines(content: string): string[] {
   return content.split('\n');
 }
 
-export function extractLanguageFromClassName(
-  className: string
-): string | undefined {
+function extractLanguageFromClassName(className: string): string | undefined {
   const tokens = className.match(/\S+/g);
   if (!tokens) return undefined;
   for (const token of tokens) {
@@ -40,7 +38,7 @@ export function extractLanguageFromClassName(
   return undefined;
 }
 
-export function resolveLanguageFromDataAttribute(
+function resolveLanguageFromDataAttribute(
   dataLang: string
 ): string | undefined {
   const trimmed = dataLang.trim();
@@ -120,7 +118,7 @@ function startsWithPackageManagerCommand(line: string): boolean {
   });
 }
 
-export interface CodeDetector {
+interface CodeDetector {
   language: string;
   detect: (code: string) => boolean;
 }

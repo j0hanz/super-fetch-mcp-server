@@ -15,7 +15,7 @@ interface CacheItem {
 const contentCache = new Map<string, CacheItem>();
 let cleanupController: AbortController | null = null;
 
-export interface CacheUpdateEvent {
+interface CacheUpdateEvent {
   cacheKey: string;
   namespace: string;
   urlHash: string;
