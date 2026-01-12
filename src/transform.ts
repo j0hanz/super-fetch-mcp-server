@@ -125,8 +125,8 @@ export function endTransformStage(
 ): void {
   if (!context) return;
 
-  const requestId = (getRequestId as unknown as () => string | undefined)();
-  const operationId = (getOperationId as unknown as () => string | undefined)();
+  const requestId = getRequestId();
+  const operationId = getOperationId();
 
   const event: TransformStageEvent = {
     v: 1,
@@ -153,9 +153,12 @@ function throwIfAborted(
   url: string,
   stage: string
 ): void {
-  if (!signal?.aborted) return;
+  if (!signal) return;
+  const { aborted } = signal;
+  if (!aborted) return;
 
-  if (isTimeoutReason((signal as unknown as { reason: unknown }).reason)) {
+  const { reason } = signal as unknown as { reason?: unknown };
+  if (isTimeoutReason(reason)) {
     throw new FetchError('Request timeout', url, 504, {
       reason: 'timeout',
       stage,

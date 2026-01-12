@@ -172,6 +172,10 @@ function handleCleanupError(error: unknown): void {
   if (isAbortError(error)) {
     return;
   }
+
+  logWarn('Rate limit cleanup loop failed', {
+    error: error instanceof Error ? error.message : 'Unknown error',
+  });
 }
 
 function shouldSkipRateLimit(req: Request, options: RateLimitConfig): boolean {

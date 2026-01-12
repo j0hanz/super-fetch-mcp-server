@@ -518,7 +518,7 @@ export function createToolErrorResponse(
   };
 
   return {
-    content: [{ type: 'text', text: JSON.stringify(structuredContent) }],
+    content: [buildTextBlock(structuredContent, true)],
     structuredContent,
     isError: true,
   };
