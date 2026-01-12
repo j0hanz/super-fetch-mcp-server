@@ -886,7 +886,7 @@ const DEFAULT_HEADERS: Record<string, string> = {
 };
 
 function buildHeaders(): Record<string, string> {
-  return DEFAULT_HEADERS;
+  return { ...DEFAULT_HEADERS };
 }
 
 function buildRequestSignal(

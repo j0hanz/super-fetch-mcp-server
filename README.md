@@ -2,7 +2,7 @@
 
 <img src="docs/logo.png" alt="SuperFetch MCP Logo" width="200">
 
-[![npm version](https://img.shields.io/npm/v/@j0hanz/superfetch.svg)](https://www.npmjs.com/package/@j0hanz/superfetch) [![Node.js](https://img.shields.io/badge/Node.js-%3E=20.12-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/) [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![npm version](https://img.shields.io/npm/v/@j0hanz/superfetch.svg)](https://www.npmjs.com/package/@j0hanz/superfetch) [![Node.js](https://img.shields.io/badge/Node.js-%3E=20.18.1-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/) [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 
 ## One-Click Install
 
@@ -511,13 +511,13 @@ Rate limiting applies to `/mcp` and `/mcp/downloads` (100 req/min per IP, 60s wi
 
 | Category           | Technology                        |
 | ------------------ | --------------------------------- |
-| Runtime            | Node.js >=20.12                   |
+| Runtime            | Node.js >=20.18.1                 |
 | Language           | TypeScript 5.9                    |
 | MCP SDK            | @modelcontextprotocol/sdk ^1.25.2 |
 | Content Extraction | @mozilla/readability ^0.6.0       |
 | HTML Parsing       | linkedom ^0.18.12                 |
-| Markdown           | Turndown ^7.2.2                   |
-| HTTP               | Express ^5.2.1, undici ^6.23.0    |
+| Markdown           | node-html-markdown ^2.0.0         |
+| HTTP               | Express ^5.2.1, undici ^7.18.2    |
 | Validation         | Zod ^4.3.5                        |
 
 ---

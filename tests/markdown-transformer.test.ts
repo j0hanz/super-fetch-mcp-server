@@ -33,6 +33,21 @@ describe('htmlToMarkdown noise filtering', () => {
     assert.ok(!markdown.includes('FIXED'));
     assert.ok(!markdown.includes('ZISO'));
   });
+
+  it('does not leak <head> content when HTML has no noise markers', () => {
+    const html = `
+      <!doctype html>
+      <html>
+        <head><title>SHOULD_NOT_APPEAR</title></head>
+        <body><p>Keep me</p></body>
+      </html>
+    `;
+
+    const markdown = htmlToMarkdown(html);
+
+    assert.ok(markdown.includes('Keep me'));
+    assert.ok(!markdown.includes('SHOULD_NOT_APPEAR'));
+  });
 });
 
 describe('htmlToMarkdown frontmatter', () => {
@@ -46,5 +61,31 @@ describe('htmlToMarkdown frontmatter', () => {
     assert.ok(markdown.startsWith('---'));
     assert.ok(markdown.includes('title: "hello:world"'));
     assert.ok(markdown.includes('source: "https://example.com/path?x=1"'));
+  });
+});
+
+describe('htmlToMarkdown code blocks', () => {
+  it('uses language from class name when available', () => {
+    const html = '<pre><code class="language-js">console.log(1)</code></pre>';
+    const markdown = htmlToMarkdown(html);
+
+    assert.ok(markdown.includes('```js'));
+    assert.ok(markdown.includes('console.log(1)'));
+  });
+
+  it('uses language from data-language when available', () => {
+    const html = '<pre><code data-language="bash">npm run build</code></pre>';
+    const markdown = htmlToMarkdown(html);
+
+    assert.ok(markdown.includes('```bash'));
+    assert.ok(markdown.includes('npm run build'));
+  });
+
+  it('falls back to language detection when no attributes are present', () => {
+    const html = '<pre><code>const x = 1;</code></pre>';
+    const markdown = htmlToMarkdown(html);
+
+    assert.ok(markdown.includes('```javascript'));
+    assert.ok(markdown.includes('const x = 1;'));
   });
 });

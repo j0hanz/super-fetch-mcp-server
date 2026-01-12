@@ -6,7 +6,7 @@
 - Runtime modes:
   - Stdio mode (`--stdio`): MCP over stdin/stdout.
   - HTTP mode (default): Express server exposing MCP endpoints and downloads.
-- Primary stack (from package.json): Node.js (>=20.12.0), TypeScript, `@modelcontextprotocol/sdk`, Express, `undici`, `@mozilla/readability`, `turndown`, `zod`.
+- Primary stack (from package.json): Node.js (>=20.18.1), TypeScript, `@modelcontextprotocol/sdk`, Express, `undici`, `@mozilla/readability`, `node-html-markdown`, `zod`.
 
 ## Repo Map / Structure
 
@@ -24,7 +24,7 @@
 
 ## Setup & Environment
 
-- Node.js: `>=20.12.0` (see `package.json#engines`).
+- Node.js: `>=20.18.1` (see `package.json#engines`).
 - Install dependencies:
   - `npm install` (local dev)
   - `npm ci` (CI/reproducible installs)

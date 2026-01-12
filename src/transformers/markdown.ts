@@ -1,4 +1,9 @@
-import TurndownService from 'turndown';
+import { parseHTML } from 'linkedom';
+import {
+  NodeHtmlMarkdown,
+  type TranslatorCollection,
+  type TranslatorConfigObject,
+} from 'node-html-markdown';
 
 import {
   CODE_BLOCK,
@@ -81,52 +86,6 @@ function isElement(node: unknown): node is HTMLElement {
   );
 }
 
-function isFencedCodeBlock(
-  node: TurndownService.Node,
-  options: TurndownService.Options
-): boolean {
-  return (
-    options.codeBlockStyle === 'fenced' &&
-    node.nodeName === 'PRE' &&
-    node.firstChild?.nodeName === 'CODE'
-  );
-}
-
-function formatFencedCodeBlock(node: TurndownService.Node): string {
-  const codeNode = node.firstChild;
-  if (!isElement(codeNode)) return '';
-
-  const code = codeNode.textContent || '';
-  const language = resolveCodeLanguage(codeNode, code);
-  return CODE_BLOCK.format(code, language);
-}
-
-function resolveCodeLanguage(codeNode: HTMLElement, code: string): string {
-  const { className, dataLanguage } = readCodeAttributes(codeNode);
-  const attributeLanguage = resolveLanguageFromAttributes(
-    className,
-    dataLanguage
-  );
-  return attributeLanguage ?? detectLanguageFromCode(code) ?? '';
-}
-
-function readCodeAttributes(codeNode: HTMLElement): {
-  className: string;
-  dataLanguage: string;
-} {
-  return {
-    className: codeNode.getAttribute('class') ?? '',
-    dataLanguage: codeNode.getAttribute('data-language') ?? '',
-  };
-}
-
-function addFencedCodeRule(instance: TurndownService): void {
-  instance.addRule('fencedCodeBlockWithLanguage', {
-    filter: (node, options) => isFencedCodeBlock(node, options),
-    replacement: (_content, node) => formatFencedCodeBlock(node),
-  });
-}
-
 const STRUCTURAL_TAGS = new Set([
   'script',
   'style',
@@ -156,6 +115,70 @@ const PROMO_PATTERN =
 const FIXED_PATTERN = /\b(fixed|sticky)\b/;
 const HIGH_Z_PATTERN = /\bz-(?:4\d|50)\b/;
 const ISOLATE_PATTERN = /\bisolate\b/;
+
+const HTML_DOCUMENT_MARKERS = /<\s*(?:!doctype|html|head|body)\b/i;
+const NOISE_MARKERS = [
+  '<script',
+  '<style',
+  '<noscript',
+  '<iframe',
+  '<nav',
+  '<footer',
+  '<aside',
+  '<header',
+  '<form',
+  '<button',
+  '<input',
+  '<select',
+  '<textarea',
+  '<svg',
+  '<canvas',
+  ' aria-hidden="true"',
+  " aria-hidden='true'",
+  ' hidden',
+  ' role="navigation"',
+  " role='navigation'",
+  ' role="banner"',
+  " role='banner'",
+  ' role="complementary"',
+  " role='complementary'",
+  ' role="contentinfo"',
+  " role='contentinfo'",
+  ' role="tree"',
+  " role='tree'",
+  ' role="menubar"',
+  " role='menubar'",
+  ' role="menu"',
+  " role='menu'",
+  ' banner',
+  ' promo',
+  ' announcement',
+  ' cta',
+  ' callout',
+  ' advert',
+  ' newsletter',
+  ' subscribe',
+  ' cookie',
+  ' consent',
+  ' popup',
+  ' modal',
+  ' overlay',
+  ' toast',
+  ' fixed',
+  ' sticky',
+  ' z-50',
+  ' z-4',
+  ' isolate',
+];
+
+function mayContainNoise(html: string): boolean {
+  const haystack = html.toLowerCase();
+  return NOISE_MARKERS.some((marker) => haystack.includes(marker));
+}
+
+function isFullDocumentHtml(html: string): boolean {
+  return HTML_DOCUMENT_MARKERS.test(html);
+}
 
 function isStructuralNoiseTag(tagName: string): boolean {
   return (
@@ -216,34 +239,147 @@ function isNoiseElement(node: HTMLElement): boolean {
   );
 }
 
-function isNoiseNode(node: TurndownService.Node): boolean {
-  return isElement(node) && isNoiseElement(node);
+function removeNoiseFromHtml(html: string): string {
+  const shouldParse = isFullDocumentHtml(html) || mayContainNoise(html);
+  if (!shouldParse) return html;
+
+  const shouldRemove = mayContainNoise(html);
+
+  try {
+    const { document } = parseHTML(html);
+
+    if (shouldRemove) {
+      const nodes = Array.from(document.querySelectorAll('*'));
+
+      for (let index = nodes.length - 1; index >= 0; index -= 1) {
+        const node = nodes[index];
+        if (!node) continue;
+        if (isElement(node) && isNoiseElement(node)) {
+          node.remove();
+        }
+      }
+    }
+
+    const { body } = document as unknown as { body?: { innerHTML?: string } };
+    if (body?.innerHTML) return body.innerHTML;
+
+    if (
+      typeof (document as unknown as { toString?: () => string }).toString ===
+      'function'
+    ) {
+      return (document as unknown as { toString: () => string }).toString();
+    }
+
+    const { documentElement } = document as unknown as {
+      documentElement?: { outerHTML?: string };
+    };
+    if (documentElement?.outerHTML) return documentElement.outerHTML;
+
+    return html;
+  } catch {
+    return html;
+  }
 }
 
-function addNoiseRule(instance: TurndownService): void {
-  instance.addRule('removeNoise', {
-    filter: (node) => isNoiseNode(node),
-    replacement: () => '',
-  });
+function buildInlineCode(content: string): string {
+  const runs = content.match(/`+/g);
+  const longest = runs?.sort((a, b) => b.length - a.length)[0] ?? '';
+  const delimiter = `\`${longest}`;
+  const padding = delimiter.length > 1 ? ' ' : '';
+  return `${delimiter}${padding}${content}${padding}${delimiter}`;
 }
 
-let turndownInstance: TurndownService | null = null;
-
-function createTurndownInstance(): TurndownService {
-  const instance = new TurndownService({
-    headingStyle: 'atx',
-    codeBlockStyle: 'fenced',
-    emDelimiter: '_',
-    bulletListMarker: '-',
-  });
-  addNoiseRule(instance);
-  addFencedCodeRule(instance);
-  return instance;
+function isCodeBlock(
+  parent: unknown
+): parent is { tagName?: string; childNodes?: unknown[] } {
+  if (!isRecord(parent)) return false;
+  const tagName =
+    typeof parent.tagName === 'string' ? parent.tagName.toUpperCase() : '';
+  return ['PRE', 'WRAPPED-PRE'].includes(tagName);
 }
 
-function getTurndown(): TurndownService {
-  turndownInstance ??= createTurndownInstance();
-  return turndownInstance;
+function createCodeTranslator(): TranslatorConfigObject {
+  return {
+    code: (ctx: unknown) => {
+      if (!isRecord(ctx)) {
+        return {
+          spaceIfRepeatingChar: true,
+          noEscape: true,
+          postprocess: ({ content }: { content: string }) =>
+            buildInlineCode(content),
+        };
+      }
+
+      const { node, parent, visitor } = ctx;
+      const getAttribute =
+        isRecord(node) && typeof node.getAttribute === 'function'
+          ? (node.getAttribute as (name: string) => string | null).bind(node)
+          : undefined;
+
+      if (!isCodeBlock(parent)) {
+        return {
+          spaceIfRepeatingChar: true,
+          noEscape: true,
+          postprocess: ({ content }: { content: string }) =>
+            buildInlineCode(content),
+        };
+      }
+
+      const className = getAttribute?.('class') ?? '';
+      const dataLanguage = getAttribute?.('data-language') ?? '';
+      const attributeLanguage = resolveLanguageFromAttributes(
+        className,
+        dataLanguage
+      );
+
+      const childTranslators = isRecord(visitor) ? visitor.instance : null;
+
+      const codeBlockTranslators =
+        isRecord(childTranslators) &&
+        isRecord(
+          (childTranslators as { codeBlockTranslators?: unknown })
+            .codeBlockTranslators
+        )
+          ? (
+              childTranslators as {
+                codeBlockTranslators: TranslatorCollection;
+              }
+            ).codeBlockTranslators
+          : null;
+
+      return {
+        noEscape: true,
+        preserveWhitespace: true,
+        ...(codeBlockTranslators
+          ? { childTranslators: codeBlockTranslators }
+          : null),
+        postprocess: ({ content }: { content: string }) => {
+          const language =
+            attributeLanguage ?? detectLanguageFromCode(content) ?? '';
+          return CODE_BLOCK.format(content, language);
+        },
+      };
+    },
+  };
+}
+
+let markdownInstance: NodeHtmlMarkdown | null = null;
+
+function createMarkdownInstance(): NodeHtmlMarkdown {
+  return new NodeHtmlMarkdown(
+    {
+      codeFence: CODE_BLOCK.fence,
+      codeBlockStyle: 'fenced',
+      emDelimiter: '_',
+      bulletMarker: '-',
+    },
+    createCodeTranslator()
+  );
+}
+
+function getMarkdownConverter(): NodeHtmlMarkdown {
+  markdownInstance ??= createMarkdownInstance();
+  return markdownInstance;
 }
 
 export function htmlToMarkdown(html: string, metadata?: MetadataBlock): string {
@@ -251,7 +387,8 @@ export function htmlToMarkdown(html: string, metadata?: MetadataBlock): string {
   if (!html) return frontmatter;
 
   try {
-    const content = getTurndown().turndown(html).trim();
+    const cleanedHtml = removeNoiseFromHtml(html);
+    const content = getMarkdownConverter().translate(cleanedHtml).trim();
     return frontmatter ? `${frontmatter}\n${content}` : content;
   } catch {
     return frontmatter;
