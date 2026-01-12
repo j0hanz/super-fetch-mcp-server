@@ -33,9 +33,14 @@ function validateHash(hash: string): boolean {
   return HASH_PATTERN.test(hash) && hash.length >= 8 && hash.length <= 64;
 }
 
+function isSingleParam(value: string | string[] | undefined): value is string {
+  return typeof value === 'string';
+}
+
 function parseDownloadParams(req: Request): DownloadParams | null {
   const { namespace, hash } = req.params;
 
+  if (!isSingleParam(namespace) || !isSingleParam(hash)) return null;
   if (!namespace || !hash) return null;
   if (!validateNamespace(namespace)) return null;
   if (!validateHash(hash)) return null;
