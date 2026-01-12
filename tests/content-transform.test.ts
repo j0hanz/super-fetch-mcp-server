@@ -96,4 +96,34 @@ describe('transformHtmlToMarkdown raw content detection', () => {
         error.message.includes('canceled')
     );
   });
+
+  it('rejects quickly when cancelled after starting', async () => {
+    const controller = new AbortController();
+
+    const html = `<html><body><div>${'x'.repeat(2_000_000)}</div></body></html>`;
+    const promise = transformHtmlToMarkdown(html, 'https://example.com', {
+      includeMetadata: false,
+      signal: controller.signal,
+    });
+
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    controller.abort();
+
+    const result = await Promise.race([
+      promise.then(
+        () => ({ type: 'resolved' as const }),
+        (error) => ({ type: 'rejected' as const, error })
+      ),
+      new Promise<{ type: 'timeout' }>((resolve) => {
+        setTimeout(() => resolve({ type: 'timeout' }), 250).unref();
+      }),
+    ]);
+
+    assert.notEqual(result.type, 'timeout');
+    assert.equal(result.type, 'rejected');
+    assert.ok(result.error instanceof FetchError);
+    assert.equal(result.error.statusCode, 499);
+  });
 });

@@ -1679,6 +1679,7 @@ interface PendingTask {
   url: string;
   includeMetadata: boolean;
   signal: AbortSignal | undefined;
+  abortListener: (() => void) | undefined;
   resolve: (result: MarkdownTransformResult) => void;
   reject: (error: unknown) => void;
 }
@@ -1876,17 +1877,80 @@ class WorkerPool implements TransformWorkerPool {
       throw new Error('Transform worker pool closed');
     }
 
+    if (options.signal?.aborted) {
+      throw new FetchError('Request was canceled', url, 499, {
+        reason: 'aborted',
+        stage: 'transform:enqueue',
+      });
+    }
+
     if (this.queue.length >= this.queueMax) {
       throw new Error('Transform worker queue is full');
     }
 
     return new Promise<MarkdownTransformResult>((resolve, reject) => {
+      const id = randomUUID();
+
+      let abortListener: (() => void) | undefined;
+      if (options.signal) {
+        abortListener = () => {
+          if (this.closed) {
+            reject(new Error('Transform worker pool closed'));
+            return;
+          }
+
+          const inflight = this.inflight.get(id);
+          if (inflight) {
+            const { workerIndex } = inflight;
+
+            const slot = this.workers[workerIndex];
+            if (slot) {
+              try {
+                slot.worker.postMessage({ type: 'cancel', id });
+              } catch {
+                // ignore
+              }
+            }
+
+            this.failTask(
+              id,
+              new FetchError('Request was canceled', url, 499, {
+                reason: 'aborted',
+                stage: 'transform:signal-abort',
+              })
+            );
+
+            if (slot) {
+              void slot.worker.terminate();
+              this.workers[workerIndex] = this.spawnWorker(workerIndex);
+              this.drainQueue();
+            }
+
+            return;
+          }
+
+          const queuedIndex = this.queue.findIndex((task) => task.id === id);
+          if (queuedIndex !== -1) {
+            this.queue.splice(queuedIndex, 1);
+            reject(
+              new FetchError('Request was canceled', url, 499, {
+                reason: 'aborted',
+                stage: 'transform:queued-abort',
+              })
+            );
+          }
+        };
+
+        options.signal.addEventListener('abort', abortListener, { once: true });
+      }
+
       this.queue.push({
-        id: randomUUID(),
+        id,
         html,
         url,
         includeMetadata: options.includeMetadata,
         signal: options.signal,
+        abortListener,
         resolve,
         reject,
       });
@@ -1921,6 +1985,9 @@ class WorkerPool implements TransformWorkerPool {
     task: PendingTask
   ): void {
     if (task.signal?.aborted) {
+      if (task.abortListener) {
+        task.signal.removeEventListener('abort', task.abortListener);
+      }
       task.reject(
         new FetchError('Request was canceled', task.url, 499, {
           reason: 'aborted',
@@ -1963,24 +2030,12 @@ class WorkerPool implements TransformWorkerPool {
       }
     }, this.timeoutMs).unref();
 
-    let abortListener: (() => void) | undefined;
-    if (task.signal) {
-      abortListener = () => {
-        try {
-          slot.worker.postMessage({ type: 'cancel', id: task.id });
-        } catch {
-          // ignore
-        }
-      };
-      task.signal.addEventListener('abort', abortListener, { once: true });
-    }
-
     this.inflight.set(task.id, {
       resolve: task.resolve,
       reject: task.reject,
       timer,
       signal: task.signal,
-      abortListener,
+      abortListener: task.abortListener,
       workerIndex,
     });
 
