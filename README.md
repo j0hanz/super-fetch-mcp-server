@@ -23,15 +23,15 @@ A [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server that f
 
 ## Features
 
-| Feature              | Description                                                                                                        |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| Smart extraction     | Mozilla Readability with quality gates to strip boilerplate when it improves results                               |
-| Clean Markdown       | Markdown output with optional YAML frontmatter (title, source, author, description, fetchedAt)                     |
-| Raw content handling | Preserves raw markdown/text, detects common text extensions, and rewrites GitHub/GitLab/Bitbucket/Gist URLs to raw |
-| Built-in caching     | In-memory cache with TTL, max keys, and resource subscriptions                                                     |
-| Resilient fetching   | Redirect handling with validation, timeouts, and response size limits                                              |
-| Security first       | URL validation plus SSRF/DNS/IP blocklists                                                                         |
-| HTTP mode            | Static token or OAuth auth, session management, rate limiting, host/origin validation                              |
+| Feature              | Description                                                                                                                                                |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Smart extraction     | Mozilla Readability with quality gates to strip boilerplate when it improves results                                                                       |
+| Clean Markdown       | Markdown output with YAML frontmatter (title, source, author, description, fetchedAt) for HTML; raw markdown is preserved and source is added when missing |
+| Raw content handling | Preserves raw markdown/text, detects common text extensions, and rewrites GitHub/GitLab/Bitbucket/Gist URLs to raw                                         |
+| Built-in caching     | In-memory cache with TTL, max keys, and resource subscriptions                                                                                             |
+| Resilient fetching   | Redirect handling with validation, timeouts, and response size limits                                                                                      |
+| Security first       | URL validation plus SSRF/DNS/IP blocklists                                                                                                                 |
+| HTTP mode            | Static token or OAuth auth, session management, rate limiting, host/origin validation                                                                      |
 
 ---
 
@@ -263,20 +263,20 @@ Sessions are managed via the `mcp-session-id` header (see [HTTP Mode Details](#h
 
 ### Tool Response Notes
 
-The tool returns `structuredContent` with `url`, optional `inputUrl`, optional `resolvedUrl`, optional `title`, and `markdown` when inline content is available. On errors, `error` is included instead of content.
+The tool returns `structuredContent` with `url`, `inputUrl`, `resolvedUrl`, optional `title`, and `markdown` when inline content is available. `resolvedUrl` may differ from `inputUrl` when the URL is rewritten to raw content (GitHub/GitLab/Bitbucket/Gist). On errors, `error` is included instead of content.
 
 The response includes:
 
 - a `text` block containing JSON of `structuredContent`
-- a `resource` block embedding markdown when inline content is available (always in stdio mode)
-- when content exceeds the inline limit and cache is enabled, a `resource_link` block pointing to `superfetch://cache/...` (inline markdown may be omitted)
+- a `resource` block embedding markdown when inline content is available (always for successful stdio responses)
+- when content exceeds the inline limit and cache is enabled, a `resource_link` block pointing to `superfetch://cache/...` (stdio mode still embeds full markdown; HTTP mode omits embedded markdown)
 - error responses set `isError: true` and return `structuredContent` with `error` and `url`
 
 ---
 
 ### `fetch-url`
 
-Fetches a webpage and converts it to clean Markdown format with optional frontmatter.
+Fetches a webpage and converts it to clean Markdown format with YAML frontmatter for HTML (raw markdown is preserved).
 
 | Parameter | Type   | Default  | Description  |
 | --------- | ------ | -------- | ------------ |
@@ -308,8 +308,8 @@ Fetches a webpage and converts it to clean Markdown format with optional frontma
 ### Large Content Handling
 
 - Inline markdown is capped at 20,000 characters (`maxInlineContentChars`).
-- **Stdio mode:** full markdown is embedded as a `resource` block.
-- **HTTP mode:** if content exceeds the inline limit and cache is enabled, the response includes a `resource_link` to `superfetch://cache/...` (no embedded markdown). If cache is disabled, the inline markdown is truncated with `...[truncated]`.
+- **Stdio mode:** full markdown is embedded as a `resource` block; if cache is enabled and content exceeds the inline limit, a `resource_link` is still included.
+- **HTTP mode:** if content exceeds the inline limit and cache is enabled, the response includes a `resource_link` to `superfetch://cache/...` and omits embedded markdown. If cache is disabled, the inline markdown is truncated with `...[truncated]`.
 - Upstream fetch size is capped at 10 MB of HTML; larger responses fail.
 
 ---
@@ -369,24 +369,26 @@ Set environment variables in your MCP client `env` or in the shell before starti
 
 ### Core Server Settings
 
-| Variable        | Default              | Description                                                   |
-| --------------- | -------------------- | ------------------------------------------------------------- |
-| `HOST`          | `127.0.0.1`          | HTTP bind address                                             |
-| `PORT`          | `3000`               | HTTP server port (1024-65535)                                 |
-| `USER_AGENT`    | `superFetch-MCP/2.0` | User-Agent header for outgoing requests                       |
-| `CACHE_ENABLED` | `true`               | Enable response caching                                       |
-| `CACHE_TTL`     | `3600`               | Cache TTL in seconds (60-86400)                               |
-| `LOG_LEVEL`     | `info`               | `debug`, `info`, `warn`, `error`                              |
-| `ALLOW_REMOTE`  | `false`              | Allow binding to non-loopback hosts (OAuth required)          |
-| `ALLOWED_HOSTS` | (empty)              | Additional allowed Host/Origin values (comma/space separated) |
+| Variable        | Default              | Description                                                                       |
+| --------------- | -------------------- | --------------------------------------------------------------------------------- |
+| `HOST`          | `127.0.0.1`          | HTTP bind address                                                                 |
+| `PORT`          | `3000`               | HTTP server port (1024-65535)                                                     |
+| `USER_AGENT`    | `superFetch-MCP/2.0` | User-Agent header for outgoing requests                                           |
+| `CACHE_ENABLED` | `true`               | Enable response caching                                                           |
+| `CACHE_TTL`     | `3600`               | Cache TTL in seconds (60-86400)                                                   |
+| `LOG_LEVEL`     | `info`               | Logging level. Only `debug` enables verbose logs; other values behave like `info` |
+| `ALLOW_REMOTE`  | `false`              | Allow binding to non-loopback hosts (OAuth required)                              |
+| `ALLOWED_HOSTS` | (empty)              | Additional allowed Host/Origin values (comma/space separated)                     |
+
+For HTTP server tuning (`SERVER_HEADERS_TIMEOUT_MS`, `SERVER_REQUEST_TIMEOUT_MS`, `SERVER_KEEP_ALIVE_TIMEOUT_MS`, `SERVER_SHUTDOWN_CLOSE_IDLE`, `SERVER_SHUTDOWN_CLOSE_ALL`), see `CONFIGURATION.md`.
 
 ### Auth (HTTP Mode)
 
-| Variable        | Default | Description                                                  |
-| --------------- | ------- | ------------------------------------------------------------ |
-| `AUTH_MODE`     | auto    | `static` or `oauth`. Auto-selects OAuth if any OAUTH URL set |
-| `ACCESS_TOKENS` | (empty) | Comma/space-separated static bearer tokens                   |
-| `API_KEY`       | (empty) | Adds a static bearer token and enables `X-API-Key` header    |
+| Variable        | Default | Description                                                                                                                              |
+| --------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `AUTH_MODE`     | auto    | `static` or `oauth`. Auto-selects OAuth if OAUTH_ISSUER_URL, OAUTH_AUTHORIZATION_URL, OAUTH_TOKEN_URL, or OAUTH_INTROSPECTION_URL is set |
+| `ACCESS_TOKENS` | (empty) | Comma/space-separated static bearer tokens                                                                                               |
+| `API_KEY`       | (empty) | Adds a static bearer token and enables `X-API-Key` header                                                                                |
 
 Static mode requires at least one token (`ACCESS_TOKENS` or `API_KEY`).
 
@@ -437,7 +439,7 @@ HTTP mode uses the MCP Streamable HTTP transport. The workflow is:
 2. The server returns `mcp-session-id` in the response headers.
 3. Use that header for subsequent `POST /mcp`, `GET /mcp`, and `DELETE /mcp` requests.
 
-If the `mcp-protocol-version` header is missing, the server defaults it to `2025-11-25`. Supported versions are `2025-11-25`.
+If the `mcp-protocol-version` header is missing, the server assumes `2025-03-26` and rejects the request because only `2025-11-25` is supported. Clients must send `mcp-protocol-version: 2025-11-25`.
 
 `GET /mcp` and `DELETE /mcp` require `mcp-session-id`. `POST /mcp` without an `initialize` request will return 400.
 

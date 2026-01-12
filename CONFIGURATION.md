@@ -29,21 +29,22 @@ SuperFetch runs with no configuration by default. Just run with `--stdio`:
 - Default bind is `127.0.0.1`. Non-loopback `HOST` values require `ALLOW_REMOTE=true`.
 - To bind to all interfaces, set `HOST=0.0.0.0` or `HOST=::`, set `ALLOW_REMOTE=true`, and configure OAuth (remote bindings require OAuth).
 - Authentication is always required via `Authorization: Bearer <token>` (static mode also accepts `X-API-Key`).
+- HTTP mode requires `mcp-protocol-version: 2025-11-25`. Missing headers are assumed to be `2025-03-26` and rejected as unsupported.
 
 ## Environment Variables
 
 ### Core Server Settings
 
-| Variable        | Default              | Description                                                   |
-| --------------- | -------------------- | ------------------------------------------------------------- |
-| `HOST`          | `127.0.0.1`          | HTTP server bind address                                      |
-| `PORT`          | `3000`               | HTTP server port (1024-65535)                                 |
-| `USER_AGENT`    | `superFetch-MCP/2.0` | User-Agent header for outgoing requests                       |
-| `CACHE_ENABLED` | `true`               | Enable response caching                                       |
-| `CACHE_TTL`     | `3600`               | Cache lifetime in seconds (60-86400)                          |
-| `LOG_LEVEL`     | `info`               | Logging verbosity: `debug`, `info`, `warn`, or `error`        |
-| `ALLOW_REMOTE`  | `false`              | Allow binding to non-loopback hosts (OAuth required)          |
-| `ALLOWED_HOSTS` | (empty)              | Additional allowed Host/Origin values (comma/space separated) |
+| Variable        | Default              | Description                                                                       |
+| --------------- | -------------------- | --------------------------------------------------------------------------------- |
+| `HOST`          | `127.0.0.1`          | HTTP server bind address                                                          |
+| `PORT`          | `3000`               | HTTP server port (1024-65535)                                                     |
+| `USER_AGENT`    | `superFetch-MCP/2.0` | User-Agent header for outgoing requests                                           |
+| `CACHE_ENABLED` | `true`               | Enable response caching                                                           |
+| `CACHE_TTL`     | `3600`               | Cache lifetime in seconds (60-86400)                                              |
+| `LOG_LEVEL`     | `info`               | Logging level. Only `debug` enables verbose logs; other values behave like `info` |
+| `ALLOW_REMOTE`  | `false`              | Allow binding to non-loopback hosts (OAuth required)                              |
+| `ALLOWED_HOSTS` | (empty)              | Additional allowed Host/Origin values (comma/space separated)                     |
 
 ### HTTP Server Tuning (HTTP Mode, Advanced)
 
@@ -61,11 +62,11 @@ These settings tune the underlying Node.js `http.Server` created by Express. All
 
 ### Auth (HTTP Mode)
 
-| Variable        | Default | Description                                                  |
-| --------------- | ------- | ------------------------------------------------------------ |
-| `AUTH_MODE`     | auto    | `static` or `oauth`. Auto-selects OAuth if any OAUTH URL set |
-| `ACCESS_TOKENS` | (empty) | Comma/space-separated static bearer tokens                   |
-| `API_KEY`       | (empty) | Adds a static bearer token and enables `X-API-Key` header    |
+| Variable        | Default | Description                                                                                                                              |
+| --------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `AUTH_MODE`     | auto    | `static` or `oauth`. Auto-selects OAuth if OAUTH_ISSUER_URL, OAUTH_AUTHORIZATION_URL, OAUTH_TOKEN_URL, or OAUTH_INTROSPECTION_URL is set |
+| `ACCESS_TOKENS` | (empty) | Comma/space-separated static bearer tokens                                                                                               |
+| `API_KEY`       | (empty) | Adds a static bearer token and enables `X-API-Key` header                                                                                |
 
 Static mode requires at least one token (`ACCESS_TOKENS` or `API_KEY`).
 
