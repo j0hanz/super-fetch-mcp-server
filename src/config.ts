@@ -268,7 +268,10 @@ const METADATA_V4_AWS = buildIpv4([169, 254, 169, 254]);
 const METADATA_V4_AZURE = buildIpv4([100, 100, 100, 200]);
 
 const host = process.env.HOST ?? LOOPBACK_V4;
-const port = parseInteger(process.env.PORT, 3000, 1024, 65535);
+const port =
+  process.env.PORT?.trim() === '0'
+    ? 0
+    : parseInteger(process.env.PORT, 3000, 1024, 65535);
 const baseUrl = new URL(`http://${formatHostForUrl(host)}:${port}`);
 
 const allowRemote = parseBoolean(process.env.ALLOW_REMOTE, false);

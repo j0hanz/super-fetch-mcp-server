@@ -146,4 +146,40 @@ describe('http server tuning helpers', () => {
     const payload = JSON.parse(result.stdout) as { allCalls: number };
     assert.equal(payload.allCalls, 1);
   });
+
+  it('startHttpServer starts and stops without connecting', async () => {
+    const script = `
+      import { startHttpServer } from './dist/http.js';
+
+      const server = await startHttpServer({ registerSignalHandlers: false });
+      await server.stop();
+      console.log('__RESULT__' + JSON.stringify({ host: server.host, port: server.port, url: server.url }));
+    `;
+
+    const result = runIsolatedNode(script, {
+      HOST: '127.0.0.1',
+      PORT: '0',
+      ACCESS_TOKENS: 'test-token',
+      ALLOW_REMOTE: 'false',
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    const markerIndex = result.stdout.lastIndexOf('__RESULT__');
+    assert.ok(
+      markerIndex >= 0,
+      `Missing result marker. stdout: ${result.stdout}`
+    );
+    const payload = JSON.parse(
+      result.stdout.slice(markerIndex + '__RESULT__'.length)
+    ) as {
+      host: string;
+      port: number;
+      url: string;
+    };
+
+    assert.equal(payload.host, '127.0.0.1');
+    assert.equal(typeof payload.port, 'number');
+    assert.ok(payload.port > 0);
+    assert.ok(payload.url.startsWith('http://127.0.0.1:'));
+  });
 });

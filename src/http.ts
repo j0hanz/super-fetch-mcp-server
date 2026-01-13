@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { once } from 'node:events';
 import { isIP } from 'node:net';
 import { setInterval as setIntervalPromise } from 'node:timers/promises';
 
@@ -386,23 +387,54 @@ function registerSignalHandlers(
 }
 
 function startListening(app: Express): ReturnType<Express['listen']> {
-  return app
-    .listen(config.server.port, config.server.host, () => {
-      logInfo('superFetch MCP server started', {
-        host: config.server.host,
-        port: config.server.port,
-      });
+  const formatHostForUrl = (hostname: string): string => {
+    if (hostname.includes(':') && !hostname.startsWith('[')) {
+      return `[${hostname}]`;
+    }
+    return hostname;
+  };
 
-      const baseUrl = `http://${config.server.host}:${config.server.port}`;
-      logInfo(
-        `superFetch MCP server running at ${baseUrl} (health: ${baseUrl}/health, mcp: ${baseUrl}/mcp)`
-      );
-      logInfo('Run with --stdio flag for direct stdio integration');
-    })
-    .on('error', (err) => {
-      logError('Failed to start server', err);
-      process.exit(1);
+  const server = app.listen(config.server.port, config.server.host, () => {
+    const address = server.address();
+    const resolvedPort =
+      typeof address === 'object' && address
+        ? address.port
+        : config.server.port;
+
+    logInfo('superFetch MCP server started', {
+      host: config.server.host,
+      port: resolvedPort,
     });
+
+    const baseUrl = `http://${formatHostForUrl(config.server.host)}:${resolvedPort}`;
+    logInfo(
+      `superFetch MCP server running at ${baseUrl} (health: ${baseUrl}/health, mcp: ${baseUrl}/mcp)`
+    );
+    logInfo('Run with --stdio flag for direct stdio integration');
+  });
+
+  server.on('error', (err) => {
+    logError('Failed to start server', err);
+    process.exit(1);
+  });
+
+  return server;
+}
+
+async function stopServerWithoutExit(
+  server: ReturnType<Express['listen']>,
+  sessionStore: SessionStore,
+  sessionCleanupController: AbortController,
+  stopRateLimitCleanup: () => void
+): Promise<void> {
+  stopRateLimitCleanup();
+  sessionCleanupController.abort();
+  await closeSessions(sessionStore);
+  await new Promise<void>((resolve) => {
+    server.close(() => {
+      resolve();
+    });
+  });
 }
 
 function buildMiddleware(): {
@@ -512,22 +544,56 @@ function attachSessionRoutes(
   return { sessionStore, sessionCleanupController };
 }
 
-export async function startHttpServer(): Promise<{
+export async function startHttpServer(options?: {
+  registerSignalHandlers?: boolean;
+}): Promise<{
   shutdown: (signal: string) => Promise<void>;
+  stop: () => Promise<void>;
+  url: string;
+  host: string;
+  port: number;
 }> {
   enableHttpMode();
   const { app, sessionStore, sessionCleanupController, stopRateLimitCleanup } =
     await buildServerContext();
   const server = startListening(app);
   applyHttpServerTuning(server);
+
+  if (!server.listening) {
+    await once(server, 'listening');
+  }
+
+  const address = server.address();
+  const resolvedPort =
+    typeof address === 'object' && address ? address.port : config.server.port;
+  const { host } = config.server;
+  const formattedHost =
+    host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
+  const url = `http://${formattedHost}:${resolvedPort}`;
+
   const shutdown = createShutdownHandler(
     server,
     sessionStore,
     sessionCleanupController,
     stopRateLimitCleanup
   );
-  registerSignalHandlers(shutdown);
-  return { shutdown };
+
+  const stop = async (): Promise<void> => {
+    await stopServerWithoutExit(
+      server,
+      sessionStore,
+      sessionCleanupController,
+      stopRateLimitCleanup
+    );
+  };
+
+  const shouldRegisterSignalHandlers =
+    options?.registerSignalHandlers !== false;
+  if (shouldRegisterSignalHandlers) {
+    registerSignalHandlers(shutdown);
+  }
+
+  return { shutdown, stop, url, host, port: resolvedPort };
 }
 
 async function createExpressApp(): Promise<{

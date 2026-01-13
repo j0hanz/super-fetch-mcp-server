@@ -1951,6 +1951,36 @@ class WorkerPool implements TransformWorkerPool {
   private readonly queueMax: number;
   private closed = false;
 
+  private clearAbortListener(
+    signal: AbortSignal | undefined,
+    listener: (() => void) | undefined
+  ): void {
+    if (!signal || !listener) return;
+    try {
+      signal.removeEventListener('abort', listener);
+    } catch {
+      // ignore
+    }
+  }
+
+  private markSlotIdle(workerIndex: number): void {
+    const slot = this.workers[workerIndex];
+    if (!slot) return;
+    slot.busy = false;
+    slot.currentTaskId = null;
+  }
+
+  private takeInflight(id: string): InflightTask | null {
+    const inflight = this.inflight.get(id);
+    if (!inflight) return null;
+
+    clearTimeout(inflight.timer);
+    this.clearAbortListener(inflight.signal, inflight.abortListener);
+    this.inflight.delete(id);
+
+    return inflight;
+  }
+
   constructor(size: number, timeoutMs: number) {
     const safeSize = Math.max(1, size);
     this.timeoutMs = timeoutMs;
@@ -2016,20 +2046,10 @@ class WorkerPool implements TransformWorkerPool {
     if (!parsed.success) return;
 
     const message = parsed.data;
-    const inflight = this.inflight.get(message.id);
+    const inflight = this.takeInflight(message.id);
     if (!inflight) return;
 
-    clearTimeout(inflight.timer);
-    if (inflight.signal && inflight.abortListener) {
-      inflight.signal.removeEventListener('abort', inflight.abortListener);
-    }
-    this.inflight.delete(message.id);
-
-    const slot = this.workers[workerIndex];
-    if (slot) {
-      slot.busy = false;
-      slot.currentTaskId = null;
-    }
+    this.markSlotIdle(workerIndex);
 
     if (message.type === 'result') {
       inflight.resolve({
@@ -2057,21 +2077,11 @@ class WorkerPool implements TransformWorkerPool {
   }
 
   private failTask(id: string, error: unknown): void {
-    const inflight = this.inflight.get(id);
+    const inflight = this.takeInflight(id);
     if (!inflight) return;
 
-    clearTimeout(inflight.timer);
-    if (inflight.signal && inflight.abortListener) {
-      inflight.signal.removeEventListener('abort', inflight.abortListener);
-    }
-    this.inflight.delete(id);
     inflight.reject(error);
-
-    const slot = this.workers[inflight.workerIndex];
-    if (slot) {
-      slot.busy = false;
-      slot.currentTaskId = null;
-    }
+    this.markSlotIdle(inflight.workerIndex);
   }
 
   async transform(
@@ -2194,9 +2204,7 @@ class WorkerPool implements TransformWorkerPool {
     task: PendingTask
   ): void {
     if (task.signal?.aborted) {
-      if (task.abortListener) {
-        task.signal.removeEventListener('abort', task.abortListener);
-      }
+      this.clearAbortListener(task.signal, task.abortListener);
       task.reject(
         new FetchError('Request was canceled', task.url, 499, {
           reason: 'aborted',
@@ -2216,14 +2224,8 @@ class WorkerPool implements TransformWorkerPool {
         // ignore
       }
 
-      const inflight = this.inflight.get(task.id);
+      const inflight = this.takeInflight(task.id);
       if (!inflight) return;
-
-      clearTimeout(inflight.timer);
-      if (inflight.signal && inflight.abortListener) {
-        inflight.signal.removeEventListener('abort', inflight.abortListener);
-      }
-      this.inflight.delete(task.id);
 
       inflight.reject(
         new FetchError('Request timeout', task.url, 504, {
@@ -2258,9 +2260,7 @@ class WorkerPool implements TransformWorkerPool {
       });
     } catch (error: unknown) {
       clearTimeout(timer);
-      if (task.signal && task.abortListener) {
-        task.signal.removeEventListener('abort', task.abortListener);
-      }
+      this.clearAbortListener(task.signal, task.abortListener);
       this.inflight.delete(task.id);
       slot.busy = false;
       slot.currentTaskId = null;
@@ -2288,9 +2288,7 @@ class WorkerPool implements TransformWorkerPool {
 
     for (const [id, inflight] of this.inflight.entries()) {
       clearTimeout(inflight.timer);
-      if (inflight.signal && inflight.abortListener) {
-        inflight.signal.removeEventListener('abort', inflight.abortListener);
-      }
+      this.clearAbortListener(inflight.signal, inflight.abortListener);
       inflight.reject(new Error('Transform worker pool closed'));
       this.inflight.delete(id);
     }
