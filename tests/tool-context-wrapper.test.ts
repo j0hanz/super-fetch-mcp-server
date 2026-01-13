@@ -16,6 +16,17 @@ describe('withRequestContextIfMissing', () => {
     assert.equal(getRequestId(), undefined);
   });
 
+  it('uses the MCP requestId when provided via handler extra', async () => {
+    const wrapped = withRequestContextIfMissing(async (_params: unknown) => {
+      return getRequestId();
+    });
+
+    assert.equal(getRequestId(), undefined);
+    const requestId = await wrapped({}, { requestId: 'mcp-request-123' });
+    assert.equal(requestId, 'mcp-request-123');
+    assert.equal(getRequestId(), undefined);
+  });
+
   it('preserves an existing request context', async () => {
     const wrapped = withRequestContextIfMissing(async (_params: unknown) => {
       return getRequestId();

@@ -10,6 +10,7 @@ import {
   type TranslatorCollection,
   type TranslatorConfigObject,
 } from 'node-html-markdown';
+import { z } from 'zod';
 
 import { Readability } from '@mozilla/readability';
 
@@ -1084,6 +1085,18 @@ function isCodeBlock(
   return ['PRE', 'WRAPPED-PRE'].includes(tagName);
 }
 
+function hasGetAttribute(
+  value: unknown
+): value is { getAttribute: (name: string) => string | null } {
+  return isRecord(value) && typeof value.getAttribute === 'function';
+}
+
+function hasCodeBlockTranslators(
+  value: unknown
+): value is { codeBlockTranslators: TranslatorCollection } {
+  return isRecord(value) && isRecord(value.codeBlockTranslators);
+}
+
 function createCodeTranslator(): TranslatorConfigObject {
   return {
     code: (ctx: unknown) => {
@@ -1097,10 +1110,9 @@ function createCodeTranslator(): TranslatorConfigObject {
       }
 
       const { node, parent, visitor } = ctx;
-      const getAttribute =
-        isRecord(node) && typeof node.getAttribute === 'function'
-          ? (node.getAttribute as (name: string) => string | null).bind(node)
-          : undefined;
+      const getAttribute = hasGetAttribute(node)
+        ? node.getAttribute.bind(node)
+        : undefined;
 
       if (!isCodeBlock(parent)) {
         return {
@@ -1120,18 +1132,9 @@ function createCodeTranslator(): TranslatorConfigObject {
 
       const childTranslators = isRecord(visitor) ? visitor.instance : null;
 
-      const codeBlockTranslators =
-        isRecord(childTranslators) &&
-        isRecord(
-          (childTranslators as { codeBlockTranslators?: unknown })
-            .codeBlockTranslators
-        )
-          ? (
-              childTranslators as {
-                codeBlockTranslators: TranslatorCollection;
-              }
-            ).codeBlockTranslators
-          : null;
+      const codeBlockTranslators = hasCodeBlockTranslators(childTranslators)
+        ? childTranslators.codeBlockTranslators
+        : null;
 
       return {
         noEscape: true,
@@ -1683,25 +1686,28 @@ export function transformHtmlToMarkdownInProcess(
   }
 }
 
-interface WorkerResultMessage {
-  type: 'result';
-  id: string;
-  result: MarkdownTransformResult;
-}
-
-interface WorkerErrorMessage {
-  type: 'error';
-  id: string;
-  error: {
-    name: string;
-    message: string;
-    url: string;
-    statusCode?: number;
-    details?: Record<string, unknown>;
-  };
-}
-
-type WorkerMessage = WorkerResultMessage | WorkerErrorMessage;
+const workerMessageSchema = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('result'),
+    id: z.string(),
+    result: z.object({
+      markdown: z.string(),
+      title: z.string().optional(),
+      truncated: z.boolean(),
+    }),
+  }),
+  z.object({
+    type: z.literal('error'),
+    id: z.string(),
+    error: z.object({
+      name: z.string(),
+      message: z.string(),
+      url: z.string(),
+      statusCode: z.number().optional(),
+      details: z.record(z.string(), z.unknown()).optional(),
+    }),
+  }),
+]);
 
 interface PendingTask {
   id: string;
@@ -1832,18 +1838,10 @@ class WorkerPool implements TransformWorkerPool {
   }
 
   private onWorkerMessage(workerIndex: number, raw: unknown): void {
-    if (
-      !raw ||
-      typeof raw !== 'object' ||
-      !('type' in raw) ||
-      !('id' in raw) ||
-      typeof (raw as { id: unknown }).id !== 'string' ||
-      typeof (raw as { type: unknown }).type !== 'string'
-    ) {
-      return;
-    }
+    const parsed = workerMessageSchema.safeParse(raw);
+    if (!parsed.success) return;
 
-    const message = raw as WorkerMessage;
+    const message = parsed.data;
     const inflight = this.inflight.get(message.id);
     if (!inflight) return;
 
@@ -1860,7 +1858,11 @@ class WorkerPool implements TransformWorkerPool {
     }
 
     if (message.type === 'result') {
-      inflight.resolve(message.result);
+      inflight.resolve({
+        markdown: message.result.markdown,
+        truncated: message.result.truncated,
+        title: message.result.title,
+      });
     } else {
       const { error } = message;
       if (error.name === 'FetchError') {
@@ -2069,13 +2071,35 @@ class WorkerPool implements TransformWorkerPool {
       workerIndex,
     });
 
-    slot.worker.postMessage({
-      type: 'transform',
-      id: task.id,
-      html: task.html,
-      url: task.url,
-      includeMetadata: task.includeMetadata,
-    });
+    try {
+      slot.worker.postMessage({
+        type: 'transform',
+        id: task.id,
+        html: task.html,
+        url: task.url,
+        includeMetadata: task.includeMetadata,
+      });
+    } catch (error: unknown) {
+      clearTimeout(timer);
+      if (task.signal && task.abortListener) {
+        task.signal.removeEventListener('abort', task.abortListener);
+      }
+      this.inflight.delete(task.id);
+      slot.busy = false;
+      slot.currentTaskId = null;
+
+      const message =
+        error instanceof Error
+          ? error
+          : new Error('Failed to dispatch transform worker message');
+      task.reject(message);
+
+      if (!this.closed) {
+        void slot.worker.terminate();
+        this.workers[workerIndex] = this.spawnWorker(workerIndex);
+        this.drainQueue();
+      }
+    }
   }
 
   async close(): Promise<void> {

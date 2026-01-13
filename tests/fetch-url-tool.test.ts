@@ -52,4 +52,42 @@ describe('fetchUrlToolHandler', () => {
       }
     );
   });
+
+  it('respects cancellation via the MCP request abort signal', async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    await withMockedFetch(
+      async (_url, init) => {
+        const signal = init?.signal as unknown;
+        if (
+          typeof signal === 'object' &&
+          signal !== null &&
+          'aborted' in signal &&
+          (signal as { aborted?: unknown }).aborted === true
+        ) {
+          const err = new Error('This operation was aborted');
+          err.name = 'AbortError';
+          throw err;
+        }
+        return new Response('<html><body>ok</body></html>', {
+          status: 200,
+          headers: { 'content-type': 'text/html' },
+        });
+      },
+      async () => {
+        const url = 'https://example.com/cancelled-test';
+        const response = await fetchUrlToolHandler(
+          { url },
+          { signal: controller.signal }
+        );
+
+        assert.equal(response.isError, true);
+        const structured = response.structuredContent;
+        assert.ok(structured);
+        assert.equal(structured.url, url);
+        assert.match(String(structured.error), /cancel|abort/i);
+      }
+    );
+  });
 });

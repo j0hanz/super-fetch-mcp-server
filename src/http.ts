@@ -1277,12 +1277,14 @@ interface McpSessionOptions {
   readonly maxSessions: number;
 }
 
+type JsonRpcId = string | number | null;
+
 function sendJsonRpcError(
   res: Response,
   code: number,
   message: string,
   status = 400,
-  id: string | number | null = null
+  id: JsonRpcId = null
 ): void {
   res.status(status).json({
     jsonrpc: '2.0',
@@ -1530,6 +1532,21 @@ type CloseHandler = (() => void) | undefined;
 type ErrorHandler = ((error: Error) => void) | undefined;
 type MessageHandler = Transport['onmessage'];
 
+export function composeCloseHandlers(
+  first: CloseHandler,
+  second: CloseHandler
+): CloseHandler {
+  if (!first) return second;
+  if (!second) return first;
+  return () => {
+    try {
+      first();
+    } finally {
+      second();
+    }
+  };
+}
+
 function createOnCloseDescriptor(
   transport: StreamableHTTPServerTransport
 ): PropertyDescriptor {
@@ -1640,8 +1657,15 @@ async function connectTransportOrThrow({
 }): Promise<void> {
   const mcpServer = createMcpServer();
   const transportAdapter = createTransportAdapter(transport);
+  const oncloseBeforeConnect = transport.onclose;
   try {
     await mcpServer.connect(transportAdapter);
+    if (oncloseBeforeConnect && transport.onclose !== oncloseBeforeConnect) {
+      transport.onclose = composeCloseHandlers(
+        transport.onclose,
+        oncloseBeforeConnect
+      );
+    }
   } catch (error) {
     clearInitTimeout();
     releaseSlot();
@@ -1748,10 +1772,11 @@ function finalizeSession({
     createdAt: now,
     lastSeen: now,
   });
-  transport.onclose = () => {
+  const previousOnClose = transport.onclose;
+  transport.onclose = composeCloseHandlers(previousOnClose, () => {
     store.remove(sessionId);
     logInfo('Session closed');
-  };
+  });
   logInfo('Session initialized');
 }
 
@@ -1956,13 +1981,13 @@ async function handleTransportRequest(
       'MCP request handling failed',
       error instanceof Error ? error : undefined
     );
-    handleTransportError(res);
+    handleTransportError(res, body?.id ?? null);
   }
 }
 
-function handleTransportError(res: Response): void {
+function handleTransportError(res: Response, id: string | number | null): void {
   if (res.headersSent) return;
-  res.status(500).json({ error: 'Internal Server Error' });
+  sendJsonRpcError(res, -32603, 'Internal error', 500, id);
 }
 
 function dispatchTransportRequest(

@@ -98,6 +98,11 @@ export interface PipelineResult<T> {
   cacheKey?: string | null;
 }
 
+export interface ToolHandlerExtra {
+  signal?: AbortSignal;
+  requestId?: string | number;
+}
+
 const TRUNCATION_MARKER = '...[truncated]';
 
 const fetchUrlInputSchema = z.strictObject({
@@ -472,6 +477,7 @@ function applyOptionalPipelineSerialization<T extends { content: string }>(
 
 interface SharedFetchOptions<T extends { content: string }> {
   readonly url: string;
+  readonly signal?: AbortSignal;
   readonly transform: (html: string, normalizedUrl: string) => T | Promise<T>;
   readonly serialize?: (result: T) => string;
   readonly deserialize?: (cached: string) => T | undefined;
@@ -493,6 +499,7 @@ export async function performSharedFetch<T extends { content: string }>(
   const pipelineOptions: FetchPipelineOptions<T> = {
     url: options.url,
     cacheNamespace: 'markdown',
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
     transform: options.transform,
   };
 
@@ -621,9 +628,14 @@ function deserializeMarkdownResult(
 }
 
 function buildMarkdownTransform() {
-  return async (html: string, url: string): Promise<MarkdownPipelineResult> => {
+  return async (
+    html: string,
+    url: string,
+    signal?: AbortSignal
+  ): Promise<MarkdownPipelineResult> => {
     const result = await transformHtmlToMarkdown(html, url, {
       includeMetadata: true,
+      ...(signal === undefined ? {} : { signal }),
     });
     return { ...result, content: result.markdown };
   };
@@ -672,13 +684,18 @@ function logFetchStart(url: string): void {
   logDebug('Fetching URL', { url });
 }
 
-async function fetchPipeline(url: string): Promise<{
+async function fetchPipeline(
+  url: string,
+  signal?: AbortSignal
+): Promise<{
   pipeline: PipelineResult<MarkdownPipelineResult>;
   inlineResult: InlineResult;
 }> {
   return performSharedFetch<MarkdownPipelineResult>({
     url,
-    transform: buildMarkdownTransform(),
+    ...(signal === undefined ? {} : { signal }),
+    transform: (html, normalizedUrl) =>
+      buildMarkdownTransform()(html, normalizedUrl, signal),
     serialize: serializeMarkdownResult,
     deserialize: deserializeMarkdownResult,
   });
@@ -706,7 +723,10 @@ function buildResponse(
   };
 }
 
-async function executeFetch(input: FetchUrlInput): Promise<ToolResponseBase> {
+async function executeFetch(
+  input: FetchUrlInput,
+  extra?: ToolHandlerExtra
+): Promise<ToolResponseBase> {
   const { url } = input;
   if (!url) {
     return createToolErrorResponse('URL is required', '');
@@ -714,7 +734,7 @@ async function executeFetch(input: FetchUrlInput): Promise<ToolResponseBase> {
 
   logFetchStart(url);
 
-  const { pipeline, inlineResult } = await fetchPipeline(url);
+  const { pipeline, inlineResult } = await fetchPipeline(url, extra?.signal);
 
   if (inlineResult.error) {
     return createToolErrorResponse(inlineResult.error, url);
@@ -724,9 +744,10 @@ async function executeFetch(input: FetchUrlInput): Promise<ToolResponseBase> {
 }
 
 export async function fetchUrlToolHandler(
-  input: FetchUrlInput
+  input: FetchUrlInput,
+  extra?: ToolHandlerExtra
 ): Promise<ToolResponseBase> {
-  return executeFetch(input).catch((error: unknown) => {
+  return executeFetch(input, extra).catch((error: unknown) => {
     logError(
       'fetch-url tool error',
       error instanceof Error ? error : undefined
@@ -750,20 +771,29 @@ const TOOL_DEFINITION = {
   } satisfies ToolAnnotations,
 };
 
-export function withRequestContextIfMissing<TParams, TResult>(
-  handler: (params: TParams) => Promise<TResult>
-): (params: TParams) => Promise<TResult> {
-  return async (params) => {
+export function withRequestContextIfMissing<TParams, TResult, TExtra = unknown>(
+  handler: (params: TParams, extra?: TExtra) => Promise<TResult>
+): (params: TParams, extra?: TExtra) => Promise<TResult> {
+  return async (params, extra) => {
     const existingRequestId = getRequestId();
     if (existingRequestId) {
-      return handler(params);
+      return handler(params, extra);
     }
 
-    const requestId = randomUUID();
-    return runWithRequestContext({ requestId, operationId: requestId }, () =>
-      handler(params)
+    const derivedRequestId = resolveRequestIdFromExtra(extra) ?? randomUUID();
+    return runWithRequestContext(
+      { requestId: derivedRequestId, operationId: derivedRequestId },
+      () => handler(params, extra)
     );
   };
+}
+
+function resolveRequestIdFromExtra(extra: unknown): string | undefined {
+  if (!isRecord(extra)) return undefined;
+  const { requestId } = extra;
+  if (typeof requestId === 'string') return requestId;
+  if (typeof requestId === 'number') return String(requestId);
+  return undefined;
 }
 
 export function registerTools(server: McpServer): void {
