@@ -100,6 +100,14 @@ describe('isBlockedIp', () => {
     assert.equal(isBlockedIp('::1'), true);
   });
 
+  it('blocks IPv4-mapped IPv6 addresses (::ffff:10.x.x.x)', () => {
+    assert.equal(isBlockedIp('::ffff:10.0.0.1'), true);
+  });
+
+  it('blocks IPv4-mapped IPv6 addresses (::ffff:192.168.x.x)', () => {
+    assert.equal(isBlockedIp('::ffff:192.168.1.1'), true);
+  });
+
   it('allows public IPs', () => {
     assert.equal(isBlockedIp('8.8.8.8'), false);
   });

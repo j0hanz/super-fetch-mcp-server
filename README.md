@@ -444,16 +444,17 @@ Set environment variables in your MCP client `env` or in the shell before starti
 
 ### Core Server Settings
 
-| Variable        | Default              | Description                                                                       |
-| --------------- | -------------------- | --------------------------------------------------------------------------------- |
-| `HOST`          | `127.0.0.1`          | HTTP bind address                                                                 |
-| `PORT`          | `3000`               | HTTP server port (1024-65535)                                                     |
-| `USER_AGENT`    | `superFetch-MCP/2.0` | User-Agent header for outgoing requests                                           |
-| `CACHE_ENABLED` | `true`               | Enable response caching                                                           |
-| `CACHE_TTL`     | `3600`               | Cache TTL in seconds (60-86400)                                                   |
-| `LOG_LEVEL`     | `info`               | Logging level. Only `debug` enables verbose logs; other values behave like `info` |
-| `ALLOW_REMOTE`  | `false`              | Allow binding to non-loopback hosts (OAuth required)                              |
-| `ALLOWED_HOSTS` | (empty)              | Additional allowed Host/Origin values (comma/space separated)                     |
+| Variable               | Default              | Description                                                                       |
+| ---------------------- | -------------------- | --------------------------------------------------------------------------------- |
+| `HOST`                 | `127.0.0.1`          | HTTP bind address                                                                 |
+| `PORT`                 | `3000`               | HTTP server port (1024-65535)                                                     |
+| `USER_AGENT`           | `superFetch-MCP/2.0` | User-Agent header for outgoing requests                                           |
+| `CACHE_ENABLED`        | `true`               | Enable response caching                                                           |
+| `CACHE_TTL`            | `3600`               | Cache TTL in seconds (60-86400)                                                   |
+| `LOG_LEVEL`            | `info`               | Logging level. Only `debug` enables verbose logs; other values behave like `info` |
+| `ALLOW_REMOTE`         | `false`              | Allow binding to non-loopback hosts (OAuth required)                              |
+| `ALLOWED_HOSTS`        | (empty)              | Additional allowed Host/Origin values (comma/space separated)                     |
+| `TRANSFORM_TIMEOUT_MS` | `30000`              | Worker transform timeout in milliseconds (5000-120000)                            |
 
 For HTTP server tuning (`SERVER_HEADERS_TIMEOUT_MS`, `SERVER_REQUEST_TIMEOUT_MS`, `SERVER_KEEP_ALIVE_TIMEOUT_MS`, `SERVER_SHUTDOWN_CLOSE_IDLE`, `SERVER_SHUTDOWN_CLOSE_ALL`), see `CONFIGURATION.md`.
 

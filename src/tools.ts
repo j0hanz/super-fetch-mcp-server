@@ -17,6 +17,7 @@ import {
   getRequestId,
   logDebug,
   logError,
+  logWarn,
   runWithRequestContext,
 } from './observability.js';
 import {
@@ -442,7 +443,9 @@ function logCacheMiss(
   cacheNamespace: string,
   normalizedUrl: string
 ): void {
-  logDebug(`Cache miss due to ${reason}`, {
+  // Deserialize failures indicate unexpected data; surface at warn level.
+  const log = reason === 'deserialize failure' ? logWarn : logDebug;
+  log(`Cache miss due to ${reason}`, {
     namespace: cacheNamespace,
     url: normalizedUrl,
   });

@@ -127,6 +127,12 @@ const SIZE_LIMITS = {
 const TIMEOUT = {
   DEFAULT_FETCH_TIMEOUT_MS: 15000,
   DEFAULT_SESSION_TTL_MS: 30 * 60 * 1000,
+  DEFAULT_TRANSFORM_TIMEOUT_MS: parseInteger(
+    process.env.TRANSFORM_TIMEOUT_MS,
+    30000,
+    5000,
+    120000
+  ),
 };
 
 interface AuthConfig {
@@ -305,6 +311,9 @@ export const config = {
     maxRedirects: 5,
     userAgent: process.env.USER_AGENT ?? 'superFetch-MCP/2.0',
     maxContentLength: SIZE_LIMITS.TEN_MB,
+  },
+  transform: {
+    timeoutMs: TIMEOUT.DEFAULT_TRANSFORM_TIMEOUT_MS,
   },
   cache: {
     enabled: parseBoolean(process.env.CACHE_ENABLED, true),

@@ -1748,12 +1748,10 @@ function resolveDefaultWorkerCount(): number {
     typeof os.availableParallelism === 'function'
       ? os.availableParallelism()
       : os.cpus().length;
-
-  // Leave 1 core for the event loop; cap to avoid runaway memory.
   return Math.min(16, Math.max(1, parallelism - 1));
 }
 
-const DEFAULT_TIMEOUT_MS = 30000;
+const DEFAULT_TIMEOUT_MS = config.transform.timeoutMs;
 
 function getOrCreateTransformWorkerPool(): TransformWorkerPool {
   pool ??= new WorkerPool(resolveDefaultWorkerCount(), DEFAULT_TIMEOUT_MS);
@@ -1914,7 +1912,10 @@ class WorkerPool implements TransformWorkerPool {
     }
 
     if (this.queue.length >= this.queueMax) {
-      throw new Error('Transform worker queue is full');
+      throw new FetchError('Transform worker queue is full', url, 503, {
+        reason: 'queue_full',
+        stage: 'transform:enqueue',
+      });
     }
 
     return new Promise<MarkdownTransformResult>((resolve, reject) => {
