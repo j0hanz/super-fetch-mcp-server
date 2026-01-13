@@ -514,47 +514,71 @@ function findLookupError(
   );
 }
 
+type LookupCallback = (
+  err: NodeJS.ErrnoException | null,
+  address: string | dns.LookupAddress[],
+  family?: number
+) => void;
+
+function normalizeAndValidateLookupResults(
+  addresses: string | dns.LookupAddress[],
+  resolvedFamily: number | undefined,
+  hostname: string
+): { list: dns.LookupAddress[]; error: NodeJS.ErrnoException | null } {
+  const list = normalizeLookupResults(addresses, resolvedFamily);
+  const error = findLookupError(list, hostname);
+  return { list, error };
+}
+
+function respondLookupError(
+  callback: LookupCallback,
+  error: NodeJS.ErrnoException,
+  addresses: string | dns.LookupAddress[]
+): void {
+  callback(error, addresses);
+}
+
+function respondLookupSelection(
+  callback: LookupCallback,
+  selection: ReturnType<typeof selectLookupResult>
+): void {
+  if (selection.error) {
+    callback(selection.error, selection.fallback);
+    return;
+  }
+  callback(null, selection.address, selection.family);
+}
+
 function handleLookupResult(
   error: NodeJS.ErrnoException | null,
   addresses: string | dns.LookupAddress[],
   hostname: string,
   resolvedFamily: number | undefined,
   useAll: boolean,
-  callback: (
-    err: NodeJS.ErrnoException | null,
-    address: string | dns.LookupAddress[],
-    family?: number
-  ) => void
+  callback: LookupCallback
 ): void {
   if (error) {
-    callback(error, addresses);
+    respondLookupError(callback, error, addresses);
     return;
   }
 
-  const list = normalizeLookupResults(addresses, resolvedFamily);
-  const lookupError = findLookupError(list, hostname);
+  const { list, error: lookupError } = normalizeAndValidateLookupResults(
+    addresses,
+    resolvedFamily,
+    hostname
+  );
   if (lookupError) {
-    callback(lookupError, list);
+    respondLookupError(callback, lookupError, list);
     return;
   }
 
-  const selection = selectLookupResult(list, useAll, hostname);
-  if (selection.error) {
-    callback(selection.error, selection.fallback);
-    return;
-  }
-
-  callback(null, selection.address, selection.family);
+  respondLookupSelection(callback, selectLookupResult(list, useAll, hostname));
 }
 
 function resolveDns(
   hostname: string,
   options: dns.LookupOptions,
-  callback: (
-    err: NodeJS.ErrnoException | null,
-    address: string | dns.LookupAddress[],
-    family?: number
-  ) => void
+  callback: LookupCallback
 ): void {
   const { normalizedOptions, useAll, resolvedFamily } =
     buildLookupContext(options);
@@ -625,11 +649,7 @@ function createLookupCallback(
   hostname: string,
   resolvedFamily: number | undefined,
   useAll: boolean,
-  callback: (
-    err: NodeJS.ErrnoException | null,
-    address: string | dns.LookupAddress[],
-    family?: number
-  ) => void
+  callback: LookupCallback
 ): (
   err: NodeJS.ErrnoException | null,
   addresses: string | dns.LookupAddress[]
@@ -686,20 +706,12 @@ function createLookupTimeout(
 }
 
 function wrapLookupCallback(
-  callback: (
-    err: NodeJS.ErrnoException | null,
-    address: string | dns.LookupAddress[],
-    family?: number
-  ) => void,
+  callback: LookupCallback,
   timeout: {
     isDone: () => boolean;
     markDone: () => void;
   }
-): (
-  err: NodeJS.ErrnoException | null,
-  address: string | dns.LookupAddress[],
-  family?: number
-) => void {
+): LookupCallback {
   return (err, address, family): void => {
     if (timeout.isDone()) return;
     timeout.markDone();
@@ -870,14 +882,98 @@ interface FetchTelemetryContext {
   operationId?: string;
 }
 
-export function startFetchTelemetry(
+type FetchContextFields = Pick<
+  FetchTelemetryContext,
+  'contextRequestId' | 'operationId'
+>;
+
+function buildContextFields(
+  context: FetchContextFields
+): Partial<FetchContextFields> {
+  const fields: Partial<FetchContextFields> = {};
+  if (context.contextRequestId) {
+    fields.contextRequestId = context.contextRequestId;
+  }
+  if (context.operationId) {
+    fields.operationId = context.operationId;
+  }
+  return fields;
+}
+
+function buildResponseMetadata(
+  response: Response,
+  contentSize?: number
+): {
+  contentType?: string;
+  size?: string;
+} {
+  const contentType = response.headers.get('content-type') ?? undefined;
+  const contentLengthHeader = response.headers.get('content-length');
+  const size =
+    contentLengthHeader ??
+    (contentSize === undefined ? undefined : String(contentSize));
+
+  const metadata: { contentType?: string; size?: string } = {};
+  if (contentType) metadata.contentType = contentType;
+  if (size) metadata.size = size;
+  return metadata;
+}
+
+function logSlowRequest(
+  context: FetchTelemetryContext,
+  duration: number,
+  durationLabel: string,
+  contextFields: Partial<FetchContextFields>
+): void {
+  if (duration <= 5000) return;
+  logWarn('Slow HTTP request detected', {
+    requestId: context.requestId,
+    url: context.url,
+    duration: durationLabel,
+    ...contextFields,
+  });
+}
+
+function resolveSystemErrorCode(error: Error): string | undefined {
+  return isSystemError(error) ? error.code : undefined;
+}
+
+function buildFetchErrorEvent(
+  context: FetchTelemetryContext,
+  err: Error,
+  duration: number,
+  contextFields: Partial<FetchContextFields>,
+  status?: number,
+  code?: string
+): FetchChannelEvent {
+  const event: FetchChannelEvent = {
+    v: 1,
+    type: 'error',
+    requestId: context.requestId,
+    url: context.url,
+    error: err.message,
+    duration,
+    ...contextFields,
+  };
+
+  if (code !== undefined) {
+    event.code = code;
+  }
+  if (status !== undefined) {
+    event.status = status;
+  }
+
+  return event;
+}
+
+function createTelemetryContext(
   url: string,
   method: string
 ): FetchTelemetryContext {
   const safeUrl = redactUrl(url);
   const contextRequestId = getRequestId();
   const operationId = getOperationId();
-  const context: FetchTelemetryContext = {
+  return {
     requestId: randomUUID(),
     startTime: performance.now(),
     url: safeUrl,
@@ -885,6 +981,14 @@ export function startFetchTelemetry(
     ...(contextRequestId ? { contextRequestId } : {}),
     ...(operationId ? { operationId } : {}),
   };
+}
+
+export function startFetchTelemetry(
+  url: string,
+  method: string
+): FetchTelemetryContext {
+  const context = createTelemetryContext(url, method);
+  const contextFields = buildContextFields(context);
 
   publishFetchEvent({
     v: 1,
@@ -892,20 +996,14 @@ export function startFetchTelemetry(
     requestId: context.requestId,
     method: context.method,
     url: context.url,
-    ...(context.contextRequestId
-      ? { contextRequestId: context.contextRequestId }
-      : {}),
-    ...(context.operationId ? { operationId: context.operationId } : {}),
+    ...contextFields,
   });
 
   logDebug('HTTP Request', {
     requestId: context.requestId,
     method: context.method,
     url: context.url,
-    ...(context.contextRequestId
-      ? { contextRequestId: context.contextRequestId }
-      : {}),
-    ...(context.operationId ? { operationId: context.operationId } : {}),
+    ...contextFields,
   });
 
   return context;
@@ -918,47 +1016,27 @@ export function recordFetchResponse(
 ): void {
   const duration = performance.now() - context.startTime;
   const durationLabel = `${Math.round(duration)}ms`;
+  const contextFields = buildContextFields(context);
+  const responseMetadata = buildResponseMetadata(response, contentSize);
   publishFetchEvent({
     v: 1,
     type: 'end',
     requestId: context.requestId,
     status: response.status,
     duration,
-    ...(context.contextRequestId
-      ? { contextRequestId: context.contextRequestId }
-      : {}),
-    ...(context.operationId ? { operationId: context.operationId } : {}),
+    ...contextFields,
   });
-
-  const contentType = response.headers.get('content-type');
-  const contentLength =
-    response.headers.get('content-length') ??
-    (contentSize === undefined ? undefined : String(contentSize));
 
   logDebug('HTTP Response', {
     requestId: context.requestId,
     status: response.status,
     url: context.url,
     duration: durationLabel,
-    ...(context.contextRequestId
-      ? { contextRequestId: context.contextRequestId }
-      : {}),
-    ...(context.operationId ? { operationId: context.operationId } : {}),
-    ...(contentType ? { contentType } : {}),
-    ...(contentLength ? { size: contentLength } : {}),
+    ...contextFields,
+    ...responseMetadata,
   });
 
-  if (duration > 5000) {
-    logWarn('Slow HTTP request detected', {
-      requestId: context.requestId,
-      url: context.url,
-      duration: durationLabel,
-      ...(context.contextRequestId
-        ? { contextRequestId: context.contextRequestId }
-        : {}),
-      ...(context.operationId ? { operationId: context.operationId } : {}),
-    });
-  }
+  logSlowRequest(context, duration, durationLabel, contextFields);
 }
 
 export function recordFetchError(
@@ -968,29 +1046,11 @@ export function recordFetchError(
 ): void {
   const duration = performance.now() - context.startTime;
   const err = error instanceof Error ? error : new Error(String(error));
-
-  const event: FetchChannelEvent = {
-    v: 1,
-    type: 'error',
-    requestId: context.requestId,
-    url: context.url,
-    error: err.message,
-    duration,
-    ...(context.contextRequestId
-      ? { contextRequestId: context.contextRequestId }
-      : {}),
-    ...(context.operationId ? { operationId: context.operationId } : {}),
-  };
-
-  const code = isSystemError(err) ? err.code : undefined;
-  if (code !== undefined) {
-    event.code = code;
-  }
-  if (status !== undefined) {
-    event.status = status;
-  }
-
-  publishFetchEvent(event);
+  const contextFields = buildContextFields(context);
+  const code = resolveSystemErrorCode(err);
+  publishFetchEvent(
+    buildFetchErrorEvent(context, err, duration, contextFields, status, code)
+  );
 
   const log = status === 429 ? logWarn : logError;
   log('HTTP Request Error', {
@@ -999,10 +1059,7 @@ export function recordFetchError(
     status,
     code,
     error: err.message,
-    ...(context.contextRequestId
-      ? { contextRequestId: context.contextRequestId }
-      : {}),
-    ...(context.operationId ? { operationId: context.operationId } : {}),
+    ...contextFields,
   });
 }
 

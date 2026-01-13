@@ -544,6 +544,79 @@ function attachSessionRoutes(
   return { sessionStore, sessionCleanupController };
 }
 
+async function ensureServerListening(
+  server: ReturnType<Express['listen']>
+): Promise<void> {
+  if (server.listening) return;
+  await once(server, 'listening');
+}
+
+function resolveServerAddress(server: ReturnType<Express['listen']>): {
+  host: string;
+  port: number;
+  url: string;
+} {
+  const address = server.address();
+  const resolvedPort =
+    typeof address === 'object' && address ? address.port : config.server.port;
+  const { host } = config.server;
+  const formattedHost =
+    host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
+  const url = `http://${formattedHost}:${resolvedPort}`;
+  return { host, port: resolvedPort, url };
+}
+
+function createStopHandler(
+  server: ReturnType<Express['listen']>,
+  sessionStore: SessionStore,
+  sessionCleanupController: AbortController,
+  stopRateLimitCleanup: () => void
+): () => Promise<void> {
+  return async (): Promise<void> => {
+    await stopServerWithoutExit(
+      server,
+      sessionStore,
+      sessionCleanupController,
+      stopRateLimitCleanup
+    );
+  };
+}
+
+interface ServerLifecycleOptions {
+  server: ReturnType<Express['listen']>;
+  sessionStore: SessionStore;
+  sessionCleanupController: AbortController;
+  stopRateLimitCleanup: () => void;
+  registerSignals: boolean;
+}
+
+function buildServerLifecycle(options: ServerLifecycleOptions): {
+  shutdown: (signal: string) => Promise<void>;
+  stop: () => Promise<void>;
+} {
+  const {
+    server,
+    sessionStore,
+    sessionCleanupController,
+    stopRateLimitCleanup,
+    registerSignals,
+  } = options;
+  const shutdown = createShutdownHandler(
+    server,
+    sessionStore,
+    sessionCleanupController,
+    stopRateLimitCleanup
+  );
+  const stop = createStopHandler(
+    server,
+    sessionStore,
+    sessionCleanupController,
+    stopRateLimitCleanup
+  );
+  if (registerSignals) registerSignalHandlers(shutdown);
+  return { shutdown, stop };
+}
+
 export async function startHttpServer(options?: {
   registerSignalHandlers?: boolean;
 }): Promise<{
@@ -559,41 +632,18 @@ export async function startHttpServer(options?: {
   const server = startListening(app);
   applyHttpServerTuning(server);
 
-  if (!server.listening) {
-    await once(server, 'listening');
-  }
+  await ensureServerListening(server);
+  const { host, port, url } = resolveServerAddress(server);
 
-  const address = server.address();
-  const resolvedPort =
-    typeof address === 'object' && address ? address.port : config.server.port;
-  const { host } = config.server;
-  const formattedHost =
-    host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
-  const url = `http://${formattedHost}:${resolvedPort}`;
-
-  const shutdown = createShutdownHandler(
+  const { shutdown, stop } = buildServerLifecycle({
     server,
     sessionStore,
     sessionCleanupController,
-    stopRateLimitCleanup
-  );
+    stopRateLimitCleanup,
+    registerSignals: options?.registerSignalHandlers !== false,
+  });
 
-  const stop = async (): Promise<void> => {
-    await stopServerWithoutExit(
-      server,
-      sessionStore,
-      sessionCleanupController,
-      stopRateLimitCleanup
-    );
-  };
-
-  const shouldRegisterSignalHandlers =
-    options?.registerSignalHandlers !== false;
-  if (shouldRegisterSignalHandlers) {
-    registerSignalHandlers(shutdown);
-  }
-
-  return { shutdown, stop, url, host, port: resolvedPort };
+  return { shutdown, stop, url, host, port };
 }
 
 async function createExpressApp(): Promise<{
@@ -1342,6 +1392,12 @@ interface McpSessionOptions {
 
 type JsonRpcId = string | number | null;
 
+interface SessionCreationContext {
+  tracker: SlotTracker;
+  timeoutController: ReturnType<typeof createTimeoutController>;
+  transport: StreamableHTTPServerTransport;
+}
+
 function sendJsonRpcError(
   res: Response,
   code: number,
@@ -1792,25 +1848,59 @@ function reserveSessionIfPossible({
   return true;
 }
 
-function resolveSessionId({
+function resolveExistingSessionTransport(
+  store: SessionStore,
+  sessionId: string,
+  res: Response,
+  requestId: JsonRpcId
+): StreamableHTTPServerTransport | null {
+  const existingSession = store.get(sessionId);
+  if (existingSession) {
+    store.touch(sessionId);
+    return existingSession.transport;
+  }
+
+  // Client supplied a session id but it doesn't exist; Streamable HTTP: invalid session IDs => 404.
+  sendJsonRpcError(res, -32600, 'Session not found', 404, requestId);
+  return null;
+}
+
+function createSessionContext(): SessionCreationContext {
+  const tracker = createSlotTracker();
+  const timeoutController = createTimeoutController();
+  const transport = createSessionTransport({ tracker, timeoutController });
+  return { tracker, timeoutController, transport };
+}
+
+function finalizeSessionIfValid({
+  store,
   transport,
-  res,
   tracker,
   clearInitTimeout,
+  res,
 }: {
+  store: SessionStore;
   transport: StreamableHTTPServerTransport;
-  res: Response;
   tracker: SlotTracker;
   clearInitTimeout: () => void;
-}): string | null {
+  res: Response;
+}): boolean {
   const { sessionId } = transport;
   if (typeof sessionId !== 'string') {
     clearInitTimeout();
     tracker.releaseSlot();
     respondBadRequest(res, null);
-    return null;
+    return false;
   }
-  return sessionId;
+
+  finalizeSession({
+    store,
+    transport,
+    sessionId,
+    tracker,
+    clearInitTimeout,
+  });
+  return true;
 }
 
 function finalizeSession({
@@ -1852,9 +1942,7 @@ async function createAndConnectTransport({
 }): Promise<StreamableHTTPServerTransport | null> {
   if (!reserveSessionIfPossible({ options, res })) return null;
 
-  const tracker = createSlotTracker();
-  const timeoutController = createTimeoutController();
-  const transport = createSessionTransport({ tracker, timeoutController });
+  const { tracker, timeoutController, transport } = createSessionContext();
 
   await connectTransportOrThrow({
     transport,
@@ -1862,21 +1950,18 @@ async function createAndConnectTransport({
     releaseSlot: tracker.releaseSlot,
   });
 
-  const sessionId = resolveSessionId({
-    transport,
-    res,
-    tracker,
-    clearInitTimeout: timeoutController.clear,
-  });
-  if (!sessionId) return null;
+  if (
+    !finalizeSessionIfValid({
+      store: options.sessionStore,
+      transport,
+      tracker,
+      clearInitTimeout: timeoutController.clear,
+      res,
+    })
+  ) {
+    return null;
+  }
 
-  finalizeSession({
-    store: options.sessionStore,
-    transport,
-    sessionId,
-    tracker,
-    clearInitTimeout: timeoutController.clear,
-  });
   return transport;
 }
 
@@ -1891,19 +1976,17 @@ export async function resolveTransportForPost({
   sessionId: string | undefined;
   options: McpSessionOptions;
 }): Promise<StreamableHTTPServerTransport | null> {
+  const requestId: JsonRpcId = body.id ?? null;
   if (sessionId) {
-    const existingSession = options.sessionStore.get(sessionId);
-    if (existingSession) {
-      options.sessionStore.touch(sessionId);
-      return existingSession.transport;
-    }
-
-    // Client supplied a session id but it doesn't exist; Streamable HTTP: invalid session IDs => 404.
-    sendJsonRpcError(res, -32600, 'Session not found', 404, body.id ?? null);
-    return null;
+    return resolveExistingSessionTransport(
+      options.sessionStore,
+      sessionId,
+      res,
+      requestId
+    );
   }
   if (!isInitializeRequest(body)) {
-    respondBadRequest(res, body.id ?? null);
+    respondBadRequest(res, requestId);
     return null;
   }
   evictExpiredSessionsWithClose(options.sessionStore);

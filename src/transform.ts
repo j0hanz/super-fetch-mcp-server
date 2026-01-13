@@ -8,6 +8,7 @@ import { parseHTML } from 'linkedom';
 import {
   NodeHtmlMarkdown,
   type TranslatorCollection,
+  type TranslatorConfig,
   type TranslatorConfigObject,
 } from 'node-html-markdown';
 import { z } from 'zod';
@@ -170,6 +171,13 @@ export function endTransformStage(
   };
 
   publishTransformEvent(event);
+}
+
+function runTransformStage<T>(url: string, stage: string, fn: () => T): T {
+  const context = startTransformStage(url, stage);
+  const result = fn();
+  endTransformStage(context);
+  return result;
 }
 
 function isTimeoutReason(reason: unknown): boolean {
@@ -422,11 +430,70 @@ export function extractContent(
     extractArticle: true,
   }
 ): ExtractionResult {
+  const emptyResult = createEmptyExtractionResult();
   if (!isValidInput(html, url)) {
-    return { article: null, metadata: {} };
+    return emptyResult;
   }
 
   return tryExtractContent(html, url, options);
+}
+
+function createEmptyExtractionResult(): ExtractionResult {
+  return { article: null, metadata: {} };
+}
+
+function extractArticleWithStage(
+  document: Document,
+  url: string,
+  shouldExtract: boolean | undefined
+): ExtractedArticle | null {
+  if (!shouldExtract) return null;
+  return runTransformStage(url, 'extract:article', () =>
+    resolveArticleExtraction(document, shouldExtract)
+  );
+}
+
+function handleExtractionFailure(
+  error: unknown,
+  url: string,
+  signal: AbortSignal | undefined
+): ExtractionResult {
+  if (error instanceof FetchError) {
+    throw error;
+  }
+  throwIfAborted(signal, url, 'extract:error');
+  logError(
+    'Failed to extract content',
+    error instanceof Error ? error : undefined
+  );
+  return createEmptyExtractionResult();
+}
+
+function extractContentStages(
+  html: string,
+  url: string,
+  options: { extractArticle?: boolean; signal?: AbortSignal }
+): ExtractionResult {
+  throwIfAborted(options.signal, url, 'extract:begin');
+  const { document } = runTransformStage(url, 'extract:parse', () =>
+    parseHTML(truncateHtml(html))
+  );
+  throwIfAborted(options.signal, url, 'extract:parsed');
+  applyBaseUri(document, url);
+  const metadata = runTransformStage(url, 'extract:metadata', () =>
+    extractMetadata(document)
+  );
+  throwIfAborted(options.signal, url, 'extract:metadata');
+  const article = extractArticleWithStage(
+    document,
+    url,
+    options.extractArticle
+  );
+  throwIfAborted(options.signal, url, 'extract:article');
+  return {
+    article,
+    metadata,
+  };
 }
 
 function tryExtractContent(
@@ -435,45 +502,9 @@ function tryExtractContent(
   options: { extractArticle?: boolean; signal?: AbortSignal }
 ): ExtractionResult {
   try {
-    throwIfAborted(options.signal, url, 'extract:begin');
-    const parseStage = startTransformStage(url, 'extract:parse');
-    const { document } = parseHTML(truncateHtml(html));
-    endTransformStage(parseStage);
-
-    throwIfAborted(options.signal, url, 'extract:parsed');
-
-    applyBaseUri(document, url);
-
-    const metadataStage = startTransformStage(url, 'extract:metadata');
-    const metadata = extractMetadata(document);
-    endTransformStage(metadataStage);
-
-    throwIfAborted(options.signal, url, 'extract:metadata');
-
-    let article: ExtractedArticle | null;
-    if (options.extractArticle) {
-      const articleStage = startTransformStage(url, 'extract:article');
-      article = resolveArticleExtraction(document, options.extractArticle);
-      endTransformStage(articleStage);
-    } else {
-      article = null;
-    }
-
-    throwIfAborted(options.signal, url, 'extract:article');
-    return {
-      article,
-      metadata,
-    };
+    return extractContentStages(html, url, options);
   } catch (error) {
-    if (error instanceof FetchError) {
-      throw error;
-    }
-    throwIfAborted(options.signal, url, 'extract:error');
-    logError(
-      'Failed to extract content',
-      error instanceof Error ? error : undefined
-    );
-    return { article: null, metadata: {} };
+    return handleExtractionFailure(error, url, options.signal);
   }
 }
 
@@ -1121,78 +1152,84 @@ function hasCodeBlockTranslators(
   return isRecord(value) && isRecord(value.codeBlockTranslators);
 }
 
+function buildInlineCodeTranslator(): TranslatorConfig {
+  return {
+    spaceIfRepeatingChar: true,
+    noEscape: true,
+    postprocess: ({ content }: { content: string }) => buildInlineCode(content),
+  };
+}
+
+function resolveAttributeLanguage(node: unknown): string | undefined {
+  const getAttribute = hasGetAttribute(node)
+    ? node.getAttribute.bind(node)
+    : undefined;
+  const className = getAttribute?.('class') ?? '';
+  const dataLanguage = getAttribute?.('data-language') ?? '';
+  return resolveLanguageFromAttributes(className, dataLanguage);
+}
+
+function resolveCodeBlockTranslators(
+  visitor: unknown
+): TranslatorCollection | null {
+  const childTranslators = isRecord(visitor) ? visitor.instance : null;
+  return hasCodeBlockTranslators(childTranslators)
+    ? childTranslators.codeBlockTranslators
+    : null;
+}
+
+function buildCodeBlockTranslator(
+  attributeLanguage: string | undefined,
+  codeBlockTranslators: TranslatorCollection | null
+): TranslatorConfig {
+  return {
+    noEscape: true,
+    preserveWhitespace: true,
+    ...(codeBlockTranslators
+      ? { childTranslators: codeBlockTranslators }
+      : null),
+    postprocess: ({ content }: { content: string }) => {
+      const language =
+        attributeLanguage ?? detectLanguageFromCode(content) ?? '';
+      return CODE_BLOCK.format(content, language);
+    },
+  };
+}
+
+function buildCodeTranslator(ctx: unknown): TranslatorConfig {
+  if (!isRecord(ctx)) return buildInlineCodeTranslator();
+
+  const { node, parent, visitor } = ctx;
+  if (!isCodeBlock(parent)) return buildInlineCodeTranslator();
+
+  const attributeLanguage = resolveAttributeLanguage(node);
+  const codeBlockTranslators = resolveCodeBlockTranslators(visitor);
+  return buildCodeBlockTranslator(attributeLanguage, codeBlockTranslators);
+}
+
+function buildImageTranslator(ctx: unknown): TranslatorConfig {
+  if (!isRecord(ctx)) return { content: '' };
+
+  const { node } = ctx;
+  const getAttribute = hasGetAttribute(node)
+    ? node.getAttribute.bind(node)
+    : undefined;
+
+  const src = getAttribute?.('src') ?? '';
+  const existingAlt = getAttribute?.('alt') ?? '';
+
+  // Use existing alt text if present, otherwise derive from filename.
+  const alt = existingAlt.trim() || deriveAltFromImageUrl(src);
+
+  return {
+    content: `![${alt}](${src})`,
+  };
+}
+
 function createCustomTranslators(): TranslatorConfigObject {
   return {
-    code: (ctx: unknown) => {
-      if (!isRecord(ctx)) {
-        return {
-          spaceIfRepeatingChar: true,
-          noEscape: true,
-          postprocess: ({ content }: { content: string }) =>
-            buildInlineCode(content),
-        };
-      }
-
-      const { node, parent, visitor } = ctx;
-      const getAttribute = hasGetAttribute(node)
-        ? node.getAttribute.bind(node)
-        : undefined;
-
-      if (!isCodeBlock(parent)) {
-        return {
-          spaceIfRepeatingChar: true,
-          noEscape: true,
-          postprocess: ({ content }: { content: string }) =>
-            buildInlineCode(content),
-        };
-      }
-
-      const className = getAttribute?.('class') ?? '';
-      const dataLanguage = getAttribute?.('data-language') ?? '';
-      const attributeLanguage = resolveLanguageFromAttributes(
-        className,
-        dataLanguage
-      );
-
-      const childTranslators = isRecord(visitor) ? visitor.instance : null;
-
-      const codeBlockTranslators = hasCodeBlockTranslators(childTranslators)
-        ? childTranslators.codeBlockTranslators
-        : null;
-
-      return {
-        noEscape: true,
-        preserveWhitespace: true,
-        ...(codeBlockTranslators
-          ? { childTranslators: codeBlockTranslators }
-          : null),
-        postprocess: ({ content }: { content: string }) => {
-          const language =
-            attributeLanguage ?? detectLanguageFromCode(content) ?? '';
-          return CODE_BLOCK.format(content, language);
-        },
-      };
-    },
-    img: (ctx: unknown) => {
-      if (!isRecord(ctx)) {
-        return { content: '' };
-      }
-
-      const { node } = ctx;
-      const getAttribute = hasGetAttribute(node)
-        ? node.getAttribute.bind(node)
-        : undefined;
-
-      const src = getAttribute?.('src') ?? '';
-      const existingAlt = getAttribute?.('alt') ?? '';
-
-      // Use existing alt text if present, otherwise derive from filename.
-      const alt = existingAlt.trim() || deriveAltFromImageUrl(src);
-
-      return {
-        content: `![${alt}](${src})`,
-      };
-    },
+    code: (ctx: unknown) => buildCodeTranslator(ctx),
+    img: (ctx: unknown) => buildImageTranslator(ctx),
   };
 }
 
@@ -1215,6 +1252,40 @@ function getMarkdownConverter(): NodeHtmlMarkdown {
   return markdownInstance;
 }
 
+function translateHtmlToMarkdown(
+  html: string,
+  url: string,
+  signal?: AbortSignal
+): string {
+  throwIfAborted(signal, url, 'markdown:begin');
+
+  const cleanedHtml = runTransformStage(url, 'markdown:noise', () =>
+    removeNoiseFromHtml(html)
+  );
+
+  throwIfAborted(signal, url, 'markdown:cleaned');
+
+  const content = runTransformStage(url, 'markdown:translate', () =>
+    getMarkdownConverter().translate(cleanedHtml).trim()
+  );
+
+  throwIfAborted(signal, url, 'markdown:translated');
+
+  // Post-process the markdown to clean up common conversion artifacts.
+  return cleanupMarkdownArtifacts(content);
+}
+
+function appendMetadataFooter(
+  content: string,
+  metadata: MetadataBlock | undefined,
+  url: string
+): string {
+  // Metadata is placed as a footer to avoid duplicating titles when the
+  // article content already contains an H1 heading at the top.
+  const footer = buildMetadataFooter(metadata, url);
+  return footer ? `${content}\n\n${footer}` : content;
+}
+
 export function htmlToMarkdown(
   html: string,
   metadata?: MetadataBlock,
@@ -1224,27 +1295,8 @@ export function htmlToMarkdown(
   if (!html) return buildMetadataFooter(metadata, url);
 
   try {
-    throwIfAborted(options?.signal, url, 'markdown:begin');
-
-    const noiseStage = startTransformStage(url, 'markdown:noise');
-    const cleanedHtml = removeNoiseFromHtml(html);
-    endTransformStage(noiseStage);
-
-    throwIfAborted(options?.signal, url, 'markdown:cleaned');
-
-    const translateStage = startTransformStage(url, 'markdown:translate');
-    let content = getMarkdownConverter().translate(cleanedHtml).trim();
-    endTransformStage(translateStage);
-
-    throwIfAborted(options?.signal, url, 'markdown:translated');
-
-    // Post-process the markdown to clean up common conversion artifacts.
-    content = cleanupMarkdownArtifacts(content);
-
-    // Metadata is placed as a footer to avoid duplicating titles when the
-    // article content already contains an H1 heading at the top.
-    const footer = buildMetadataFooter(metadata, url);
-    return footer ? `${content}\n\n${footer}` : content;
+    const content = translateHtmlToMarkdown(html, url, options?.signal);
+    return appendMetadataFooter(content, metadata, url);
   } catch (error) {
     if (error instanceof FetchError) {
       throw error;
@@ -1671,56 +1723,32 @@ interface ContentSource {
   readonly metadata: ReturnType<typeof createContentMetadataBlock>;
 }
 
-function buildArticleContentSource({
-  url,
-  article,
-  extractedMeta,
-  includeMetadata,
-}: {
-  url: string;
-  article: ExtractedArticle;
-  extractedMeta: ExtractedMetadata;
-  includeMetadata: boolean;
-}): ContentSource {
-  const metadata = createContentMetadataBlock(
-    url,
-    article,
-    extractedMeta,
-    true,
-    includeMetadata
-  );
-
-  return {
-    sourceHtml: article.content,
-    title: article.title,
-    metadata,
-  };
-}
-
-function buildFullHtmlContentSource({
+function buildContentSource({
   html,
   url,
   article,
   extractedMeta,
   includeMetadata,
+  useArticleContent,
 }: {
   html: string;
   url: string;
   article: ExtractedArticle | null;
   extractedMeta: ExtractedMetadata;
   includeMetadata: boolean;
+  useArticleContent: boolean;
 }): ContentSource {
   const metadata = createContentMetadataBlock(
     url,
     article,
     extractedMeta,
-    false,
+    useArticleContent,
     includeMetadata
   );
 
   return {
-    sourceHtml: html,
-    title: extractedMeta.title,
+    sourceHtml: useArticleContent && article ? article.content : html,
+    title: useArticleContent && article ? article.title : extractedMeta.title,
     metadata,
   };
 }
@@ -1741,39 +1769,24 @@ function logQualityGateFallback({
   );
 }
 
-function tryBuildExtractedArticleContentSource({
-  html,
-  url,
-  article,
-  extractedMeta,
-  includeMetadata,
-}: {
-  html: string;
-  url: string;
-  article: ExtractedArticle | null;
-  extractedMeta: ExtractedMetadata;
-  includeMetadata: boolean;
-}): ContentSource | null {
-  if (!article) return null;
-
+function shouldUseArticleContent(
+  article: ExtractedArticle,
+  html: string,
+  url: string
+): boolean {
   const shouldExtractFromArticle = determineContentExtractionSource(article);
-  if (shouldExtractFromArticle && isExtractionSufficient(article, html)) {
-    return buildArticleContentSource({
-      url,
-      article,
-      extractedMeta,
-      includeMetadata,
-    });
+  if (!shouldExtractFromArticle) return false;
+
+  if (isExtractionSufficient(article, html)) {
+    return true;
   }
 
-  if (shouldExtractFromArticle) {
-    logQualityGateFallback({
-      url,
-      articleLength: article.textContent.length,
-    });
-  }
+  logQualityGateFallback({
+    url,
+    articleLength: article.textContent.length,
+  });
 
-  return null;
+  return false;
 }
 
 function resolveContentSource({
@@ -1792,22 +1805,99 @@ function resolveContentSource({
     ...(signal ? { signal } : {}),
   });
 
-  const extracted = tryBuildExtractedArticleContentSource({
-    html,
-    url,
-    article,
-    extractedMeta,
-    includeMetadata,
-  });
-  if (extracted) return extracted;
+  const useArticleContent = article
+    ? shouldUseArticleContent(article, html, url)
+    : false;
 
-  return buildFullHtmlContentSource({
+  return buildContentSource({
     html,
     url,
     article,
     extractedMeta,
     includeMetadata,
+    useArticleContent,
   });
+}
+
+function tryTransformRawStage(
+  html: string,
+  url: string,
+  includeMetadata: boolean
+): MarkdownTransformResult | null {
+  return runTransformStage(url, 'transform:raw', () =>
+    tryTransformRawContent({
+      html,
+      url,
+      includeMetadata,
+    })
+  );
+}
+
+function resolveContentSourceStage(
+  html: string,
+  url: string,
+  includeMetadata: boolean,
+  signal?: AbortSignal
+): ContentSource {
+  return runTransformStage(url, 'transform:extract', () =>
+    resolveContentSource({
+      html,
+      url,
+      includeMetadata,
+      ...(signal ? { signal } : {}),
+    })
+  );
+}
+
+function buildMarkdownFromContext(
+  context: ContentSource,
+  url: string,
+  signal?: AbortSignal
+): MarkdownTransformResult {
+  const content = runTransformStage(url, 'transform:markdown', () =>
+    htmlToMarkdown(context.sourceHtml, context.metadata, {
+      url,
+      ...(signal ? { signal } : {}),
+    })
+  );
+  return {
+    markdown: content,
+    title: context.title,
+    truncated: false,
+  };
+}
+
+function runTotalTransformStage<T>(url: string, fn: () => T): T {
+  const totalStage = startTransformStage(url, 'transform:total');
+  let success = false;
+
+  try {
+    const result = fn();
+    success = true;
+    return result;
+  } finally {
+    if (success) {
+      endTransformStage(totalStage, { truncated: false });
+    }
+  }
+}
+
+async function runTotalTransformStageAsync<T>(
+  url: string,
+  fn: () => Promise<T>
+): Promise<T> {
+  const totalStage = startTransformStage(url, 'transform:total');
+  let success = false;
+
+  try {
+    const result = await fn();
+    success = true;
+    return result;
+  } finally {
+    if (success) {
+      endTransformStage(totalStage, { truncated: false });
+    }
+  }
 }
 
 export function transformHtmlToMarkdownInProcess(
@@ -1815,51 +1905,23 @@ export function transformHtmlToMarkdownInProcess(
   url: string,
   options: TransformOptions
 ): MarkdownTransformResult {
-  const totalStage = startTransformStage(url, 'transform:total');
-  let success = false;
-
-  try {
+  return runTotalTransformStage(url, () => {
     throwIfAborted(options.signal, url, 'transform:begin');
 
-    const rawStage = startTransformStage(url, 'transform:raw');
-    const raw = tryTransformRawContent({
-      html,
-      url,
-      includeMetadata: options.includeMetadata,
-    });
-    endTransformStage(rawStage);
+    const raw = tryTransformRawStage(html, url, options.includeMetadata);
     if (raw) {
-      success = true;
       return raw;
     }
 
-    const extractStage = startTransformStage(url, 'transform:extract');
-    const context = resolveContentSource({
+    const context = resolveContentSourceStage(
       html,
       url,
-      includeMetadata: options.includeMetadata,
-      ...(options.signal ? { signal: options.signal } : {}),
-    });
-    endTransformStage(extractStage);
+      options.includeMetadata,
+      options.signal
+    );
 
-    const markdownStage = startTransformStage(url, 'transform:markdown');
-    const content = htmlToMarkdown(context.sourceHtml, context.metadata, {
-      url,
-      ...(options.signal ? { signal: options.signal } : {}),
-    });
-    endTransformStage(markdownStage);
-
-    success = true;
-    return {
-      markdown: content,
-      title: context.title,
-      truncated: false,
-    };
-  } finally {
-    if (success) {
-      endTransformStage(totalStage, { truncated: false });
-    }
-  }
+    return buildMarkdownFromContext(context, url, options.signal);
+  });
 }
 
 const workerMessageSchema = z.discriminatedUnion('type', [
@@ -1951,6 +2013,32 @@ class WorkerPool implements TransformWorkerPool {
   private readonly queueMax: number;
   private closed = false;
 
+  private ensureOpen(): void {
+    if (this.closed) {
+      throw new Error('Transform worker pool closed');
+    }
+  }
+
+  private ensureNotAborted(
+    signal: AbortSignal | undefined,
+    url: string,
+    stage: string
+  ): void {
+    if (!signal?.aborted) return;
+    throw new FetchError('Request was canceled', url, 499, {
+      reason: 'aborted',
+      stage,
+    });
+  }
+
+  private ensureQueueCapacity(url: string): void {
+    if (this.queue.length < this.queueMax) return;
+    throw new FetchError('Transform worker queue is full', url, 503, {
+      reason: 'queue_full',
+      stage: 'transform:enqueue',
+    });
+  }
+
   private clearAbortListener(
     signal: AbortSignal | undefined,
     listener: (() => void) | undefined
@@ -1981,6 +2069,92 @@ class WorkerPool implements TransformWorkerPool {
     return inflight;
   }
 
+  private cancelWorkerTask(slot: WorkerSlot | undefined, id: string): void {
+    if (!slot) return;
+    try {
+      slot.worker.postMessage({ type: 'cancel', id });
+    } catch {
+      // ignore
+    }
+  }
+
+  private restartWorker(workerIndex: number, slot?: WorkerSlot): void {
+    if (this.closed) return;
+    const target = slot ?? this.workers[workerIndex];
+    if (target) {
+      void target.worker.terminate();
+    }
+    this.workers[workerIndex] = this.spawnWorker(workerIndex);
+    this.drainQueue();
+  }
+
+  private rejectIfClosed(reject: (error: unknown) => void): boolean {
+    if (!this.closed) return false;
+    reject(new Error('Transform worker pool closed'));
+    return true;
+  }
+
+  private abortInflightTask(
+    id: string,
+    url: string,
+    workerIndex: number
+  ): void {
+    const slot = this.workers[workerIndex];
+    this.cancelWorkerTask(slot, id);
+    this.failTask(
+      id,
+      new FetchError('Request was canceled', url, 499, {
+        reason: 'aborted',
+        stage: 'transform:signal-abort',
+      })
+    );
+    if (slot) {
+      this.restartWorker(workerIndex, slot);
+    }
+  }
+
+  private abortQueuedTask(
+    id: string,
+    url: string,
+    reject: (error: unknown) => void
+  ): void {
+    const queuedIndex = this.queue.findIndex((task) => task.id === id);
+    if (queuedIndex === -1) return;
+    this.queue.splice(queuedIndex, 1);
+    reject(
+      new FetchError('Request was canceled', url, 499, {
+        reason: 'aborted',
+        stage: 'transform:queued-abort',
+      })
+    );
+  }
+
+  private createWorkerSlot(worker: Worker): WorkerSlot {
+    return {
+      worker,
+      busy: false,
+      currentTaskId: null,
+    };
+  }
+
+  private registerWorkerHandlers(workerIndex: number, worker: Worker): void {
+    worker.on('message', (raw: unknown) => {
+      this.onWorkerMessage(workerIndex, raw);
+    });
+    worker.on('error', (error: unknown) => {
+      this.onWorkerBroken(
+        workerIndex,
+        `Transform worker error: ${getErrorMessage(error)}`
+      );
+    });
+    worker.on('exit', (code: number) => {
+      this.onWorkerBroken(
+        workerIndex,
+        `Transform worker exited (code ${code})`
+      );
+    });
+  }
+
   constructor(size: number, timeoutMs: number) {
     const safeSize = Math.max(1, size);
     this.timeoutMs = timeoutMs;
@@ -1999,30 +2173,8 @@ class WorkerPool implements TransformWorkerPool {
     // Workers must not keep the process alive by themselves.
     worker.unref();
 
-    const slot: WorkerSlot = {
-      worker,
-      busy: false,
-      currentTaskId: null,
-    };
-
-    worker.on('message', (raw: unknown) => {
-      this.onWorkerMessage(workerIndex, raw);
-    });
-
-    worker.on('error', (error: unknown) => {
-      this.onWorkerBroken(
-        workerIndex,
-        `Transform worker error: ${getErrorMessage(error)}`
-      );
-    });
-
-    worker.on('exit', (code: number) => {
-      this.onWorkerBroken(
-        workerIndex,
-        `Transform worker exited (code ${code})`
-      );
-    });
-
+    const slot = this.createWorkerSlot(worker);
+    this.registerWorkerHandlers(workerIndex, worker);
     return slot;
   }
 
@@ -2035,10 +2187,42 @@ class WorkerPool implements TransformWorkerPool {
     if (slot.busy && slot.currentTaskId) {
       this.failTask(slot.currentTaskId, new Error(message));
     }
+    this.restartWorker(workerIndex, slot);
+  }
 
-    void slot.worker.terminate();
-    this.workers[workerIndex] = this.spawnWorker(workerIndex);
-    this.drainQueue();
+  private resolveWorkerResult(
+    inflight: InflightTask,
+    result: { markdown: string; title?: string | undefined; truncated: boolean }
+  ): void {
+    inflight.resolve({
+      markdown: result.markdown,
+      truncated: result.truncated,
+      title: result.title,
+    });
+  }
+
+  private rejectWorkerError(
+    inflight: InflightTask,
+    error: {
+      name: string;
+      message: string;
+      url: string;
+      statusCode?: number | undefined;
+      details?: Record<string, unknown> | undefined;
+    }
+  ): void {
+    if (error.name === 'FetchError') {
+      inflight.reject(
+        new FetchError(
+          error.message,
+          error.url,
+          error.statusCode,
+          error.details ?? {}
+        )
+      );
+      return;
+    }
+    inflight.reject(new Error(error.message));
   }
 
   private onWorkerMessage(workerIndex: number, raw: unknown): void {
@@ -2052,25 +2236,9 @@ class WorkerPool implements TransformWorkerPool {
     this.markSlotIdle(workerIndex);
 
     if (message.type === 'result') {
-      inflight.resolve({
-        markdown: message.result.markdown,
-        truncated: message.result.truncated,
-        title: message.result.title,
-      });
+      this.resolveWorkerResult(inflight, message.result);
     } else {
-      const { error } = message;
-      if (error.name === 'FetchError') {
-        inflight.reject(
-          new FetchError(
-            error.message,
-            error.url,
-            error.statusCode,
-            error.details ?? {}
-          )
-        );
-      } else {
-        inflight.reject(new Error(error.message));
-      }
+      this.rejectWorkerError(inflight, message.error);
     }
 
     this.drainQueue();
@@ -2084,95 +2252,63 @@ class WorkerPool implements TransformWorkerPool {
     this.markSlotIdle(inflight.workerIndex);
   }
 
+  private handleAbortSignal(
+    id: string,
+    url: string,
+    reject: (error: unknown) => void
+  ): void {
+    if (this.rejectIfClosed(reject)) return;
+
+    const inflight = this.inflight.get(id);
+    if (inflight) {
+      this.abortInflightTask(id, url, inflight.workerIndex);
+      return;
+    }
+
+    this.abortQueuedTask(id, url, reject);
+  }
+
+  private createPendingTask(
+    html: string,
+    url: string,
+    options: { includeMetadata: boolean; signal?: AbortSignal },
+    resolve: (result: MarkdownTransformResult) => void,
+    reject: (error: unknown) => void
+  ): PendingTask {
+    const id = randomUUID();
+
+    let abortListener: (() => void) | undefined;
+    if (options.signal) {
+      abortListener = () => {
+        this.handleAbortSignal(id, url, reject);
+      };
+      options.signal.addEventListener('abort', abortListener, { once: true });
+    }
+
+    return {
+      id,
+      html,
+      url,
+      includeMetadata: options.includeMetadata,
+      signal: options.signal,
+      abortListener,
+      resolve,
+      reject,
+    };
+  }
+
   async transform(
     html: string,
     url: string,
     options: { includeMetadata: boolean; signal?: AbortSignal }
   ): Promise<MarkdownTransformResult> {
-    if (this.closed) {
-      throw new Error('Transform worker pool closed');
-    }
-
-    if (options.signal?.aborted) {
-      throw new FetchError('Request was canceled', url, 499, {
-        reason: 'aborted',
-        stage: 'transform:enqueue',
-      });
-    }
-
-    if (this.queue.length >= this.queueMax) {
-      throw new FetchError('Transform worker queue is full', url, 503, {
-        reason: 'queue_full',
-        stage: 'transform:enqueue',
-      });
-    }
+    this.ensureOpen();
+    this.ensureNotAborted(options.signal, url, 'transform:enqueue');
+    this.ensureQueueCapacity(url);
 
     return new Promise<MarkdownTransformResult>((resolve, reject) => {
-      const id = randomUUID();
-
-      let abortListener: (() => void) | undefined;
-      if (options.signal) {
-        abortListener = () => {
-          if (this.closed) {
-            reject(new Error('Transform worker pool closed'));
-            return;
-          }
-
-          const inflight = this.inflight.get(id);
-          if (inflight) {
-            const { workerIndex } = inflight;
-
-            const slot = this.workers[workerIndex];
-            if (slot) {
-              try {
-                slot.worker.postMessage({ type: 'cancel', id });
-              } catch {
-                // ignore
-              }
-            }
-
-            this.failTask(
-              id,
-              new FetchError('Request was canceled', url, 499, {
-                reason: 'aborted',
-                stage: 'transform:signal-abort',
-              })
-            );
-
-            if (slot) {
-              void slot.worker.terminate();
-              this.workers[workerIndex] = this.spawnWorker(workerIndex);
-              this.drainQueue();
-            }
-
-            return;
-          }
-
-          const queuedIndex = this.queue.findIndex((task) => task.id === id);
-          if (queuedIndex !== -1) {
-            this.queue.splice(queuedIndex, 1);
-            reject(
-              new FetchError('Request was canceled', url, 499, {
-                reason: 'aborted',
-                stage: 'transform:queued-abort',
-              })
-            );
-          }
-        };
-
-        options.signal.addEventListener('abort', abortListener, { once: true });
-      }
-
-      this.queue.push({
-        id,
-        html,
-        url,
-        includeMetadata: options.includeMetadata,
-        signal: options.signal,
-        abortListener,
-        resolve,
-        reject,
-      });
+      const task = this.createPendingTask(html, url, options, resolve, reject);
+      this.queue.push(task);
 
       this.drainQueue();
     });
@@ -2203,27 +2339,43 @@ class WorkerPool implements TransformWorkerPool {
     slot: WorkerSlot,
     task: PendingTask
   ): void {
-    if (task.signal?.aborted) {
-      this.clearAbortListener(task.signal, task.abortListener);
-      task.reject(
-        new FetchError('Request was canceled', task.url, 499, {
-          reason: 'aborted',
-          stage: 'transform:dispatch',
-        })
-      );
-      return;
-    }
+    if (this.rejectIfAborted(task)) return;
 
+    this.markSlotBusy(slot, task);
+    const timer = this.startTaskTimer(workerIndex, slot, task);
+    this.registerInflightTask(task, timer, workerIndex);
+
+    try {
+      this.sendTransformMessage(slot, task);
+    } catch (error: unknown) {
+      this.handleDispatchFailure(workerIndex, slot, task, timer, error);
+    }
+  }
+
+  private rejectIfAborted(task: PendingTask): boolean {
+    if (!task.signal?.aborted) return false;
+    this.clearAbortListener(task.signal, task.abortListener);
+    task.reject(
+      new FetchError('Request was canceled', task.url, 499, {
+        reason: 'aborted',
+        stage: 'transform:dispatch',
+      })
+    );
+    return true;
+  }
+
+  private markSlotBusy(slot: WorkerSlot, task: PendingTask): void {
     slot.busy = true;
     slot.currentTaskId = task.id;
+  }
 
+  private startTaskTimer(
+    workerIndex: number,
+    slot: WorkerSlot,
+    task: PendingTask
+  ): NodeJS.Timeout {
     const timer = setTimeout(() => {
-      try {
-        slot.worker.postMessage({ type: 'cancel', id: task.id });
-      } catch {
-        // ignore
-      }
-
+      this.cancelWorkerTask(slot, task.id);
       const inflight = this.takeInflight(task.id);
       if (!inflight) return;
 
@@ -2234,13 +2386,17 @@ class WorkerPool implements TransformWorkerPool {
         })
       );
 
-      if (!this.closed) {
-        void slot.worker.terminate();
-        this.workers[workerIndex] = this.spawnWorker(workerIndex);
-        this.drainQueue();
-      }
-    }, this.timeoutMs).unref();
+      this.restartWorker(workerIndex, slot);
+    }, this.timeoutMs);
+    timer.unref();
+    return timer;
+  }
 
+  private registerInflightTask(
+    task: PendingTask,
+    timer: NodeJS.Timeout,
+    workerIndex: number
+  ): void {
     this.inflight.set(task.id, {
       resolve: task.resolve,
       reject: task.reject,
@@ -2249,34 +2405,37 @@ class WorkerPool implements TransformWorkerPool {
       abortListener: task.abortListener,
       workerIndex,
     });
+  }
 
-    try {
-      slot.worker.postMessage({
-        type: 'transform',
-        id: task.id,
-        html: task.html,
-        url: task.url,
-        includeMetadata: task.includeMetadata,
-      });
-    } catch (error: unknown) {
-      clearTimeout(timer);
-      this.clearAbortListener(task.signal, task.abortListener);
-      this.inflight.delete(task.id);
-      slot.busy = false;
-      slot.currentTaskId = null;
+  private sendTransformMessage(slot: WorkerSlot, task: PendingTask): void {
+    slot.worker.postMessage({
+      type: 'transform',
+      id: task.id,
+      html: task.html,
+      url: task.url,
+      includeMetadata: task.includeMetadata,
+    });
+  }
 
-      const message =
-        error instanceof Error
-          ? error
-          : new Error('Failed to dispatch transform worker message');
-      task.reject(message);
+  private handleDispatchFailure(
+    workerIndex: number,
+    slot: WorkerSlot,
+    task: PendingTask,
+    timer: NodeJS.Timeout,
+    error: unknown
+  ): void {
+    clearTimeout(timer);
+    this.clearAbortListener(task.signal, task.abortListener);
+    this.inflight.delete(task.id);
+    this.markSlotIdle(workerIndex);
 
-      if (!this.closed) {
-        void slot.worker.terminate();
-        this.workers[workerIndex] = this.spawnWorker(workerIndex);
-        this.drainQueue();
-      }
-    }
+    const message =
+      error instanceof Error
+        ? error
+        : new Error('Failed to dispatch transform worker message');
+    task.reject(message);
+
+    this.restartWorker(workerIndex, slot);
   }
 
   async close(): Promise<void> {
@@ -2302,42 +2461,57 @@ class WorkerPool implements TransformWorkerPool {
   }
 }
 
+function buildWorkerTransformOptions(options: TransformOptions): {
+  includeMetadata: boolean;
+  signal?: AbortSignal;
+} {
+  return {
+    includeMetadata: options.includeMetadata,
+    ...(options.signal ? { signal: options.signal } : {}),
+  };
+}
+
+async function transformWithWorkerPool(
+  html: string,
+  url: string,
+  options: TransformOptions
+): Promise<MarkdownTransformResult> {
+  const poolRef = getOrCreateTransformWorkerPool();
+  return poolRef.transform(html, url, buildWorkerTransformOptions(options));
+}
+
+function resolveWorkerFallback(
+  error: unknown,
+  html: string,
+  url: string,
+  options: TransformOptions
+): MarkdownTransformResult {
+  if (error instanceof FetchError) {
+    throw error;
+  }
+
+  // Stability-first: if worker infrastructure fails, fall back to in-process.
+  throwIfAborted(options.signal, url, 'transform:worker-fallback');
+  return transformHtmlToMarkdownInProcess(html, url, options);
+}
+
 export async function transformHtmlToMarkdown(
   html: string,
   url: string,
   options: TransformOptions
 ): Promise<MarkdownTransformResult> {
-  const totalStage = startTransformStage(url, 'transform:total');
-  let success = false;
-
-  try {
+  return runTotalTransformStageAsync(url, async () => {
     throwIfAborted(options.signal, url, 'transform:begin');
 
     const workerStage = startTransformStage(url, 'transform:worker');
     try {
-      const poolRef = getOrCreateTransformWorkerPool();
-      const result = await poolRef.transform(html, url, {
-        includeMetadata: options.includeMetadata,
-        ...(options.signal ? { signal: options.signal } : {}),
-      });
-      success = true;
+      const result = await transformWithWorkerPool(html, url, options);
       return result;
     } catch (error: unknown) {
-      if (error instanceof FetchError) {
-        throw error;
-      }
-
-      // Stability-first: if worker infrastructure fails, fall back to in-process.
-      throwIfAborted(options.signal, url, 'transform:worker-fallback');
-      const fallback = transformHtmlToMarkdownInProcess(html, url, options);
-      success = true;
+      const fallback = resolveWorkerFallback(error, html, url, options);
       return fallback;
     } finally {
       endTransformStage(workerStage);
     }
-  } finally {
-    if (success) {
-      endTransformStage(totalStage, { truncated: false });
-    }
-  }
+  });
 }
