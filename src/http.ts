@@ -2001,7 +2001,6 @@ function resolveSessionTransport(
 const MCP_PROTOCOL_VERSION_HEADER = 'mcp-protocol-version';
 
 const MCP_PROTOCOL_VERSIONS = {
-  defaultVersion: '2025-03-26',
   supported: new Set<string>(['2025-11-25']),
 };
 
@@ -2012,15 +2011,6 @@ function getHeaderValue(req: Request, headerNameLower: string): string | null {
   return null;
 }
 
-function setHeaderValue(
-  req: Request,
-  headerNameLower: string,
-  value: string
-): void {
-  // Express exposes req.headers as a plain object, but the type is readonly-ish.
-  req.headers[headerNameLower] = value;
-}
-
 export function ensureMcpProtocolVersionHeader(
   req: Request,
   res: Response
@@ -2029,18 +2019,13 @@ export function ensureMcpProtocolVersionHeader(
   const version = raw?.trim();
 
   if (!version) {
-    const assumed = MCP_PROTOCOL_VERSIONS.defaultVersion;
-    setHeaderValue(req, MCP_PROTOCOL_VERSION_HEADER, assumed);
-    if (!MCP_PROTOCOL_VERSIONS.supported.has(assumed)) {
-      sendJsonRpcError(
-        res,
-        -32600,
-        `Unsupported MCP-Protocol-Version: ${assumed}`,
-        400
-      );
-      return false;
-    }
-    return true;
+    sendJsonRpcError(
+      res,
+      -32600,
+      'Missing required MCP-Protocol-Version header',
+      400
+    );
+    return false;
   }
 
   if (!MCP_PROTOCOL_VERSIONS.supported.has(version)) {

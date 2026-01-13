@@ -28,7 +28,7 @@ function createStatusJsonCapture() {
   return { res, getStatusCode: () => statusCode, getJsonBody: () => jsonBody };
 }
 
-function testDefaultsMissingHeader() {
+function testRejectsMissingHeader() {
   const req = { headers: {} };
   const { res, getStatusCode, getJsonBody } = createStatusJsonCapture();
 
@@ -37,7 +37,7 @@ function testDefaultsMissingHeader() {
   assert.equal(ok, false);
   assert.equal(getStatusCode(), 400);
   assert.equal(getJsonBody().jsonrpc, '2.0');
-  assert.equal(req.headers['mcp-protocol-version'], '2025-03-26');
+  assert.equal(req.headers['mcp-protocol-version'], undefined);
 }
 
 function testRejectsUnsupportedHeader() {
@@ -73,8 +73,8 @@ function testAcceptsSupportedHeader() {
 
 function registerProtocolPolicyTests() {
   describe('protocol-policy', () => {
-    it('defaults missing MCP-Protocol-Version header', () => {
-      testDefaultsMissingHeader();
+    it('rejects missing MCP-Protocol-Version header', () => {
+      testRejectsMissingHeader();
     });
     it('rejects unsupported MCP-Protocol-Version header', () => {
       testRejectsUnsupportedHeader();

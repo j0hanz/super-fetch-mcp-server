@@ -38,7 +38,8 @@ function formatMetadata(meta?: LogMetadata): string {
 
   const contextMeta: LogMetadata = {};
   if (requestId) contextMeta.requestId = requestId;
-  if (sessionId) contextMeta.sessionId = sessionId;
+  if (sessionId && config.logging.level === 'debug')
+    contextMeta.sessionId = sessionId;
   if (operationId) contextMeta.operationId = operationId;
 
   const merged = { ...contextMeta, ...meta };
