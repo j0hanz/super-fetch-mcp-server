@@ -998,7 +998,14 @@ function removeNoiseFromHtml(html: string): string {
 
 function buildInlineCode(content: string): string {
   const runs = content.match(/`+/g);
-  const longest = runs?.sort((a, b) => b.length - a.length)[0] ?? '';
+  let longest = '';
+  if (runs) {
+    for (const run of runs) {
+      if (run.length > longest.length) {
+        longest = run;
+      }
+    }
+  }
   const delimiter = `\`${longest}`;
   const padding = delimiter.length > 1 ? ' ' : '';
   return `${delimiter}${padding}${content}${padding}${delimiter}`;

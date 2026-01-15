@@ -190,14 +190,9 @@ function createProgressReporter(extra?: ToolHandlerExtra): ProgressReporter {
 }
 
 function serializeStructuredContent(
-  structuredContent: Record<string, unknown>,
-  fromCache: boolean
+  structuredContent: Record<string, unknown>
 ): string {
-  return JSON.stringify(
-    structuredContent,
-    fromCache ? undefined : null,
-    fromCache ? undefined : 2
-  );
+  return JSON.stringify(structuredContent);
 }
 
 function buildResourceLink(
@@ -248,7 +243,7 @@ function resolveContentToEmbed(
   inlineResult: InlineResult,
   fullContent: string | undefined,
   useInlineInHttpMode: boolean
-): unknown {
+): string | undefined {
   if (useInlineInHttpMode) {
     return inlineResult.content;
   }
@@ -257,11 +252,11 @@ function resolveContentToEmbed(
 
 function maybeAppendEmbeddedResource(
   blocks: ToolContentBlockUnion[],
-  contentToEmbed: unknown,
+  contentToEmbed: string | undefined,
   url: string | undefined,
   title: string | undefined
 ): void {
-  if (typeof contentToEmbed !== 'string') return;
+  if (!contentToEmbed) return;
   if (!url) return;
 
   const embeddedResource = buildEmbeddedResource(contentToEmbed, url, title);
@@ -282,12 +277,11 @@ function maybeAppendResourceLink(
 }
 
 function buildTextBlock(
-  structuredContent: Record<string, unknown>,
-  fromCache: boolean
+  structuredContent: Record<string, unknown>
 ): ToolContentBlock {
   return {
     type: 'text',
-    text: serializeStructuredContent(structuredContent, fromCache),
+    text: serializeStructuredContent(structuredContent),
   };
 }
 
@@ -301,9 +295,7 @@ function buildToolContentBlocks(
   url?: string,
   title?: string
 ): ToolContentBlockUnion[] {
-  const blocks: ToolContentBlockUnion[] = [
-    buildTextBlock(structuredContent, fromCache),
-  ];
+  const blocks: ToolContentBlockUnion[] = [buildTextBlock(structuredContent)];
 
   const contentToEmbed = resolveContentToEmbed(
     inlineResult,
@@ -581,7 +573,7 @@ export function createToolErrorResponse(
   };
 
   return {
-    content: [buildTextBlock(structuredContent, true)],
+    content: [buildTextBlock(structuredContent)],
     structuredContent,
     isError: true,
   };
