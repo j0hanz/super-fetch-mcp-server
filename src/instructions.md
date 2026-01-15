@@ -1,66 +1,39 @@
-# superFetch MCP Server — AI Usage Instructions
+# superFetch Instructions
 
-Use this server to fetch single public http(s) URLs, extract readable content, and return clean Markdown suitable for summarization, RAG ingestion, and citation. Prefer these tools over "remembering" state in chat.
+> **Guidance for the Agent:** These instructions are available as a resource (`internal://instructions`). Load them when you are confused about tool usage.
 
-## Operating Rules
+## 1. Core Capability
 
-- Only fetch sources that are necessary and likely authoritative.
-- Cite using `resolvedUrl` (when present) and keep `fetchedAt`/metadata intact.
-- If content is missing/truncated, check for a `resource_link` in the output and read the cache resource.
-- If request is vague, ask clarifying questions.
+- **Domain:** Fetch public http(s) URLs, extract readable content, and return clean Markdown.
+- **Primary Resources:** `fetch-url` output (`markdown`, `title`, `url`) and cache resources (`superfetch://cache/markdown/{urlHash}`).
 
-### Strategies
+## 2. The "Golden Path" Workflows (Critical)
 
-- **Discovery:** Use `fetch-url` to retrieve content. Review the output for `resource_link` if the page is large.
-- **Action:** Read the Markdown content directly from the tool output or the referenced resource.
+### Workflow A: Fetch and Read
 
-## Data Model
+1. Call `fetch-url` with a public http(s) URL.
+2. Read `structuredContent.markdown` and `structuredContent.title`.
+3. Cite using `resolvedUrl` or `url` from the response.
 
-- **Markdown Content:** `markdown` content, `title`, and `url` metadata.
-- **Resources:** Cached content accessible via `superfetch://cache/{namespace}/{hash}`.
+### Workflow B: Large Content / Cache Resource
 
-## Workflows
+1. If the response includes a `resource_link`, read that resource URI.
+2. If content is missing, list resources and select the matching `superfetch://cache/markdown/{urlHash}` entry.
+   > **Constraint:** Never guess resource URIs. Use the returned `resource_link` or list resources first.
 
-### 1) Fetch and Read
+## 3. Tool Nuances & "Gotchas"
 
-```text
-fetch-url(url) → Get markdown content
-If content truncated → read resource(superfetch://cache/...)
-```
+- **`fetch-url`**:
+  - **Latency:** Network-bound; expect slower responses for large pages.
+  - **Side Effects:** Calls external websites (open-world).
+  - **Input:** `url` must be public http/https. Private/internal addresses are blocked.
+  - **Output:** Large content may return a `resource_link` instead of full inline markdown.
+- **Cache resources (`superfetch://cache/markdown/{urlHash}`)**:
+  - **Namespace:** Only `markdown` is valid.
+  - **Discovery:** Use resource listing or the `resource_link` returned by `fetch-url`.
 
-## Tools
+## 4. Error Handling Strategy
 
-### fetch-url
-
-Fetches a webpage and converts it to clean Markdown format (HTML → Readability → Markdown).
-
-- **Use when:** You need the text content of a specific public URL.
-- **Args:**
-  - `url` (string, required): The URL to fetch (must be http/https).
-- **Returns:**
-  - `structuredContent` with `markdown`, `title`, `url`.
-  - Content block with standard text.
-  - Or `resource_link` block if content exceeds inline limits.
-
-## Response Shape
-
-Success: `{ "content": [...], "structuredContent": { "markdown": "...", "title": "...", "url": "..." } }`
-Error: `{ "isError": true, "structuredContent": { "error": "...", "url": "..." } }`
-
-### Common Errors
-
-| Code               | Meaning              | Resolution                      |
-| ------------------ | -------------------- | ------------------------------- |
-| `VALIDATION_ERROR` | Invalid input URL    | Ensure URL is valid http/https  |
-| `FETCH_ERROR`      | Network/HTTP failure | Verify URL is public/accessible |
-
-## Limits
-
-- **Max Inline Characters:** 20000
-- **Max Content Size:** 10MB
-- **Fetch Timeout:** 15000ms
-
-## Security
-
-- Server blocks private/internal IP ranges (localhost, 127.x, 192.168.x, metadata services).
-- Do not attempt to fetch internal network targets.
+- **`VALIDATION_ERROR`**: URL is invalid or blocked. Confirm it is a public http(s) URL.
+- **`FETCH_ERROR`**: Network/HTTP failure. Retry or verify the site is reachable.
+- **Cache miss (`Content not found`)**: Re-run `fetch-url` or verify the cache entry exists.

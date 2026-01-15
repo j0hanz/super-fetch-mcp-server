@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 
 import { registerCachedContentResource } from './cache.js';
@@ -41,6 +41,27 @@ function createServerInstructions(serverVersion: string): string {
   }
 }
 
+function registerInstructionsResource(server: McpServer): void {
+  server.registerResource(
+    'instructions',
+    new ResourceTemplate('internal://instructions', { list: undefined }),
+    {
+      title: 'Server Instructions',
+      description: 'Usage guidance for the superFetch MCP server.',
+      mimeType: 'text/markdown',
+    },
+    (uri) => ({
+      contents: [
+        {
+          uri: uri.href,
+          mimeType: 'text/markdown',
+          text: createServerInstructions(config.server.version),
+        },
+      ],
+    })
+  );
+}
+
 export function createMcpServer(): McpServer {
   const server = new McpServer(createServerInfo(), {
     capabilities: createServerCapabilities(),
@@ -49,6 +70,7 @@ export function createMcpServer(): McpServer {
 
   registerTools(server);
   registerCachedContentResource(server);
+  registerInstructionsResource(server);
 
   return server;
 }
