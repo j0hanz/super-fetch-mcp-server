@@ -71,7 +71,7 @@ interface McpRequestParams {
 interface McpRequestBody {
   jsonrpc: '2.0';
   method: string;
-  id?: string | number;
+  id?: JsonRpcId;
   params?: McpRequestParams;
 }
 
@@ -1456,6 +1456,8 @@ function touchSession(
   const session = sessions.get(sessionId);
   if (session) {
     session.lastSeen = Date.now();
+    sessions.delete(sessionId);
+    sessions.set(sessionId, session);
   }
 }
 
@@ -1494,17 +1496,9 @@ function evictExpiredSessions(
 function evictOldestSession(
   sessions: Map<string, SessionEntry>
 ): SessionEntry | undefined {
-  let oldestId: string | undefined;
-  let oldestSeen = Number.POSITIVE_INFINITY;
-
-  for (const [id, session] of sessions.entries()) {
-    if (session.lastSeen < oldestSeen) {
-      oldestSeen = session.lastSeen;
-      oldestId = id;
-    }
-  }
-
-  if (!oldestId) return undefined;
+  const oldestEntry = sessions.keys().next();
+  if (oldestEntry.done) return undefined;
+  const oldestId = oldestEntry.value;
   const session = sessions.get(oldestId);
   sessions.delete(oldestId);
   return session;
@@ -2134,7 +2128,7 @@ const paramsSchema = z.looseObject({});
 const mcpRequestSchema = z.looseObject({
   jsonrpc: z.literal('2.0'),
   method: z.string().min(1),
-  id: z.union([z.string(), z.number()]).optional(),
+  id: z.union([z.string(), z.number(), z.null()]).optional(),
   params: paramsSchema.optional(),
 });
 

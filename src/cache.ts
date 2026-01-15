@@ -299,6 +299,7 @@ interface CacheItem {
 }
 const contentCache = new Map<string, CacheItem>();
 let cleanupController: AbortController | null = null;
+let nextExpiryAt: number | null = null;
 
 interface CacheUpdateEvent {
   cacheKey: string;
@@ -348,11 +349,22 @@ async function runCleanupLoop(signal: AbortSignal): Promise<void> {
 }
 
 function enforceCacheLimits(now: number): void {
+  if (nextExpiryAt !== null && now < nextExpiryAt) {
+    trimCacheToMaxKeys();
+    return;
+  }
+
+  let nextExpiry: number | null = null;
   for (const [key, item] of contentCache.entries()) {
     if (now > item.expiresAt) {
       contentCache.delete(key);
+      continue;
+    }
+    if (nextExpiry === null || item.expiresAt < nextExpiry) {
+      nextExpiry = item.expiresAt;
     }
   }
+  nextExpiryAt = nextExpiry;
   trimCacheToMaxKeys();
 }
 
@@ -467,6 +479,9 @@ function persistCacheEntry(
   expiresAtMs: number
 ): void {
   contentCache.set(cacheKey, { entry, expiresAt: expiresAtMs });
+  if (nextExpiryAt === null || expiresAtMs < nextExpiryAt) {
+    nextExpiryAt = expiresAtMs;
+  }
   trimCacheToMaxKeys();
   notifyCacheUpdate(cacheKey);
 }
@@ -481,7 +496,12 @@ function removeOldestEntries(count: number): void {
   for (let removed = 0; removed < count; removed += 1) {
     const next = iterator.next();
     if (next.done) break;
-    contentCache.delete(next.value);
+    const removedKey = next.value;
+    const removedItem = contentCache.get(removedKey);
+    contentCache.delete(removedKey);
+    if (nextExpiryAt !== null && removedItem?.expiresAt === nextExpiryAt) {
+      nextExpiryAt = null;
+    }
   }
 }
 
