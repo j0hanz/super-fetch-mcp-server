@@ -864,6 +864,8 @@ const NOISE_MARKERS = [
   ' z-50',
   ' z-4',
   ' isolate',
+  ' breadcrumb',
+  ' pagination',
 ];
 
 function mayContainNoise(html: string): boolean {
