@@ -959,9 +959,7 @@ function isNoiseElement(node: HTMLElement): boolean {
   );
 }
 
-function stripNoiseNodes(document: Document): void {
-  const nodes = document.querySelectorAll('*');
-
+function removeNoiseNodes(nodes: NodeListOf<Element>): void {
   for (let index = nodes.length - 1; index >= 0; index -= 1) {
     const node =
       typeof nodes.item === 'function' ? nodes.item(index) : nodes[index];
@@ -970,6 +968,34 @@ function stripNoiseNodes(document: Document): void {
       node.remove();
     }
   }
+}
+
+function stripNoiseNodes(document: Document): void {
+  // Use targeted selectors for common noise elements instead of querySelectorAll('*')
+  const targetSelectors = [
+    'nav',
+    'footer',
+    'aside',
+    'header[class*="site"]',
+    'header[class*="nav"]',
+    'header[class*="menu"]',
+    '[role="banner"]',
+    '[role="navigation"]',
+    '[role="dialog"]',
+    '[style*="display: none"]',
+    '[style*="display:none"]',
+    '[hidden]',
+    '[aria-hidden="true"]',
+  ].join(',');
+
+  const potentialNoiseNodes = document.querySelectorAll(targetSelectors);
+
+  // Remove in reverse order to handle nested elements correctly
+  removeNoiseNodes(potentialNoiseNodes);
+
+  // Second pass: check remaining elements for noise patterns (promo, fixed positioning, etc.)
+  const allElements = document.querySelectorAll('*');
+  removeNoiseNodes(allElements);
 }
 
 function removeNoiseFromHtml(html: string): string {
@@ -1729,6 +1755,7 @@ function isHeadingStructurePreserved(
 ): boolean {
   if (!article) return false;
 
+  // Cache heading counts to avoid duplicate regex matching
   const originalHeadingCount = countHeadings(originalHtml);
   const articleHeadingCount = countHeadings(article.content);
 
@@ -1741,7 +1768,7 @@ function isHeadingStructurePreserved(
 }
 
 function stripHtmlTagsForLength(html: string): string {
-  const parts: string[] = [];
+  let result = '';
   let inTag = false;
   for (const char of html) {
     if (char === '<') {
@@ -1749,10 +1776,10 @@ function stripHtmlTagsForLength(html: string): string {
     } else if (char === '>') {
       inTag = false;
     } else if (!inTag) {
-      parts.push(char);
+      result += char;
     }
   }
-  return parts.join('');
+  return result;
 }
 
 export function isExtractionSufficient(
