@@ -16,18 +16,9 @@ A [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server that f
 
 Built for AI workflows that need _clean text_, _stable metadata_, and _safe-by-default fetching_.
 
-**You get, in one tool call:**
+**Great for:** _LLM summarization_, _context retrieval_, _knowledge base ingestion_, and _AI agents_.
 
-- **Readable Markdown** (HTML → Readability → Markdown)
-- **Metadata frontmatter** for HTML (title, source, author, description, fetchedAt)
-- **Raw markdown passthrough** (GitHub/GitLab/Bitbucket/Gist URLs auto-rewritten to raw when possible)
-- **Cache + resources** for large pages (MCP `superfetch://cache/...` resources and optional download endpoint in HTTP mode)
-
-**Great for:** docs ingestion, RAG pipelines, research agents, changelog/news summarization, and “fetch this URL and cite it” workflows.
-
-[Quick Start](#quick-start) | [Tool](#available-tools) | [Resources](#resources) | [Configuration](#configuration) | [Security](#security) | [Development](#development)
-
-> **Published to [MCP Registry](https://registry.modelcontextprotocol.io/)** - Search for `io.github.j0hanz/superfetch`
+_|_ [Quick Start](#quick-start) _|_ [Tool](#available-tools) _|_ [Resources](#resources) _|_ [Configuration](#configuration) _|_ [Security](#security) _|_ [Development](#development) _|_
 
 ---
 
@@ -36,8 +27,8 @@ Built for AI workflows that need _clean text_, _stable metadata_, and _safe-by-d
 
 ## Features
 
-- **Cleaner outputs for LLMs**: Readability extraction with a quality gate to avoid making pages worse
-- **Markdown that’s easy to consume**: YAML frontmatter for HTML + consistent Markdown formatting
+- **Cleaner outputs for LLMs**: Readability extraction with quality gates (content ratio + heading retention ≥ 70%)
+- **Markdown that’s easy to consume**: metadata footer for HTML + configurable source injection for raw Markdown (markdown or frontmatter)
 - **Handles “raw content” sources**: preserves markdown/text; rewrites GitHub/GitLab/Bitbucket/Gist URLs to raw
 - **Works for both local and hosted setups**:
   - **Stdio mode**: best for MCP clients (VS Code / Claude Desktop / Cursor)
@@ -45,14 +36,19 @@ Built for AI workflows that need _clean text_, _stable metadata_, and _safe-by-d
 - **Fast and resilient**: redirect validation, timeouts, and response size limits
 - **Security-first defaults**: URL validation + SSRF/DNS/IP blocklists (blocks private ranges and cloud metadata endpoints)
 
-If you’re comparing “just call `fetch()`” vs superFetch: superFetch focuses on _readability_, _consistent structure_, and _safe URL access_ for agent environments.
+**You get, in one tool call:**
+
+- **Clean, readable Markdown** from any public URL (docs, articles, blogs, wikis)
+
+If you’re comparing “just call `fetch()`” vs superFetch: superFetch focuses on extracting the main content in a readble format for LLMs and even humans, when requested url is fetched it returns clean structured markdown that can also be saved as a resource for later use.
 
 ## What it is (and isn’t)
 
-- **It is** a “URL → clean Markdown” tool designed for agent/RAG workflows.
-- **It isn’t** a headless browser: pages that require heavy client-side rendering may not extract well.
-- **It isn’t** a crawler: it fetches a single URL per call (your agent can decide what to fetch next).
-- **It’s opinionated on safety**: blocked private IP ranges and metadata endpoints are a feature, not a bug.
+- **It is** a content extraction tool: focuses on extracting readable content, not screenshots or full-page data.
+- **It is** an MCP server: integrates with any MCP-compatible client (Claude Desktop, VS Code, Cursor, Cline, Windsurf, Codex, etc).
+- **It isn’t** a general web scraper: it extracts main content, not all page elements.
+- **It isn’t** a browser: it doesn’t execute JavaScript or render pages.
+- **It’s opinionated on safety**: blocks private/internal URLs and cloud metadata endpoints by default.
 
 ---
 
@@ -113,7 +109,7 @@ See [Configuration](#configuration) or `CONFIGURATION.md` for all available opti
   "inputUrl": "https://example.com/docs",
   "resolvedUrl": "https://example.com/docs",
   "title": "Documentation",
-  "markdown": "---\ntitle: Documentation\nsource: https://example.com/docs\nfetchedAt: 2026-01-12T12:00:00.000Z\n---\n\n# Getting Started\n\n..."
+  "markdown": "# Getting Started\n\n...\n\n---\n\n _Documentation_ | [_Original Source_](https://example.com/docs) | _12-01-2026_"
 }
 ```
 
@@ -244,7 +240,7 @@ code %APPDATA%\Claude\claude_desktop_config.json
 
 - Call `fetch-url` with the docs URL
 - Feed the returned `markdown` into your summarizer / chunker
-- Use the YAML frontmatter fields (especially `source`) for citations
+- Use the metadata footer fields (especially **Original Source**) for citations
 
 ### 2) Fetch a GitHub/GitLab/Bitbucket file as raw markdown
 
@@ -343,7 +339,7 @@ The tool returns `structuredContent` with `url`, `inputUrl`, `resolvedUrl`, opti
 The response includes:
 
 - a `text` block containing JSON of `structuredContent`
-- a `resource` block embedding markdown when inline content is available (always for successful stdio responses)
+- a `resource` block embedding markdown when inline content is available (stdio always embeds full markdown; HTTP embeds inline markdown when it fits or when truncated)
 - when content exceeds the inline limit and cache is enabled, a `resource_link` block pointing to `superfetch://cache/...` (stdio mode still embeds full markdown; HTTP mode omits embedded markdown)
 - error responses set `isError: true` and return `structuredContent` with `error` and `url`
 
@@ -351,7 +347,7 @@ The response includes:
 
 ### `fetch-url`
 
-Fetches a webpage and converts it to clean Markdown format with YAML frontmatter for HTML (raw markdown is preserved).
+Fetches a webpage and converts it to clean Markdown format with a metadata footer for HTML (raw markdown is preserved with source injection).
 
 | Parameter | Type   | Default  | Description  |
 | --------- | ------ | -------- | ------------ |
@@ -444,17 +440,19 @@ Set environment variables in your MCP client `env` or in the shell before starti
 
 ### Core Server Settings
 
-| Variable               | Default              | Description                                                                       |
-| ---------------------- | -------------------- | --------------------------------------------------------------------------------- |
-| `HOST`                 | `127.0.0.1`          | HTTP bind address                                                                 |
-| `PORT`                 | `3000`               | HTTP server port (1024-65535)                                                     |
-| `USER_AGENT`           | `superFetch-MCP/2.0` | User-Agent header for outgoing requests                                           |
-| `CACHE_ENABLED`        | `true`               | Enable response caching                                                           |
-| `CACHE_TTL`            | `3600`               | Cache TTL in seconds (60-86400)                                                   |
-| `LOG_LEVEL`            | `info`               | Logging level. Only `debug` enables verbose logs; other values behave like `info` |
-| `ALLOW_REMOTE`         | `false`              | Allow binding to non-loopback hosts (OAuth required)                              |
-| `ALLOWED_HOSTS`        | (empty)              | Additional allowed Host/Origin values (comma/space separated)                     |
-| `TRANSFORM_TIMEOUT_MS` | `30000`              | Worker transform timeout in milliseconds (5000-120000)                            |
+| Variable                    | Default              | Description                                                |
+| --------------------------- | -------------------- | ---------------------------------------------------------- |
+| `HOST`                      | `127.0.0.1`          | HTTP bind address                                          |
+| `PORT`                      | `3000`               | HTTP server port (1024-65535)                              |
+| `USER_AGENT`                | `superFetch-MCP/2.0` | User-Agent header for outgoing requests                    |
+| `CACHE_ENABLED`             | `true`               | Enable response caching                                    |
+| `CACHE_TTL`                 | `3600`               | Cache TTL in seconds (60-86400)                            |
+| `LOG_LEVEL`                 | `info`               | Logging level (`debug` enables verbose logs)               |
+| `ALLOW_REMOTE`              | `false`              | Allow non-loopback binds (OAuth required)                  |
+| `ALLOWED_HOSTS`             | (empty)              | Additional allowed Host/Origin values                      |
+| `TRANSFORM_TIMEOUT_MS`      | `30000`              | Worker transform timeout in ms (5000-120000)               |
+| `TOOL_TIMEOUT_MS`           | `50000`              | Overall tool timeout in ms (1000-300000)                   |
+| `TRANSFORM_METADATA_FORMAT` | `markdown`           | Raw markdown metadata format (`markdown` or `frontmatter`) |
 
 For HTTP server tuning (`SERVER_HEADERS_TIMEOUT_MS`, `SERVER_REQUEST_TIMEOUT_MS`, `SERVER_KEEP_ALIVE_TIMEOUT_MS`, `SERVER_SHUTDOWN_CLOSE_IDLE`, `SERVER_SHUTDOWN_CLOSE_ALL`), see `CONFIGURATION.md`.
 
@@ -515,12 +513,13 @@ HTTP mode uses the MCP Streamable HTTP transport. The workflow is:
 2. The server returns `mcp-session-id` in the response headers.
 3. Use that header for subsequent `POST /mcp`, `GET /mcp`, and `DELETE /mcp` requests.
 
-If the `mcp-protocol-version` header is missing, the server assumes `2025-03-26` and rejects the request because only `2025-11-25` is supported. Clients must send `mcp-protocol-version: 2025-11-25`.
+If the `mcp-protocol-version` header is missing, the server rejects the request. Only `mcp-protocol-version: 2025-11-25` is supported.
 
 `GET /mcp` and `DELETE /mcp` require `mcp-session-id`. `POST /mcp` without an `initialize` request will return 400.
 
 Additional HTTP transport notes:
 
+- `POST /mcp` should advertise `Accept: application/json, text/event-stream` (the server normalizes missing or `*/*` Accept headers).
 - `GET /mcp` requires `Accept: text/event-stream` (otherwise 406).
 - JSON-RPC batch requests are not supported (400).
 
