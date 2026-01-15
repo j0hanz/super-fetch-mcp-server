@@ -1824,7 +1824,7 @@ async function connectTransportOrThrow({
         oncloseBeforeConnect
       );
     }
-  } catch (error) {
+  } catch (error: unknown) {
     clearInitTimeout();
     releaseSlot();
     void transport.close().catch((closeError: unknown) => {
@@ -2208,7 +2208,7 @@ async function handleTransportRequest(
 ): Promise<void> {
   try {
     await dispatchTransportRequest(transport, req, res, body);
-  } catch (error) {
+  } catch (error: unknown) {
     logError(
       'MCP request handling failed',
       error instanceof Error ? error : undefined

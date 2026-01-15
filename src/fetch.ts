@@ -1188,7 +1188,7 @@ async function performFetchCycleSafely(
       redirectLimit,
       redirectCount
     );
-  } catch (error) {
+  } catch (error: unknown) {
     annotateRedirectError(error, currentUrl);
     throw error;
   }
@@ -1319,7 +1319,7 @@ async function readStreamWithLimit(
 
   try {
     await readAllChunks(reader, state, url, maxBytes, signal);
-  } catch (error) {
+  } catch (error: unknown) {
     await handleReadFailure(error, signal, url, reader);
   } finally {
     reader.releaseLock();
@@ -1445,7 +1445,7 @@ async function fetchWithTelemetry(
 
   try {
     return await fetchAndHandle(normalizedUrl, requestInit, telemetry);
-  } catch (error) {
+  } catch (error: unknown) {
     const mapped = mapFetchError(error, normalizedUrl, timeoutMs);
     telemetry.url = mapped.url;
     recordFetchError(telemetry, mapped, mapped.statusCode);

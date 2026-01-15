@@ -358,11 +358,7 @@ function parseReadabilityArticle(
   document: Document
 ): ReturnType<Readability['parse']> | null {
   try {
-    // Readability mutates the document; operate on a clone.
     const documentClone = document.cloneNode(true) as Document;
-
-    // Avoid the more expensive parse() when the page is unlikely to be readable,
-    // but don't penalize small documents where the heuristic is often too strict.
     const rawText =
       documentClone.body.textContent ||
       documentClone.documentElement.textContent;
@@ -370,11 +366,9 @@ function parseReadabilityArticle(
     if (textLength >= 400 && !isProbablyReaderable(documentClone)) {
       return null;
     }
-
-    // Guard against pathological DOM sizes.
     const reader = new Readability(documentClone, { maxElemsToParse: 20_000 });
     return reader.parse();
-  } catch (error) {
+  } catch (error: unknown) {
     logError('Failed to extract article with Readability', asError(error));
     return null;
   }
@@ -503,7 +497,7 @@ function tryExtractContent(
 ): ExtractionResult {
   try {
     return extractContentStages(html, url, options);
-  } catch (error) {
+  } catch (error: unknown) {
     return handleExtractionFailure(error, url, options.signal);
   }
 }
@@ -540,7 +534,7 @@ function applyBaseUri(document: Document, url: string): void {
       value: url,
       writable: true,
     });
-  } catch (error) {
+  } catch (error: unknown) {
     logInfo('Failed to set baseURI (non-critical)', {
       url: url.substring(0, 100),
       error: getErrorMessage(error),
@@ -1297,7 +1291,7 @@ export function htmlToMarkdown(
   try {
     const content = translateHtmlToMarkdown(html, url, options?.signal);
     return appendMetadataFooter(content, metadata, url);
-  } catch (error) {
+  } catch (error: unknown) {
     if (error instanceof FetchError) {
       throw error;
     }

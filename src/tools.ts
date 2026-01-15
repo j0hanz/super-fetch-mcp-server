@@ -180,7 +180,7 @@ function createProgressReporter(extra?: ToolHandlerExtra): ProgressReporter {
             message,
           },
         });
-      } catch (error) {
+      } catch (error: unknown) {
         logWarn('Failed to send progress notification', {
           error: getErrorMessage(error),
         });

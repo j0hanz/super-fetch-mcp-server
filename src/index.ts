@@ -58,7 +58,7 @@ try {
     const { shutdown } = await startHttpServer();
     shutdownHandlerRef.current = shutdown;
   }
-} catch (error) {
+} catch (error: unknown) {
   logError(
     'Failed to start server',
     error instanceof Error ? error : undefined

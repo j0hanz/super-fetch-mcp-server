@@ -386,7 +386,7 @@ function runCacheOperation<T>(
 ): T | undefined {
   try {
     return operation();
-  } catch (error) {
+  } catch (error: unknown) {
     logCacheError(message, cacheKey, error);
     return undefined;
   }

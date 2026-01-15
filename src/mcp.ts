@@ -136,7 +136,7 @@ async function connectStdioServer(
   try {
     await server.connect(transport);
     logInfo('superFetch MCP server running on stdio');
-  } catch (error) {
+  } catch (error: unknown) {
     logError(
       'Failed to start stdio server',
       error instanceof Error ? error : undefined
