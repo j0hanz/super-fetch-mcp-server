@@ -131,25 +131,40 @@ const TRUNCATION_MARKER = '...[truncated]';
 const FETCH_PROGRESS_TOTAL = 4;
 
 const fetchUrlInputSchema = z.strictObject({
-  url: z.url({ protocol: /^https?$/i }).describe('The URL to fetch'),
+  url: z
+    .url({ protocol: /^https?$/i })
+    .min(1)
+    .max(config.constants.maxUrlLength)
+    .describe('The URL to fetch'),
 });
 
 const fetchUrlOutputSchema = z.strictObject({
-  url: z.string().describe('The fetched URL'),
+  url: z
+    .string()
+    .min(1)
+    .max(config.constants.maxUrlLength)
+    .describe('The fetched URL'),
   inputUrl: z
     .string()
+    .max(config.constants.maxUrlLength)
     .optional()
     .describe('The original URL provided by the caller'),
   resolvedUrl: z
     .string()
+    .max(config.constants.maxUrlLength)
     .optional()
     .describe('The normalized or transformed URL that was fetched'),
-  title: z.string().optional().describe('Page title'),
+  title: z.string().max(512).optional().describe('Page title'),
   markdown: z
     .string()
+    .max(config.constants.maxInlineContentChars)
     .optional()
     .describe('The extracted content in Markdown format'),
-  error: z.string().optional().describe('Error message if the request failed'),
+  error: z
+    .string()
+    .max(2048)
+    .optional()
+    .describe('Error message if the request failed'),
 });
 
 export const FETCH_URL_TOOL_NAME = 'fetch-url';

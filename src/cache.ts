@@ -649,12 +649,12 @@ function getClientResourceCapabilities(server: McpServer): {
 } {
   const caps = server.server.getClientCapabilities();
   if (!caps || !isRecord(caps)) {
-    return { listChanged: true, subscribe: true };
+    return { listChanged: false, subscribe: false };
   }
 
   const { resources } = caps as { resources?: unknown };
   if (!isRecord(resources)) {
-    return { listChanged: true, subscribe: true };
+    return { listChanged: false, subscribe: false };
   }
 
   const { listChanged, subscribe } = resources as {
