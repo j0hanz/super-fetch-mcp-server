@@ -16,8 +16,17 @@ import { z } from 'zod';
 import { isProbablyReaderable, Readability } from '@mozilla/readability';
 
 import { config } from './config.js';
+import { removeNoiseFromHtml } from './dom-noise-removal.js';
 import { FetchError, getErrorMessage } from './errors.js';
 import { isRawTextContentUrl } from './fetch.js';
+import {
+  detectLanguageFromCode,
+  resolveLanguageFromAttributes,
+} from './language-detection.js';
+import {
+  cleanupMarkdownArtifacts,
+  promoteOrphanHeadings,
+} from './markdown-cleanup.js';
 import {
   getOperationId,
   getRequestId,
@@ -27,50 +36,47 @@ import {
   logWarn,
   redactUrl,
 } from './observability.js';
+import type {
+  ExtractedArticle,
+  ExtractedMetadata,
+  ExtractionResult,
+  MarkdownTransformResult,
+  MetadataBlock,
+  TransformOptions,
+  TransformStageContext,
+  TransformStageEvent,
+} from './transform-types.js';
 import { isRecord } from './type-guards.js';
 
-export interface MetadataBlock {
-  type: 'metadata';
-  title?: string;
-  description?: string;
-  author?: string;
-  url: string;
-  fetchedAt: string;
-}
+// Re-export language detection for backward compatibility
+export {
+  detectLanguageFromCode,
+  resolveLanguageFromAttributes,
+} from './language-detection.js';
 
-export interface ExtractedArticle {
-  title?: string;
-  byline?: string;
-  content: string;
-  textContent: string;
-  excerpt?: string;
-  siteName?: string;
-}
+// Re-export markdown cleanup for backward compatibility
+export {
+  cleanupMarkdownArtifacts,
+  promoteOrphanHeadings,
+} from './markdown-cleanup.js';
 
-export interface ExtractedMetadata {
-  title?: string;
-  description?: string;
-  author?: string;
-}
+// Re-export DOM noise removal for backward compatibility
+export { removeNoiseFromHtml } from './dom-noise-removal.js';
 
-export interface ExtractionResult {
-  article: ExtractedArticle | null;
-  metadata: ExtractedMetadata;
-}
+// Re-export types for backward compatibility
+export type {
+  MetadataBlock,
+  ExtractedArticle,
+  ExtractedMetadata,
+  ExtractionResult,
+  MarkdownTransformResult,
+  TransformOptions,
+  TransformStageEvent,
+  TransformStageContext,
+} from './transform-types.js';
 
 interface ExtractionContext extends ExtractionResult {
   document?: Document;
-}
-
-export interface MarkdownTransformResult {
-  markdown: string;
-  title: string | undefined;
-  truncated: boolean;
-}
-
-export interface TransformOptions {
-  includeMetadata: boolean;
-  signal?: AbortSignal;
 }
 
 function getAbortReason(signal: AbortSignal): unknown {
@@ -78,31 +84,7 @@ function getAbortReason(signal: AbortSignal): unknown {
   return 'reason' in signal ? signal.reason : undefined;
 }
 
-function getBodyInnerHtml(document: unknown): string | undefined {
-  if (!isRecord(document)) return undefined;
-  const { body } = document;
-  if (!isRecord(body)) return undefined;
-  const { innerHTML } = body;
-  return typeof innerHTML === 'string' && innerHTML.length > 0
-    ? innerHTML
-    : undefined;
-}
-
-function getDocumentToString(document: unknown): (() => string) | undefined {
-  if (!isRecord(document)) return undefined;
-  if (typeof document.toString !== 'function') return undefined;
-  return document.toString.bind(document);
-}
-
-function getDocumentElementOuterHtml(document: unknown): string | undefined {
-  if (!isRecord(document)) return undefined;
-  const { documentElement } = document;
-  if (!isRecord(documentElement)) return undefined;
-  const { outerHTML } = documentElement;
-  return typeof outerHTML === 'string' && outerHTML.length > 0
-    ? outerHTML
-    : undefined;
-}
+// DOM accessor helpers moved to ./dom-noise-removal.ts
 
 const CODE_BLOCK = {
   fence: '```',
@@ -110,23 +92,6 @@ const CODE_BLOCK = {
     return `\`\`\`${language}\n${code}\n\`\`\``;
   },
 };
-
-export interface TransformStageEvent {
-  v: 1;
-  type: 'stage';
-  stage: string;
-  durationMs: number;
-  url: string;
-  requestId?: string;
-  operationId?: string;
-  truncated?: boolean;
-}
-
-export interface TransformStageContext {
-  readonly stage: string;
-  readonly startTime: number;
-  readonly url: string;
-}
 
 const transformChannel = diagnosticsChannel.channel('superfetch.transform');
 
@@ -445,607 +410,7 @@ function applyBaseUri(document: Document, url: string): void {
   }
 }
 
-function containsJsxTag(code: string): boolean {
-  for (let index = 0; index < code.length - 1; index += 1) {
-    if (code[index] !== '<') continue;
-    const next = code[index + 1];
-    if (!next) continue;
-    if (next >= 'A' && next <= 'Z') return true;
-  }
-  return false;
-}
-
-function containsWord(source: string, word: string): boolean {
-  let startIndex = source.indexOf(word);
-  while (startIndex !== -1) {
-    const before = startIndex === 0 ? '' : source[startIndex - 1];
-    const afterIndex = startIndex + word.length;
-    const after = afterIndex >= source.length ? '' : source[afterIndex];
-    if (!isWordChar(before) && !isWordChar(after)) return true;
-    startIndex = source.indexOf(word, startIndex + word.length);
-  }
-  return false;
-}
-
-function splitLines(content: string): string[] {
-  return content.split('\n');
-}
-
-function extractLanguageFromClassName(className: string): string | undefined {
-  const tokens = className.match(/\S+/g);
-  if (!tokens) return undefined;
-  for (const token of tokens) {
-    const lower = token.toLowerCase();
-    if (lower.startsWith('language-')) return token.slice('language-'.length);
-    if (lower.startsWith('lang-')) return token.slice('lang-'.length);
-    if (lower.startsWith('highlight-')) {
-      return token.slice('highlight-'.length);
-    }
-  }
-
-  if (tokens.includes('hljs')) {
-    const langClass = tokens.find(
-      (t) => t !== 'hljs' && !t.startsWith('hljs-')
-    );
-    if (langClass) return langClass;
-  }
-
-  return undefined;
-}
-
-function resolveLanguageFromDataAttribute(
-  dataLang: string
-): string | undefined {
-  const trimmed = dataLang.trim();
-  if (!trimmed) return undefined;
-  for (const char of trimmed) {
-    if (!isWordChar(char)) return undefined;
-  }
-  return trimmed;
-}
-
-function isWordChar(char: string | undefined): boolean {
-  if (!char) return false;
-  const code = char.charCodeAt(0);
-  return (
-    (code >= 48 && code <= 57) ||
-    (code >= 65 && code <= 90) ||
-    (code >= 97 && code <= 122) ||
-    char === '_'
-  );
-}
-
-interface LanguagePattern {
-  keywords?: readonly string[];
-  wordBoundary?: readonly string[];
-  regex?: RegExp;
-  startsWith?: readonly string[];
-  custom?: (code: string, lower: string) => boolean;
-}
-
-const LANGUAGE_PATTERNS: readonly {
-  language: string;
-  pattern: LanguagePattern;
-}[] = [
-  {
-    language: 'jsx',
-    pattern: {
-      keywords: ['classname=', 'jsx:', "from 'react'", 'from "react"'],
-      custom: (code) => containsJsxTag(code),
-    },
-  },
-  {
-    language: 'typescript',
-    pattern: {
-      wordBoundary: ['interface', 'type'],
-      custom: (_, lower) =>
-        [
-          ': string',
-          ':string',
-          ': number',
-          ':number',
-          ': boolean',
-          ':boolean',
-          ': void',
-          ':void',
-          ': any',
-          ':any',
-          ': unknown',
-          ':unknown',
-          ': never',
-          ':never',
-        ].some((hint) => lower.includes(hint)),
-    },
-  },
-  {
-    language: 'rust',
-    pattern: {
-      regex: /\b(?:fn|impl|struct|enum)\b/,
-      keywords: ['let mut'],
-      custom: (_, lower) => lower.includes('use ') && lower.includes('::'),
-    },
-  },
-  {
-    language: 'javascript',
-    pattern: {
-      regex: /\b(?:const|let|var|function|class|async|await|export|import)\b/,
-    },
-  },
-  {
-    language: 'python',
-    pattern: {
-      regex: /\b(?:def|class|import|from)\b/,
-      keywords: ['print(', '__name__'],
-    },
-  },
-  {
-    language: 'bash',
-    pattern: {
-      custom: (code) => detectBashIndicators(code),
-    },
-  },
-  {
-    language: 'css',
-    pattern: {
-      regex: /@media|@import|@keyframes/,
-      custom: (code) => detectCssStructure(code),
-    },
-  },
-  {
-    language: 'html',
-    pattern: {
-      keywords: [
-        '<!doctype',
-        '<html',
-        '<head',
-        '<body',
-        '<div',
-        '<span',
-        '<p',
-        '<a',
-        '<script',
-        '<style',
-      ],
-    },
-  },
-  {
-    language: 'json',
-    pattern: {
-      startsWith: ['{', '['],
-    },
-  },
-  {
-    language: 'yaml',
-    pattern: {
-      custom: (code) => detectYamlStructure(code),
-    },
-  },
-  {
-    language: 'sql',
-    pattern: {
-      wordBoundary: [
-        'select',
-        'insert',
-        'update',
-        'delete',
-        'create',
-        'alter',
-        'drop',
-      ],
-    },
-  },
-  {
-    language: 'go',
-    pattern: {
-      wordBoundary: ['package', 'func'],
-      keywords: ['import "'],
-    },
-  },
-];
-
-// Bash detection constants
-const BASH_COMMANDS = ['sudo', 'chmod', 'mkdir', 'cd', 'ls', 'cat', 'echo'];
-const BASH_PKG_MANAGERS = [
-  'npm',
-  'yarn',
-  'pnpm',
-  'npx',
-  'brew',
-  'apt',
-  'pip',
-  'cargo',
-  'go',
-];
-const BASH_VERBS = ['install', 'add', 'run', 'build', 'start'];
-
-function isShellPrefix(line: string): boolean {
-  return (
-    line.startsWith('#!') || line.startsWith('$ ') || line.startsWith('# ')
-  );
-}
-
-function matchesBashCommand(line: string): boolean {
-  return BASH_COMMANDS.some(
-    (cmd) => line === cmd || line.startsWith(`${cmd} `)
-  );
-}
-
-function matchesPackageManagerVerb(line: string): boolean {
-  for (const mgr of BASH_PKG_MANAGERS) {
-    if (!line.startsWith(`${mgr} `)) continue;
-    const rest = line.slice(mgr.length + 1);
-    if (BASH_VERBS.some((v) => rest === v || rest.startsWith(`${v} `))) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function detectBashIndicators(code: string): boolean {
-  for (const line of splitLines(code)) {
-    const trimmed = line.trimStart();
-    if (!trimmed) continue;
-    if (
-      isShellPrefix(trimmed) ||
-      matchesBashCommand(trimmed) ||
-      matchesPackageManagerVerb(trimmed)
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function detectCssStructure(code: string): boolean {
-  for (const line of splitLines(code)) {
-    const trimmed = line.trimStart();
-    if (!trimmed) continue;
-    const isSelector =
-      (trimmed.startsWith('.') || trimmed.startsWith('#')) &&
-      trimmed.includes('{');
-    const isProperty = trimmed.includes(':') && trimmed.includes(';');
-    if (isSelector || isProperty) return true;
-  }
-  return false;
-}
-
-function detectYamlStructure(code: string): boolean {
-  for (const line of splitLines(code)) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    const colonIdx = trimmed.indexOf(':');
-    if (colonIdx <= 0) continue;
-    const after = trimmed[colonIdx + 1];
-    if (after === ' ' || after === '\t') return true;
-  }
-  return false;
-}
-
-function matchesLanguagePattern(
-  code: string,
-  lower: string,
-  pattern: LanguagePattern
-): boolean {
-  if (pattern.keywords?.some((kw) => lower.includes(kw))) return true;
-  if (pattern.wordBoundary?.some((w) => containsWord(lower, w))) return true;
-  if (pattern.regex?.test(lower)) return true;
-  if (pattern.startsWith) {
-    const trimmed = code.trimStart();
-    if (pattern.startsWith.some((prefix) => trimmed.startsWith(prefix)))
-      return true;
-  }
-  if (pattern.custom?.(code, lower)) return true;
-  return false;
-}
-
-export function detectLanguageFromCode(code: string): string | undefined {
-  const lower = code.toLowerCase();
-  for (const { language, pattern } of LANGUAGE_PATTERNS) {
-    if (matchesLanguagePattern(code, lower, pattern)) return language;
-  }
-  return undefined;
-}
-
-export function resolveLanguageFromAttributes(
-  className: string,
-  dataLang: string
-): string | undefined {
-  const classMatch = extractLanguageFromClassName(className);
-  return classMatch ?? resolveLanguageFromDataAttribute(dataLang);
-}
-
-function isElement(node: unknown): node is HTMLElement {
-  return (
-    isRecord(node) &&
-    'getAttribute' in node &&
-    typeof node.getAttribute === 'function'
-  );
-}
-
-const STRUCTURAL_TAGS = new Set([
-  'script',
-  'style',
-  'noscript',
-  'iframe',
-  'form',
-  'button',
-  'input',
-  'select',
-  'textarea',
-  'svg',
-]);
-
-const ALWAYS_NOISE_TAGS = new Set(['nav', 'footer', 'aside']);
-
-const NAVIGATION_ROLES = new Set([
-  'navigation',
-  'banner',
-  'complementary',
-  'contentinfo',
-  'tree',
-  'menubar',
-  'menu',
-  'dialog',
-  'alertdialog',
-  'search',
-]);
-
-const PROMO_TOKENS = new Set([
-  'banner',
-  'promo',
-  'announcement',
-  'cta',
-  'callout',
-  'advert',
-  'ad',
-  'ads',
-  'sponsor',
-  'newsletter',
-  'subscribe',
-  'cookie',
-  'consent',
-  'popup',
-  'modal',
-  'overlay',
-  'toast',
-  'share',
-  'social',
-  'related',
-  'recommend',
-  'comment',
-  'breadcrumb',
-  'pagination',
-  'pager',
-  'taglist',
-]);
-
-const HEADER_NOISE_PATTERN =
-  /\b(site-header|masthead|topbar|navbar|nav(?:bar)?|menu|header-nav)\b/i;
-const FIXED_PATTERN = /\b(fixed|sticky)\b/;
-const HIGH_Z_PATTERN = /\bz-(?:4\d|50)\b/;
-const ISOLATE_PATTERN = /\bisolate\b/;
-
-const HTML_DOCUMENT_MARKERS = /<\s*(?:!doctype|html|head|body)\b/i;
-const NOISE_MARKERS = [
-  '<script',
-  '<style',
-  '<noscript',
-  '<iframe',
-  '<nav',
-  '<footer',
-  '<aside',
-  '<header',
-  '<form',
-  '<button',
-  '<input',
-  '<select',
-  '<textarea',
-  '<svg',
-  '<canvas',
-  ' aria-hidden="true"',
-  " aria-hidden='true'",
-  ' hidden',
-  ' role="navigation"',
-  " role='navigation'",
-  ' role="banner"',
-  " role='banner'",
-  ' role="complementary"',
-  " role='complementary'",
-  ' role="contentinfo"',
-  " role='contentinfo'",
-  ' role="tree"',
-  " role='tree'",
-  ' role="menubar"',
-  " role='menubar'",
-  ' role="menu"',
-  " role='menu'",
-  ' banner',
-  ' promo',
-  ' announcement',
-  ' cta',
-  ' callout',
-  ' advert',
-  ' newsletter',
-  ' subscribe',
-  ' cookie',
-  ' consent',
-  ' popup',
-  ' modal',
-  ' overlay',
-  ' toast',
-  ' fixed',
-  ' sticky',
-  ' z-50',
-  ' z-4',
-  ' isolate',
-  ' breadcrumb',
-  ' pagination',
-];
-
-function mayContainNoise(html: string): boolean {
-  const haystack = html.toLowerCase();
-  return NOISE_MARKERS.some((marker) => haystack.includes(marker));
-}
-
-function isFullDocumentHtml(html: string): boolean {
-  return HTML_DOCUMENT_MARKERS.test(html);
-}
-
-function isStructuralNoiseTag(tagName: string): boolean {
-  return (
-    STRUCTURAL_TAGS.has(tagName) || tagName === 'svg' || tagName === 'canvas'
-  );
-}
-
-function isElementHidden(element: HTMLElement): boolean {
-  const style = element.getAttribute('style') ?? '';
-  return (
-    element.getAttribute('hidden') !== null ||
-    element.getAttribute('aria-hidden') === 'true' ||
-    /\bdisplay\s*:\s*none\b/i.test(style) ||
-    /\bvisibility\s*:\s*hidden\b/i.test(style)
-  );
-}
-
-function hasNoiseRole(role: string | null): boolean {
-  return role !== null && NAVIGATION_ROLES.has(role);
-}
-
-function tokenizeIdentifierLikeText(value: string): string[] {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim()
-    .split(' ')
-    .filter(Boolean);
-}
-
-function matchesPromoIdOrClass(className: string, id: string): boolean {
-  const tokens = tokenizeIdentifierLikeText(`${className} ${id}`);
-  return tokens.some((token) => PROMO_TOKENS.has(token));
-}
-
-function matchesFixedOrHighZIsolate(className: string): boolean {
-  return (
-    FIXED_PATTERN.test(className) ||
-    (HIGH_Z_PATTERN.test(className) && ISOLATE_PATTERN.test(className))
-  );
-}
-
-interface ElementMetadata {
-  tagName: string;
-  className: string;
-  id: string;
-  role: string | null;
-  isHidden: boolean;
-}
-
-function readElementMetadata(element: HTMLElement): ElementMetadata {
-  return {
-    tagName: element.tagName.toLowerCase(),
-    className: element.getAttribute('class') ?? '',
-    id: element.getAttribute('id') ?? '',
-    role: element.getAttribute('role'),
-    isHidden: isElementHidden(element),
-  };
-}
-
-function isBoilerplateHeader({
-  className,
-  id,
-  role,
-}: ElementMetadata): boolean {
-  if (hasNoiseRole(role)) return true;
-  const combined = `${className} ${id}`.toLowerCase();
-  return HEADER_NOISE_PATTERN.test(combined);
-}
-
-function isNoiseElement(node: HTMLElement): boolean {
-  const metadata = readElementMetadata(node);
-  return (
-    isStructuralNoiseTag(metadata.tagName) ||
-    ALWAYS_NOISE_TAGS.has(metadata.tagName) ||
-    (metadata.tagName === 'header' && isBoilerplateHeader(metadata)) ||
-    metadata.isHidden ||
-    hasNoiseRole(metadata.role) ||
-    matchesFixedOrHighZIsolate(metadata.className) ||
-    matchesPromoIdOrClass(metadata.className, metadata.id)
-  );
-}
-
-function removeNoiseNodes(nodes: NodeListOf<Element>): void {
-  for (let index = nodes.length - 1; index >= 0; index -= 1) {
-    const node =
-      typeof nodes.item === 'function' ? nodes.item(index) : nodes[index];
-    if (!node) continue;
-    if (isElement(node) && isNoiseElement(node)) {
-      node.remove();
-    }
-  }
-}
-
-function stripNoiseNodes(document: Document): void {
-  // Use targeted selectors for common noise elements instead of querySelectorAll('*')
-  const targetSelectors = [
-    'nav',
-    'footer',
-    'aside',
-    'header[class*="site"]',
-    'header[class*="nav"]',
-    'header[class*="menu"]',
-    '[role="banner"]',
-    '[role="navigation"]',
-    '[role="dialog"]',
-    '[style*="display: none"]',
-    '[style*="display:none"]',
-    '[hidden]',
-    '[aria-hidden="true"]',
-  ].join(',');
-
-  const potentialNoiseNodes = document.querySelectorAll(targetSelectors);
-
-  // Remove in reverse order to handle nested elements correctly
-  removeNoiseNodes(potentialNoiseNodes);
-
-  // Second pass: check remaining elements for noise patterns (promo, fixed positioning, etc.)
-  const candidateSelectors = [
-    ...STRUCTURAL_TAGS,
-    ...ALWAYS_NOISE_TAGS,
-    'header',
-    'canvas',
-    '[class]',
-    '[id]',
-    '[role]',
-    '[style]',
-  ].join(',');
-  const allElements = document.querySelectorAll(candidateSelectors);
-  removeNoiseNodes(allElements);
-}
-
-function removeNoiseFromHtml(html: string, document?: Document): string {
-  const shouldParse = isFullDocumentHtml(html) || mayContainNoise(html);
-  if (!shouldParse) return html;
-
-  try {
-    const resolvedDocument = document ?? parseHTML(html).document;
-
-    stripNoiseNodes(resolvedDocument);
-
-    const bodyInnerHtml = getBodyInnerHtml(resolvedDocument);
-    if (bodyInnerHtml) return bodyInnerHtml;
-
-    const docToString = getDocumentToString(resolvedDocument);
-    if (docToString) return docToString();
-
-    const documentElementOuterHtml =
-      getDocumentElementOuterHtml(resolvedDocument);
-    if (documentElementOuterHtml) return documentElementOuterHtml;
-
-    return html;
-  } catch {
-    return html;
-  }
-}
+// DOM noise removal functions moved to ./dom-noise-removal.ts
 
 function buildInlineCode(content: string): string {
   const runs = content.match(/`+/g);
@@ -1177,6 +542,54 @@ function buildImageTranslator(ctx: unknown): TranslatorConfig {
   };
 }
 
+/**
+ * Check if a <pre> element has a direct <code> child.
+ * If so, let the code translator handle it.
+ */
+function preHasCodeChild(node: unknown): boolean {
+  if (!isRecord(node)) return false;
+  const { childNodes } = node;
+  if (!Array.isArray(childNodes)) return false;
+
+  for (const child of childNodes) {
+    if (!isRecord(child)) continue;
+    const nodeName =
+      typeof child.nodeName === 'string' ? child.nodeName.toUpperCase() : '';
+    if (nodeName === 'CODE') return true;
+  }
+  return false;
+}
+
+/**
+ * Build translator for <pre> elements without <code> children.
+ * Wraps content in fenced code block with language detection.
+ */
+function buildPreTranslator(ctx: unknown): TranslatorConfig {
+  if (!isRecord(ctx)) return {};
+
+  const { node } = ctx;
+
+  // If <pre> has <code> child, let default handling work
+  if (preHasCodeChild(node)) {
+    return {};
+  }
+
+  // For bare <pre>, wrap in code fence
+  const attributeLanguage = resolveAttributeLanguage(node);
+
+  return {
+    noEscape: true,
+    preserveWhitespace: true,
+    postprocess: ({ content }: { content: string }) => {
+      const trimmed = content.trim();
+      if (!trimmed) return '';
+      const language =
+        attributeLanguage ?? detectLanguageFromCode(trimmed) ?? '';
+      return CODE_BLOCK.format(trimmed, language);
+    },
+  };
+}
+
 function createCustomTranslators(): TranslatorConfigObject {
   return {
     code: (ctx: unknown) => buildCodeTranslator(ctx),
@@ -1222,6 +635,8 @@ function createCustomTranslators(): TranslatorConfigObject {
     sup: () => ({
       postprocess: ({ content }: { content: string }) => `^${content}^`,
     }),
+    // Fix #6: Handle <pre> without <code> - wrap in fenced code block
+    pre: (ctx: unknown) => buildPreTranslator(ctx),
   };
 }
 
@@ -1253,7 +668,7 @@ function translateHtmlToMarkdown(
   throwIfAborted(signal, url, 'markdown:begin');
 
   const cleanedHtml = runTransformStage(url, 'markdown:noise', () =>
-    removeNoiseFromHtml(html, document)
+    removeNoiseFromHtml(html, document, url)
   );
 
   throwIfAborted(signal, url, 'markdown:cleaned');
@@ -1301,162 +716,7 @@ export function htmlToMarkdown(
   }
 }
 
-function cleanupMarkdownArtifacts(content: string): string {
-  let result = content;
-
-  const fixOrphanHeadings = (text: string): string => {
-    return text.replace(
-      /^(.*?)(#{1,6})\s*(?:\r?\n){2}([A-Z][^\r\n]+?)(?:\r?\n)/gm,
-      (match, prefix: unknown, hashes: unknown, heading: unknown) => {
-        if (
-          typeof prefix !== 'string' ||
-          typeof hashes !== 'string' ||
-          typeof heading !== 'string'
-        ) {
-          return match;
-        }
-        if (heading.length > 150) {
-          return match;
-        }
-        const trimmedPrefix = prefix.trim();
-        if (trimmedPrefix === '') {
-          return `${hashes} ${heading}\n\n`;
-        }
-        return `${trimmedPrefix}\n\n${hashes} ${heading}\n\n`;
-      }
-    );
-  };
-
-  result = fixOrphanHeadings(result);
-  result = result.replace(/^#{1,6}[ \t\u00A0]*$\r?\n?/gm, '');
-
-  const zeroWidthAnchorLink = /\[(?:\s|\u200B)*\]\(#[^)]*\)\s*/g;
-
-  result = result.replace(zeroWidthAnchorLink, '');
-  result = result.replace(
-    /^\[Skip to (?:main )?content\]\(#[^)]*\)\s*$/gim,
-    ''
-  );
-  result = result.replace(
-    /^\[Skip to (?:main )?navigation\]\(#[^)]*\)\s*$/gim,
-    ''
-  );
-  result = result.replace(/^\[Skip link\]\(#[^)]*\)\s*$/gim, '');
-  result = result.replace(/(^#{1,6}\s+\w+)```/gm, '$1\n\n```');
-  result = result.replace(/(^#{1,6}\s+\w*[A-Z])([A-Z][a-z])/gm, '$1\n\n$2');
-  result = result.replace(/(^#{1,6}\s[^\n]*)\n([^\n])/gm, '$1\n\n$2');
-  const tocLinkLine = /^- \[[^\]]+\]\(#[^)]+\)\s*$/;
-  const lines = result.split('\n');
-  const filtered: string[] = [];
-  let skipTocBlock = false;
-
-  for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i] ?? '';
-    const prevLine = i > 0 ? (lines[i - 1] ?? '') : '';
-    const nextLine = i < lines.length - 1 ? (lines[i + 1] ?? '') : '';
-    if (tocLinkLine.test(line)) {
-      const prevIsToc = tocLinkLine.test(prevLine) || prevLine.trim() === '';
-      const nextIsToc = tocLinkLine.test(nextLine) || nextLine.trim() === '';
-
-      if (prevIsToc || nextIsToc) {
-        skipTocBlock = true;
-        continue;
-      }
-    } else if (line.trim() === '' && skipTocBlock) {
-      skipTocBlock = false;
-      continue;
-    } else {
-      skipTocBlock = false;
-    }
-    filtered.push(line);
-  }
-
-  result = filtered.join('\n');
-
-  result = result.replace(/\]\(([^)]+)\)\[/g, ']($1)\n\n[');
-  result = result.replace(/^Was this page helpful\??\s*$/gim, '');
-  result = result.replace(/(`[^`]+`)\s*\\-\s*/g, '$1 - ');
-  result = result.replace(/\\([[]])/g, '$1');
-  result = result.replace(/([^\n])\n([-*+] )/g, '$1\n\n$2');
-  result = result.replace(/(\S)\n(\d+\. )/g, '$1\n\n$2');
-  result = result.replace(/\n{3,}/g, '\n\n');
-
-  return result.trim();
-}
-
-const HEADING_KEYWORDS = new Set([
-  'overview',
-  'introduction',
-  'summary',
-  'conclusion',
-  'prerequisites',
-  'requirements',
-  'installation',
-  'configuration',
-  'usage',
-  'features',
-  'limitations',
-  'troubleshooting',
-  'faq',
-  'resources',
-  'references',
-  'changelog',
-  'license',
-  'acknowledgments',
-  'appendix',
-]);
-
-function isLikelyHeadingLine(line: string): boolean {
-  const trimmed = line.trim();
-  if (!trimmed || trimmed.length > 80) return false;
-  if (/^#{1,6}\s/.test(trimmed)) return false;
-  if (/^[-*+•]\s/.test(trimmed) || /^\d+\.\s/.test(trimmed)) return false;
-  if (/[.!?]$/.test(trimmed)) return false;
-  if (/^\[.*\]\(.*\)$/.test(trimmed)) return false;
-  if (/^(?:example|note|tip|warning|important|caution):\s+\S/i.test(trimmed)) {
-    return true;
-  }
-  const words = trimmed.split(/\s+/);
-  if (words.length >= 2 && words.length <= 6) {
-    const isTitleCase = words.every(
-      (w) =>
-        /^[A-Z][a-z]*$/.test(w) || /^(?:and|or|the|of|in|for|to|a)$/i.test(w)
-    );
-    if (isTitleCase) return true;
-  }
-  if (words.length === 1) {
-    const lower = trimmed.toLowerCase();
-    if (HEADING_KEYWORDS.has(lower) && /^[A-Z]/.test(trimmed)) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-function promoteOrphanHeadings(markdown: string): string {
-  const lines = markdown.split('\n');
-  const result: string[] = [];
-
-  for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i] ?? '';
-    const prevLine = i > 0 ? lines[i - 1] : '';
-    const nextLine = i < lines.length - 1 ? lines[i + 1] : '';
-    const isStandalone = prevLine?.trim() === '' && nextLine?.trim() === '';
-    const isPrecededByBlank = prevLine?.trim() === '';
-
-    if ((isStandalone || isPrecededByBlank) && isLikelyHeadingLine(line)) {
-      const trimmed = line.trim();
-      const isExample = /^example:\s/i.test(trimmed);
-      const prefix = isExample ? '### ' : '## ';
-      result.push(prefix + trimmed);
-    } else {
-      result.push(line);
-    }
-  }
-
-  return result.join('\n');
-}
+// Markdown cleanup functions moved to ./markdown-cleanup.ts
 
 function formatFetchedDate(isoString: string): string {
   try {
@@ -1772,57 +1032,116 @@ const MIN_CONTENT_RATIO = 0.3;
 const MIN_HTML_LENGTH_FOR_GATE = 100;
 const MIN_HEADING_RETENTION_RATIO = 0.7;
 
-function countHeadings(html: string): number {
-  if (!html) return 0;
-  // Match opening heading tags <h1> through <h6>
-  const headingPattern = /<h[1-6](?:\s[^>]*)?>([^<]*)<\/h[1-6]>/gi;
-  const matches = html.match(headingPattern);
-  return matches ? matches.length : 0;
+/**
+ * Count headings using DOM querySelectorAll.
+ * Handles nested content like <h2><span>Text</span></h2> correctly.
+ */
+function countHeadingsDom(htmlOrDocument: string | Document): number {
+  if (typeof htmlOrDocument === 'string') {
+    // Wrap fragments in document structure for proper parsing
+    const htmlToParse = needsDocumentWrapper(htmlOrDocument)
+      ? wrapHtmlFragment(htmlOrDocument)
+      : htmlOrDocument;
+
+    const { document: doc } = parseHTML(htmlToParse);
+    return doc.querySelectorAll('h1,h2,h3,h4,h5,h6').length;
+  }
+
+  return htmlOrDocument.querySelectorAll('h1,h2,h3,h4,h5,h6').length;
+}
+
+/**
+ * Check if HTML string needs document wrapper for proper parsing.
+ * Fragments without doctype/html/body tags need wrapping.
+ */
+function needsDocumentWrapper(html: string): boolean {
+  const trimmed = html.trim().toLowerCase();
+  return (
+    !trimmed.startsWith('<!doctype') &&
+    !trimmed.startsWith('<html') &&
+    !trimmed.startsWith('<body')
+  );
+}
+
+/**
+ * Wrap HTML fragment in minimal document structure for proper parsing.
+ */
+function wrapHtmlFragment(html: string): string {
+  return `<!DOCTYPE html><html><body>${html}</body></html>`;
+}
+
+/**
+ * Get visible text length from HTML, excluding script/style/noscript content.
+ * Fixes the bug where stripHtmlTagsForLength() counted JS/CSS as visible text.
+ */
+function getVisibleTextLength(htmlOrDocument: string | Document): number {
+  // For string input, parse the HTML
+  if (typeof htmlOrDocument === 'string') {
+    // Wrap fragments in document structure for proper parsing
+    const htmlToParse = needsDocumentWrapper(htmlOrDocument)
+      ? wrapHtmlFragment(htmlOrDocument)
+      : htmlOrDocument;
+
+    const { document: doc } = parseHTML(htmlToParse);
+
+    // Remove non-visible content that inflates text length
+    for (const el of doc.querySelectorAll('script,style,noscript')) {
+      el.remove();
+    }
+
+    // Get text content from body or documentElement
+    // Note: linkedom may return null for body on HTML fragments despite types
+    const body = doc.body as HTMLElement | null;
+    const docElement = doc.documentElement as HTMLElement | null;
+    const text = body?.textContent ?? docElement?.textContent ?? '';
+
+    return text.replace(/\s+/g, ' ').trim().length;
+  }
+
+  // For Document input, clone to avoid mutation
+  const workDoc = htmlOrDocument.cloneNode(true) as Document;
+
+  // Remove non-visible content that inflates text length
+  for (const el of workDoc.querySelectorAll('script,style,noscript')) {
+    el.remove();
+  }
+
+  // Get text content from body or documentElement
+  // Note: linkedom may return null for body on HTML fragments despite types
+  const body = workDoc.body as HTMLElement | null;
+  const docElement = workDoc.documentElement as HTMLElement | null;
+  const text = body?.textContent ?? docElement?.textContent ?? '';
+
+  return text.replace(/\s+/g, ' ').trim().length;
 }
 
 function isHeadingStructurePreserved(
   article: ExtractedArticle | null,
-  originalHtml: string
+  originalHtmlOrDocument: string | Document
 ): boolean {
   if (!article) return false;
 
-  // Cache heading counts to avoid duplicate regex matching
-  const originalHeadingCount = countHeadings(originalHtml);
-  const articleHeadingCount = countHeadings(article.content);
+  // Use DOM-based counting for accurate results with nested elements
+  const originalHeadingCount = countHeadingsDom(originalHtmlOrDocument);
+  const articleHeadingCount = countHeadingsDom(article.content);
 
   // If original has no headings, structure is trivially preserved
   if (originalHeadingCount === 0) return true;
 
-  // If article lost >50% of headings, structure is broken
+  // If article lost >30% of headings, structure is broken
   const retentionRatio = articleHeadingCount / originalHeadingCount;
   return retentionRatio >= MIN_HEADING_RETENTION_RATIO;
 }
 
-function stripHtmlTagsForLength(html: string): string {
-  let result = '';
-  let inTag = false;
-  for (const char of html) {
-    if (char === '<') {
-      inTag = true;
-    } else if (char === '>') {
-      inTag = false;
-    } else if (!inTag) {
-      result += char;
-    }
-  }
-  return result;
-}
-
 export function isExtractionSufficient(
   article: ExtractedArticle | null,
-  originalHtml: string
+  originalHtmlOrDocument: string | Document
 ): boolean {
   if (!article) return false;
 
   const articleLength = article.textContent.length;
-  const originalLength = stripHtmlTagsForLength(originalHtml)
-    .replace(/\s+/g, ' ')
-    .trim().length;
+  // Use DOM-based visible text length to exclude script/style content
+  const originalLength = getVisibleTextLength(originalHtmlOrDocument);
 
   if (originalLength < MIN_HTML_LENGTH_FOR_GATE) return true;
 
@@ -1873,6 +1192,45 @@ interface ContentSource {
   readonly document?: Document;
 }
 
+/**
+ * Content root selectors in priority order.
+ * These identify the main content area on a page.
+ */
+const CONTENT_ROOT_SELECTORS = [
+  'main',
+  'article',
+  '[role="main"]',
+  '#content',
+  '#main-content',
+  '.content',
+  '.main-content',
+  '.post-content',
+  '.article-content',
+  '.entry-content',
+] as const;
+
+/**
+ * Find the main content root element in a document.
+ * Returns the innerHTML if found, undefined otherwise.
+ */
+function findContentRoot(document: Document): string | undefined {
+  for (const selector of CONTENT_ROOT_SELECTORS) {
+    const element = document.querySelector(selector);
+    if (!element) continue;
+
+    // Check if element has meaningful content
+    const innerHTML =
+      typeof (element as HTMLElement).innerHTML === 'string'
+        ? (element as HTMLElement).innerHTML
+        : undefined;
+
+    if (innerHTML && innerHTML.trim().length > 100) {
+      return innerHTML;
+    }
+  }
+  return undefined;
+}
+
 function buildContentSource({
   html,
   url,
@@ -1898,15 +1256,39 @@ function buildContentSource({
     includeMetadata
   );
 
-  const source: ContentSource = {
-    sourceHtml: useArticleContent && article ? article.content : html,
-    title: useArticleContent && article ? article.title : extractedMeta.title,
-    metadata,
-  };
-  if (!useArticleContent && document) {
-    return { ...source, document };
+  // If using article content, return it directly
+  if (useArticleContent && article) {
+    return {
+      sourceHtml: article.content,
+      title: article.title,
+      metadata,
+    };
   }
-  return source;
+
+  // Try content root fallback before using full HTML
+  if (document) {
+    const contentRoot = findContentRoot(document);
+    if (contentRoot) {
+      logDebug('Using content root fallback instead of full HTML', {
+        url: url.substring(0, 80),
+        contentLength: contentRoot.length,
+      });
+      return {
+        sourceHtml: contentRoot,
+        title: extractedMeta.title,
+        metadata,
+        document,
+      };
+    }
+  }
+
+  // Fall back to full HTML
+  return {
+    sourceHtml: html,
+    title: extractedMeta.title,
+    metadata,
+    ...(document ? { document } : {}),
+  };
 }
 
 function logQualityGateFallback({
@@ -1927,11 +1309,11 @@ function logQualityGateFallback({
 
 function shouldUseArticleContent(
   article: ExtractedArticle,
-  html: string,
+  originalHtmlOrDocument: string | Document,
   url: string
 ): boolean {
   // Check content sufficiency (length-based quality gate)
-  if (!isExtractionSufficient(article, html)) {
+  if (!isExtractionSufficient(article, originalHtmlOrDocument)) {
     logQualityGateFallback({
       url,
       articleLength: article.textContent.length,
@@ -1940,13 +1322,13 @@ function shouldUseArticleContent(
   }
 
   // Check heading structure preservation
-  if (!isHeadingStructurePreserved(article, html)) {
+  if (!isHeadingStructurePreserved(article, originalHtmlOrDocument)) {
     logDebug(
       'Quality gate: Readability broke heading structure, using full HTML',
       {
         url: url.substring(0, 80),
-        originalHeadings: countHeadings(html),
-        articleHeadings: countHeadings(article.content),
+        originalHeadings: countHeadingsDom(originalHtmlOrDocument),
+        articleHeadings: countHeadingsDom(article.content),
       }
     );
     return false;
@@ -1975,8 +1357,11 @@ function resolveContentSource({
     ...(signal ? { signal } : {}),
   });
 
+  // Parse original HTML for quality gate checks if extraction didn't provide document
+  const originalDocument = document ?? parseHTML(html).document;
+
   const useArticleContent = article
-    ? shouldUseArticleContent(article, html, url)
+    ? shouldUseArticleContent(article, originalDocument, url)
     : false;
 
   return buildContentSource({
