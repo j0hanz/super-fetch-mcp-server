@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { isJsonRpcBatchRequest, isMcpRequestBody } from '../dist/http-utils.js';
+import {
+  acceptsEventStream,
+  isJsonRpcBatchRequest,
+  isMcpRequestBody,
+} from '../dist/mcp-validator.js';
 
 type Case<T> = {
   input: T;
@@ -189,6 +193,32 @@ describe('mcp-validation', () => {
         },
         isMcpRequestBody
       );
+    });
+  });
+
+  describe('acceptsEventStream', () => {
+    it('accepts exact text/event-stream', () => {
+      assert.equal(acceptsEventStream('text/event-stream'), true);
+    });
+
+    it('accepts text/event-stream with parameters', () => {
+      assert.equal(
+        acceptsEventStream('text/event-stream; charset=utf-8'),
+        true
+      );
+    });
+
+    it('accepts text/event-stream among other types', () => {
+      assert.equal(
+        acceptsEventStream('application/json, text/event-stream'),
+        true
+      );
+    });
+
+    it('rejects missing or non-event-stream types', () => {
+      assert.equal(acceptsEventStream(undefined), false);
+      assert.equal(acceptsEventStream('application/json'), false);
+      assert.equal(acceptsEventStream('*/*'), false);
     });
   });
 });

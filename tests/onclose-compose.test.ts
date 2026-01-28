@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { composeCloseHandlers } from '../dist/http-utils.js';
+import { composeCloseHandlers } from '../dist/session.js';
 
 describe('composeCloseHandlers', () => {
   it('invokes both handlers in order when both are defined', () => {

@@ -38,7 +38,7 @@ function parseMarkedJson<T>(output: string): T {
 describe('http server tuning helpers', () => {
   it('applyHttpServerTuning does nothing by default', async () => {
     const script = `
-      import { applyHttpServerTuning } from './dist/http-utils.js';
+      import { applyHttpServerTuning } from './dist/server-tuning.js';
       const server = { headersTimeout: 123, requestTimeout: 456, keepAliveTimeout: 789 };
       applyHttpServerTuning(server);
       console.error('${RESULT_MARKER}' + JSON.stringify(server));
@@ -63,7 +63,7 @@ describe('http server tuning helpers', () => {
 
   it('applyHttpServerTuning applies configured timeouts', async () => {
     const script = `
-      import { applyHttpServerTuning } from './dist/http-utils.js';
+      import { applyHttpServerTuning } from './dist/server-tuning.js';
       const server = {};
       applyHttpServerTuning(server);
       console.error('${RESULT_MARKER}' + JSON.stringify(server));
@@ -88,7 +88,7 @@ describe('http server tuning helpers', () => {
 
   it('drainConnectionsOnShutdown is a no-op by default', async () => {
     const script = `
-      import { drainConnectionsOnShutdown } from './dist/http-utils.js';
+      import { drainConnectionsOnShutdown } from './dist/server-tuning.js';
       let idleCalls = 0;
       let allCalls = 0;
       const server = {
@@ -115,7 +115,7 @@ describe('http server tuning helpers', () => {
 
   it('drainConnectionsOnShutdown closes idle connections when enabled', async () => {
     const script = `
-      import { drainConnectionsOnShutdown } from './dist/http-utils.js';
+      import { drainConnectionsOnShutdown } from './dist/server-tuning.js';
       let idleCalls = 0;
       const server = {
         closeIdleConnections: () => { idleCalls += 1; },
@@ -136,7 +136,7 @@ describe('http server tuning helpers', () => {
 
   it('drainConnectionsOnShutdown closes all connections when enabled', async () => {
     const script = `
-      import { drainConnectionsOnShutdown } from './dist/http-utils.js';
+      import { drainConnectionsOnShutdown } from './dist/server-tuning.js';
       let allCalls = 0;
       const server = {
         closeAllConnections: () => { allCalls += 1; },

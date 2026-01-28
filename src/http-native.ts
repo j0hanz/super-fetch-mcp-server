@@ -20,24 +20,28 @@ import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { handleDownload } from './cache.js';
 import { config, enableHttpMode } from './config.js';
 import { timingSafeEqualUtf8 } from './crypto.js';
+import { normalizeHost } from './host-normalization.js';
 import {
   acceptsEventStream,
-  applyHttpServerTuning,
-  composeCloseHandlers,
-  createSessionStore,
-  createSlotTracker,
-  drainConnectionsOnShutdown,
-  ensureSessionCapacity,
   isJsonRpcBatchRequest,
   isMcpRequestBody,
   type JsonRpcId,
-  normalizeHost,
+} from './mcp-validator.js';
+import { createMcpServer } from './mcp.js';
+import { logError, logInfo, logWarn } from './observability.js';
+import {
+  applyHttpServerTuning,
+  drainConnectionsOnShutdown,
+} from './server-tuning.js';
+import {
+  composeCloseHandlers,
+  createSessionStore,
+  createSlotTracker,
+  ensureSessionCapacity,
   reserveSessionSlot,
   type SessionStore,
   startSessionCleanupLoop,
-} from './http-utils.js';
-import { createMcpServer } from './mcp.js';
-import { logError, logInfo, logWarn } from './observability.js';
+} from './session.js';
 import { isObject } from './type-guards.js';
 
 // --- Shim Types ---

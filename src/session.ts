@@ -1,28 +1,10 @@
-import { isIP } from 'node:net';
 import { setInterval as setIntervalPromise } from 'node:timers/promises';
-
-import { z } from 'zod';
 
 import type { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 
-import { config } from './config.js';
-import { logDebug, logInfo, logWarn } from './observability.js';
+import { logInfo, logWarn } from './observability.js';
 
 // --- Types ---
-
-export type JsonRpcId = string | number | null;
-
-export interface McpRequestParams {
-  _meta?: Record<string, unknown>;
-  [key: string]: unknown;
-}
-
-export interface McpRequestBody {
-  jsonrpc: '2.0';
-  method: string;
-  id?: JsonRpcId;
-  params?: McpRequestParams;
-}
 
 export interface SessionEntry {
   readonly transport: StreamableHTTPServerTransport;
@@ -49,57 +31,6 @@ export interface SlotTracker {
   readonly releaseSlot: () => void;
   readonly markInitialized: () => void;
   readonly isInitialized: () => boolean;
-}
-
-// --- Host Normalization ---
-
-export function normalizeHost(value: string): string | null {
-  const trimmed = value.trim().toLowerCase();
-  if (!trimmed) return null;
-
-  const first = takeFirstHostValue(trimmed);
-  if (!first) return null;
-
-  const ipv6 = stripIpv6Brackets(first);
-  if (ipv6) return stripTrailingDots(ipv6);
-
-  if (isIpV6Literal(first)) {
-    return stripTrailingDots(first);
-  }
-
-  return stripTrailingDots(stripPortIfPresent(first));
-}
-
-function takeFirstHostValue(value: string): string | null {
-  const first = value.split(',')[0];
-  if (!first) return null;
-  const trimmed = first.trim();
-  return trimmed ? trimmed : null;
-}
-
-function stripIpv6Brackets(value: string): string | null {
-  if (!value.startsWith('[')) return null;
-  const end = value.indexOf(']');
-  if (end === -1) return null;
-  return value.slice(1, end);
-}
-
-function stripPortIfPresent(value: string): string {
-  const colonIndex = value.indexOf(':');
-  if (colonIndex === -1) return value;
-  return value.slice(0, colonIndex);
-}
-
-function isIpV6Literal(value: string): boolean {
-  return isIP(value) === 6;
-}
-
-function stripTrailingDots(value: string): string {
-  let result = value;
-  while (result.endsWith('.')) {
-    result = result.slice(0, -1);
-  }
-  return result;
 }
 
 // --- Close Handlers ---
@@ -235,33 +166,6 @@ export function createSessionStore(sessionTtlMs: number): SessionStore {
   };
 }
 
-// --- Validation ---
-
-const paramsSchema = z.looseObject({});
-const mcpRequestSchema = z.looseObject({
-  jsonrpc: z.literal('2.0'),
-  method: z.string().min(1),
-  id: z.union([z.string(), z.number(), z.null()]).optional(),
-  params: paramsSchema.optional(),
-});
-
-export function isJsonRpcBatchRequest(body: unknown): boolean {
-  return Array.isArray(body);
-}
-
-export function isMcpRequestBody(body: unknown): body is McpRequestBody {
-  return mcpRequestSchema.safeParse(body).success;
-}
-
-export function acceptsEventStream(header: string | null | undefined): boolean {
-  if (!header) return false;
-  return header
-    .split(',')
-    .some((value) =>
-      value.trim().toLowerCase().startsWith('text/event-stream')
-    );
-}
-
 // --- Slot Tracker ---
 
 export function createSlotTracker(store: SessionStore): SlotTracker {
@@ -315,51 +219,4 @@ export function ensureSessionCapacity({
   }
 
   return false;
-}
-
-// --- Server Tuning ---
-
-export interface HttpServerTuningTarget {
-  headersTimeout?: number;
-  requestTimeout?: number;
-  keepAliveTimeout?: number;
-  closeIdleConnections?: () => void;
-  closeAllConnections?: () => void;
-}
-
-export function applyHttpServerTuning(server: HttpServerTuningTarget): void {
-  const { headersTimeoutMs, requestTimeoutMs, keepAliveTimeoutMs } =
-    config.server.http;
-
-  if (headersTimeoutMs !== undefined) {
-    server.headersTimeout = headersTimeoutMs;
-  }
-  if (requestTimeoutMs !== undefined) {
-    server.requestTimeout = requestTimeoutMs;
-  }
-  if (keepAliveTimeoutMs !== undefined) {
-    server.keepAliveTimeout = keepAliveTimeoutMs;
-  }
-}
-
-export function drainConnectionsOnShutdown(
-  server: HttpServerTuningTarget
-): void {
-  const { shutdownCloseAllConnections, shutdownCloseIdleConnections } =
-    config.server.http;
-
-  if (shutdownCloseAllConnections) {
-    if (typeof server.closeAllConnections === 'function') {
-      server.closeAllConnections();
-      logDebug('Closed all HTTP connections during shutdown');
-    }
-    return;
-  }
-
-  if (shutdownCloseIdleConnections) {
-    if (typeof server.closeIdleConnections === 'function') {
-      server.closeIdleConnections();
-      logDebug('Closed idle HTTP connections during shutdown');
-    }
-  }
 }
