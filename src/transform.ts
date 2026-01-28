@@ -199,6 +199,26 @@ function extractMetadata(document: Document): ExtractedMetadata {
   } = {};
   const description: { og?: string; twitter?: string; standard?: string } = {};
   let author: string | undefined;
+  let image: string | undefined;
+  let publishedAt: string | undefined;
+  let modifiedAt: string | undefined;
+
+  // Property-based handlers (og:*, article:*)
+  const propertyHandlers = new Map<string, (content: string) => void>([
+    ['og:title', (c) => { title.og = c; }],
+    ['og:description', (c) => { description.og = c; }],
+    ['og:image', (c) => { image = c; }],
+    ['article:published_time', (c) => { publishedAt = c; }],
+    ['article:modified_time', (c) => { modifiedAt = c; }],
+  ]);
+
+  // Name-based handlers (twitter:*, standard meta)
+  const nameHandlers = new Map<string, (content: string) => void>([
+    ['twitter:title', (c) => { title.twitter = c; }],
+    ['twitter:description', (c) => { description.twitter = c; }],
+    ['description', (c) => { description.standard = c; }],
+    ['author', (c) => { author = c; }],
+  ]);
 
   for (const tag of document.querySelectorAll('meta')) {
     const content = tag.getAttribute('content')?.trim();
@@ -207,12 +227,8 @@ function extractMetadata(document: Document): ExtractedMetadata {
     const property = tag.getAttribute('property');
     const name = tag.getAttribute('name');
 
-    if (property === 'og:title') title.og = content;
-    else if (property === 'og:description') description.og = content;
-    else if (name === 'twitter:title') title.twitter = content;
-    else if (name === 'twitter:description') description.twitter = content;
-    else if (name === 'description') description.standard = content;
-    else if (name === 'author') author = content;
+    if (property) propertyHandlers.get(property)?.(content);
+    if (name) nameHandlers.get(name)?.(content);
   }
 
   const titleEl = document.querySelector('title');
@@ -228,6 +244,9 @@ function extractMetadata(document: Document): ExtractedMetadata {
   if (resolvedTitle) metadata.title = resolvedTitle;
   if (resolvedDesc) metadata.description = resolvedDesc;
   if (author) metadata.author = author;
+  if (image) metadata.image = image;
+  if (publishedAt) metadata.publishedAt = publishedAt;
+  if (modifiedAt) metadata.modifiedAt = modifiedAt;
 
   return metadata;
 }
@@ -1148,6 +1167,28 @@ export function isExtractionSufficient(
   return articleLength / originalLength >= MIN_CONTENT_RATIO;
 }
 
+const MIN_LINE_LENGTH_FOR_TRUNCATION_CHECK = 20;
+const MAX_TRUNCATED_LINE_RATIO = 0.5;
+
+/**
+ * Detect if extracted text has many truncated/incomplete sentences.
+ * Lines longer than 20 chars that don't end with sentence punctuation
+ * are considered potentially truncated.
+ */
+function hasTruncatedSentences(text: string): boolean {
+  const lines = text.split('\n').filter(
+    (line) => line.trim().length > MIN_LINE_LENGTH_FOR_TRUNCATION_CHECK
+  );
+  if (lines.length < 3) return false;
+
+  const incompleteLines = lines.filter((line) => {
+    const trimmed = line.trim();
+    return !/[.!?:;]$/.test(trimmed);
+  });
+
+  return incompleteLines.length / lines.length > MAX_TRUNCATED_LINE_RATIO;
+}
+
 export function determineContentExtractionSource(
   article: ExtractedArticle | null
 ): article is ExtractedArticle {
@@ -1207,6 +1248,10 @@ const CONTENT_ROOT_SELECTORS = [
   '.post-content',
   '.article-content',
   '.entry-content',
+  '[itemprop="articleBody"]',
+  '[data-content]',
+  '.post-body',
+  '.article-body',
 ] as const;
 
 /**
@@ -1329,6 +1374,17 @@ function shouldUseArticleContent(
         url: url.substring(0, 80),
         originalHeadings: countHeadingsDom(originalHtmlOrDocument),
         articleHeadings: countHeadingsDom(article.content),
+      }
+    );
+    return false;
+  }
+
+  // Check for truncated/fragmented sentences (layout extraction issue)
+  if (hasTruncatedSentences(article.textContent)) {
+    logDebug(
+      'Quality gate: Extracted text has many truncated sentences, using full HTML',
+      {
+        url: url.substring(0, 80),
       }
     );
     return false;

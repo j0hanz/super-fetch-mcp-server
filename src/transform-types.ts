@@ -34,6 +34,9 @@ export interface ExtractedMetadata {
   title?: string;
   description?: string;
   author?: string;
+  image?: string;
+  publishedAt?: string;
+  modifiedAt?: string;
 }
 
 /**

@@ -353,6 +353,10 @@ export const config = {
     maxBlockLength: 5000,
     minParagraphLength: 10,
   },
+  noiseRemoval: {
+    extraTokens: parseList(process.env.SUPERFETCH_EXTRA_NOISE_TOKENS),
+    extraSelectors: parseList(process.env.SUPERFETCH_EXTRA_NOISE_SELECTORS),
+  },
   logging: {
     level: parseLogLevel(process.env.LOG_LEVEL),
   },

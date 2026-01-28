@@ -4,6 +4,7 @@
  */
 import { parseHTML } from 'linkedom';
 
+import { config } from './config.js';
 import { isRecord } from './type-guards.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -76,7 +77,7 @@ const NAVIGATION_ROLES = new Set([
   'search',
 ]);
 
-const PROMO_TOKENS = new Set([
+const BASE_PROMO_TOKENS = [
   'banner',
   'promo',
   'announcement',
@@ -103,7 +104,19 @@ const PROMO_TOKENS = new Set([
   'pagination',
   'pager',
   'taglist',
-]);
+] as const;
+
+/**
+ * Get promo tokens merged with any user-configured extra tokens.
+ */
+function getPromoTokens(): Set<string> {
+  const tokens = new Set<string>(BASE_PROMO_TOKENS);
+  for (const token of config.noiseRemoval.extraTokens) {
+    const normalized = token.toLowerCase().trim();
+    if (normalized) tokens.add(normalized);
+  }
+  return tokens;
+}
 
 const HEADER_NOISE_PATTERN =
   /\b(site-header|masthead|topbar|navbar|nav(?:bar)?|menu|header-nav)\b/i;
@@ -212,7 +225,8 @@ function tokenizeIdentifierLikeText(value: string): string[] {
 
 function matchesPromoIdOrClass(className: string, id: string): boolean {
   const tokens = tokenizeIdentifierLikeText(`${className} ${id}`);
-  return tokens.some((token) => PROMO_TOKENS.has(token));
+  const promoTokens = getPromoTokens();
+  return tokens.some((token) => promoTokens.has(token));
 }
 
 function matchesFixedOrHighZIsolate(className: string): boolean {
@@ -276,7 +290,7 @@ function removeNoiseNodes(nodes: NodeListOf<Element>): void {
 
 function stripNoiseNodes(document: Document): void {
   // Use targeted selectors for common noise elements instead of querySelectorAll('*')
-  const targetSelectors = [
+  const baseSelectors = [
     'nav',
     'footer',
     'aside',
@@ -290,7 +304,13 @@ function stripNoiseNodes(document: Document): void {
     '[style*="display:none"]',
     '[hidden]',
     '[aria-hidden="true"]',
-  ].join(',');
+  ];
+
+  // Add user-configured extra selectors
+  const extraSelectors = config.noiseRemoval.extraSelectors.filter(
+    (s) => s.trim().length > 0
+  );
+  const targetSelectors = [...baseSelectors, ...extraSelectors].join(',');
 
   const potentialNoiseNodes = document.querySelectorAll(targetSelectors);
 
