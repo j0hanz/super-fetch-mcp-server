@@ -2,32 +2,40 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  createSessionStore,
   createSlotTracker,
   ensureSessionCapacity,
   reserveSessionSlot,
 } from '../dist/http-utils.js';
 import type { SessionStore } from '../dist/http-utils.js';
 
-function createStore(initialSize: number) {
-  let currentSize = initialSize;
-  return {
-    size: () => currentSize,
-    setSize: (size: number) => {
-      currentSize = size;
-    },
-  };
+function createStore(initialSize: number): SessionStore {
+  const store = createSessionStore(60_000);
+  const mockTransport = { close: () => Promise.resolve() } as any;
+
+  for (let index = 0; index < initialSize; index += 1) {
+    store.set(`session-${index}`, {
+      transport: mockTransport,
+      createdAt: Date.now(),
+      lastSeen: Date.now(),
+      protocolInitialized: false,
+    });
+  }
+
+  return store;
 }
 
 function testReservesAndReleasesSlots() {
   const store = createStore(0);
-  const reserved = reserveSessionSlot(store as SessionStore, 1);
+  const reserved = reserveSessionSlot(store, 1);
   assert.equal(reserved, true);
-  const tracker = createSlotTracker();
+  const tracker = createSlotTracker(store);
   tracker.releaseSlot();
 }
 
 function testTracksInitializationState() {
-  const tracker = createSlotTracker();
+  const store = createStore(0);
+  const tracker = createSlotTracker(store);
   assert.equal(tracker.isInitialized(), false);
   tracker.markInitialized();
   assert.equal(tracker.isInitialized(), true);
@@ -38,7 +46,7 @@ function testRejectsWhenAtCapacityWithoutEviction() {
   const store = createStore(1);
 
   const allowed = ensureSessionCapacity({
-    store: store as SessionStore,
+    store,
     maxSessions: 1,
     evictOldest: () => false,
   });
@@ -50,10 +58,10 @@ function testAllowsWhenEvictionFreesCapacity() {
   const store = createStore(1);
 
   const allowed = ensureSessionCapacity({
-    store: store as SessionStore,
+    store,
     maxSessions: 1,
-    evictOldest: () => {
-      store.setSize(0);
+    evictOldest: (targetStore) => {
+      targetStore.clear();
       return true;
     },
   });

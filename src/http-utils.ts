@@ -37,6 +37,9 @@ export interface SessionStore {
   set: (sessionId: string, entry: SessionEntry) => void;
   remove: (sessionId: string) => SessionEntry | undefined;
   size: () => number;
+  inFlight: () => number;
+  incrementInFlight: () => void;
+  decrementInFlight: () => void;
   clear: () => SessionEntry[];
   evictExpired: () => SessionEntry[];
   evictOldest: () => SessionEntry | undefined;
@@ -58,13 +61,13 @@ export function normalizeHost(value: string): string | null {
   if (!first) return null;
 
   const ipv6 = stripIpv6Brackets(first);
-  if (ipv6) return ipv6;
+  if (ipv6) return stripTrailingDots(ipv6);
 
   if (isIpV6Literal(first)) {
-    return first;
+    return stripTrailingDots(first);
   }
 
-  return stripPortIfPresent(first);
+  return stripTrailingDots(stripPortIfPresent(first));
 }
 
 function takeFirstHostValue(value: string): string | null {
@@ -89,6 +92,14 @@ function stripPortIfPresent(value: string): string {
 
 function isIpV6Literal(value: string): boolean {
   return isIP(value) === 6;
+}
+
+function stripTrailingDots(value: string): string {
+  let result = value;
+  while (result.endsWith('.')) {
+    result = result.slice(0, -1);
+  }
+  return result;
 }
 
 // --- Close Handlers ---
@@ -169,6 +180,7 @@ export function startSessionCleanupLoop(
 
 export function createSessionStore(sessionTtlMs: number): SessionStore {
   const sessions = new Map<string, SessionEntry>();
+  let inflight = 0;
 
   return {
     get: (sessionId) => sessions.get(sessionId),
@@ -189,6 +201,13 @@ export function createSessionStore(sessionTtlMs: number): SessionStore {
       return session;
     },
     size: () => sessions.size,
+    inFlight: () => inflight,
+    incrementInFlight: () => {
+      inflight += 1;
+    },
+    decrementInFlight: () => {
+      if (inflight > 0) inflight -= 1;
+    },
     clear: () => {
       const entries = [...sessions.values()];
       sessions.clear();
@@ -234,18 +253,25 @@ export function isMcpRequestBody(body: unknown): body is McpRequestBody {
   return mcpRequestSchema.safeParse(body).success;
 }
 
+export function acceptsEventStream(header: string | null | undefined): boolean {
+  if (!header) return false;
+  return header
+    .split(',')
+    .some((value) =>
+      value.trim().toLowerCase().startsWith('text/event-stream')
+    );
+}
+
 // --- Slot Tracker ---
 
-let inFlightSessions = 0;
-
-export function createSlotTracker(): SlotTracker {
+export function createSlotTracker(store: SessionStore): SlotTracker {
   let slotReleased = false;
   let initialized = false;
   return {
     releaseSlot: (): void => {
       if (slotReleased) return;
       slotReleased = true;
-      if (inFlightSessions > 0) inFlightSessions--;
+      store.decrementInFlight();
     },
     markInitialized: (): void => {
       initialized = true;
@@ -258,10 +284,10 @@ export function reserveSessionSlot(
   store: SessionStore,
   maxSessions: number
 ): boolean {
-  if (store.size() + inFlightSessions >= maxSessions) {
+  if (store.size() + store.inFlight() >= maxSessions) {
     return false;
   }
-  inFlightSessions += 1;
+  store.incrementInFlight();
   return true;
 }
 
@@ -275,17 +301,17 @@ export function ensureSessionCapacity({
   evictOldest: (store: SessionStore) => boolean;
 }): boolean {
   const currentSize = store.size();
-  const isAtCapacity = currentSize + inFlightSessions >= maxSessions;
+  const isAtCapacity = currentSize + store.inFlight() >= maxSessions;
 
   if (!isAtCapacity) return true;
 
   // Try to free a slot
   const canFreeSlot =
     currentSize >= maxSessions &&
-    currentSize - 1 + inFlightSessions < maxSessions;
+    currentSize - 1 + store.inFlight() < maxSessions;
 
   if (canFreeSlot && evictOldest(store)) {
-    return store.size() + inFlightSessions < maxSessions;
+    return store.size() + store.inFlight() < maxSessions;
   }
 
   return false;

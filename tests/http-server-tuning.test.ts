@@ -155,6 +155,37 @@ describe('http server tuning helpers', () => {
     assert.equal(payload.allCalls, 1);
   });
 
+  it('requires ALLOW_REMOTE for non-loopback bindings', async () => {
+    const script = `
+      import { startHttpServer } from './dist/http-native.js';
+
+      let server;
+      try {
+        server = await startHttpServer();
+      } catch (error) {
+        console.error('${RESULT_MARKER}' + JSON.stringify({ error: error?.message ?? 'unknown' }));
+        process.exit(0);
+      }
+
+      await server.shutdown('TEST');
+      console.error('${RESULT_MARKER}' + JSON.stringify({ started: true }));
+    `;
+
+    const result = runIsolatedNode(script, {
+      HOST: '0.0.0.0',
+      PORT: '0',
+      ACCESS_TOKENS: 'test-token',
+      ALLOW_REMOTE: 'false',
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    const payload = parseMarkedJson<{ error?: string; started?: boolean }>(
+      result.stderr
+    );
+    assert.ok(payload.error);
+    assert.match(payload.error ?? '', /ALLOW_REMOTE/i);
+  });
+
   it('startHttpServer starts and stops without connecting', async () => {
     const script = `
       import { startHttpServer } from './dist/http-native.js';

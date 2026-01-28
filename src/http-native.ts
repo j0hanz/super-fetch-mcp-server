@@ -21,6 +21,7 @@ import { handleDownload } from './cache.js';
 import { config, enableHttpMode } from './config.js';
 import { timingSafeEqualUtf8 } from './crypto.js';
 import {
+  acceptsEventStream,
   applyHttpServerTuning,
   composeCloseHandlers,
   createSessionStore,
@@ -30,6 +31,7 @@ import {
   isJsonRpcBatchRequest,
   isMcpRequestBody,
   type JsonRpcId,
+  normalizeHost,
   reserveSessionSlot,
   type SessionStore,
   startSessionCleanupLoop,
@@ -144,7 +146,7 @@ function handleCors(req: IncomingMessage, res: ServerResponse): boolean {
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, DELETE');
   res.setHeader(
     'Access-Control-Allow-Headers',
-    'Content-Type, Authorization, MCP-Protocol-Version, X-MCP-Session-ID'
+    'Content-Type, Authorization, X-API-Key, MCP-Protocol-Version, X-MCP-Session-ID'
   );
 
   if (req.method === 'OPTIONS') {
@@ -160,6 +162,102 @@ function getHeaderValue(req: IncomingMessage, name: string): string | null {
   if (!val) return null;
   if (Array.isArray(val)) return val[0] ?? null;
   return val;
+}
+
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
+const WILDCARD_HOSTS = new Set(['0.0.0.0', '::']);
+
+function isWildcardHost(host: string): boolean {
+  return WILDCARD_HOSTS.has(host);
+}
+
+function buildAllowedHosts(): ReadonlySet<string> {
+  const allowed = new Set<string>(LOOPBACK_HOSTS);
+
+  const configuredHost = normalizeHost(config.server.host);
+  if (configuredHost && !isWildcardHost(configuredHost)) {
+    allowed.add(configuredHost);
+  }
+
+  for (const host of config.security.allowedHosts) {
+    const normalized = normalizeHost(host);
+    if (normalized) {
+      allowed.add(normalized);
+    }
+  }
+
+  return allowed;
+}
+
+const ALLOWED_HOSTS = buildAllowedHosts();
+
+function resolveHostHeader(req: IncomingMessage): string | null {
+  const host = getHeaderValue(req, 'host');
+  if (!host) return null;
+  return normalizeHost(host);
+}
+
+function resolveOriginHost(origin: string): string | null {
+  if (origin === 'null') return null;
+  try {
+    const parsed = new URL(origin);
+    return normalizeHost(parsed.host);
+  } catch {
+    return null;
+  }
+}
+
+function validateHostAndOrigin(
+  req: IncomingMessage,
+  res: ShimResponse
+): boolean {
+  const host = resolveHostHeader(req);
+  if (!host) {
+    res.status(400).json({ error: 'Missing or invalid Host header' });
+    return false;
+  }
+  if (!ALLOWED_HOSTS.has(host)) {
+    res.status(403).json({ error: 'Host not allowed' });
+    return false;
+  }
+
+  const originHeader = getHeaderValue(req, 'origin');
+  if (originHeader) {
+    const originHost = resolveOriginHost(originHeader);
+    if (!originHost) {
+      res.status(403).json({ error: 'Invalid Origin header' });
+      return false;
+    }
+    if (!ALLOWED_HOSTS.has(originHost)) {
+      res.status(403).json({ error: 'Origin not allowed' });
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function assertHttpModeConfiguration(): void {
+  const configuredHost = normalizeHost(config.server.host);
+  const isLoopback =
+    configuredHost !== null && LOOPBACK_HOSTS.has(configuredHost);
+  const isRemoteBinding = !isLoopback;
+
+  if (isRemoteBinding && !config.security.allowRemote) {
+    throw new Error(
+      'ALLOW_REMOTE must be true to bind to non-loopback interfaces'
+    );
+  }
+
+  if (isRemoteBinding && config.auth.mode !== 'oauth') {
+    throw new Error('OAuth authentication is required for remote bindings');
+  }
+
+  if (config.auth.mode === 'static' && config.auth.staticTokens.length === 0) {
+    throw new Error(
+      'Static auth requires ACCESS_TOKENS or API_KEY to be configured'
+    );
+  }
 }
 
 // --- Rate Limit Implementation (Inline) ---
@@ -370,7 +468,16 @@ async function verifyWithIntrospection(token: string): Promise<AuthInfo> {
 
 async function authenticate(req: ShimRequest): Promise<AuthInfo> {
   const authHeader = req.headers.authorization;
-  if (!authHeader) throw new InvalidTokenError('Missing Authorization header');
+  if (!authHeader) {
+    const apiKey = getHeaderValue(req, 'x-api-key');
+    if (apiKey && config.auth.mode === 'static') {
+      return verifyStaticToken(apiKey);
+    }
+    if (apiKey && config.auth.mode === 'oauth') {
+      throw new InvalidTokenError('X-API-Key not supported for OAuth');
+    }
+    throw new InvalidTokenError('Missing Authorization header');
+  }
 
   const [type, token] = authHeader.split(' ');
   if (type !== 'Bearer' || !token)
@@ -441,7 +548,7 @@ async function createNewSession(
     return null;
   }
 
-  const tracker = createSlotTracker();
+  const tracker = createSlotTracker(store);
   const transportImpl = new StreamableHTTPServerTransport({
     sessionIdGenerator: () => randomUUID(),
   });
@@ -571,7 +678,8 @@ async function handleMcpGet(
     return;
   }
 
-  if (req.headers.accept !== 'text/event-stream') {
+  const acceptHeader = getHeaderValue(req, 'accept');
+  if (!acceptsEventStream(acceptHeader)) {
     res.status(406).json({ error: 'Not Acceptable' });
     return;
   }
@@ -708,6 +816,7 @@ export async function startHttpServer(): Promise<{
   port: number;
   host: string;
 }> {
+  assertHttpModeConfiguration();
   enableHttpMode();
   const mcpServer = createMcpServer();
   const rateLimiter = createRateLimitManagerImpl(config.rateLimit);
@@ -774,9 +883,7 @@ async function handleRequest(
   const req = rawReq as ShimRequest;
 
   // 1. Basic Setup
-  const protocol = 'http';
-  const host = req.headers.host ?? 'localhost';
-  const url = new URL(req.url ?? '', `${protocol}://${host}`);
+  const url = new URL(req.url ?? '', 'http://localhost');
 
   req.query = parseQuery(url);
   if (req.socket.remoteAddress) {
@@ -785,6 +892,7 @@ async function handleRequest(
   req.params = {};
 
   // 2. CORS
+  if (!validateHostAndOrigin(req, res)) return;
   if (handleCors(req, res)) return;
 
   // 3. Body Parsing
