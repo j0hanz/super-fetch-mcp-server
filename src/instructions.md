@@ -1,6 +1,6 @@
 # superFetch Instructions
 
-> **Guidance for the Agent:** These instructions are available as a resource (`internal://instructions`). Load them when you are confused about tool usage.
+> Guidance for the Agent: These instructions are available as a resource (`internal://instructions`) or prompt (`get-help`). Load them when you are unsure about tool usage.
 
 ## 1. Core Capability
 
@@ -9,31 +9,33 @@
 
 ## 2. The "Golden Path" Workflows (Critical)
 
+_Describe the standard order of operations using ONLY tools that exist._
+
 ### Workflow A: Fetch and Read
 
-1. Call `fetch-url` with a public http(s) URL.
-2. Read `structuredContent.markdown` and `structuredContent.title`.
-3. Cite using `resolvedUrl` or `url` from the response.
+1. Call `fetch-url` with `url`.
+2. Read `structuredContent.markdown` and `structuredContent.title` from the result.
+3. If content is truncated (look for `...[truncated]`), follow the returned `resource_link` URI.
+   > Constraint: Never guess resource URIs. Use the returned `resource_link` or list resources first.
 
-### Workflow B: Large Content / Cache Resource
+### Workflow B: Retrieve Cached Content
 
-1. If the response includes a `resource_link`, read that resource URI.
-2. If content is missing, list resources and select the matching `superfetch://cache/markdown/{urlHash}` entry.
-   > **Constraint:** Never guess resource URIs. Use the returned `resource_link` or list resources first.
+1. List resources to find available cached pages (`superfetch://cache/...`).
+2. Read the specific `superfetch://cache/markdown/{urlHash}` URI.
 
-## 3. Tool Nuances & "Gotchas"
+## 3. Tool Nuances & Gotchas
 
-- **`fetch-url`**:
-  - **Latency:** Network-bound; expect slower responses for large pages.
-  - **Side Effects:** Calls external websites (open-world).
-  - **Input:** `url` must be public http/https. Private/internal addresses are blocked.
-  - **Output:** Large content may return a `resource_link` instead of full inline markdown.
-- **Cache resources (`superfetch://cache/markdown/{urlHash}`)**:
-  - **Namespace:** Only `markdown` is valid.
-  - **Discovery:** Use resource listing or the `resource_link` returned by `fetch-url`.
+_Do NOT repeat JSON schema. Focus on behavior and pitfalls._
+
+- **`fetch-url`**
+  - **Purpose:** Fetches a webpage and converts it to clean Markdown format.
+  - **Inputs:** `url` (Must be public http/https. Private patterns like localhost/127.0.0.1 are blocked).
+  - **Side effects:** Open world network request; writes to internal LRU cache.
+  - **Latency/limits:** Network-bound. Large content exceeds inline limits and returns a `resource_link`.
+  - **Common failure modes:** `VALIDATION_ERROR` (private/blocked URL), `FETCH_ERROR` (network timeout/404).
 
 ## 4. Error Handling Strategy
 
-- **`VALIDATION_ERROR`**: URL is invalid or blocked. Confirm it is a public http(s) URL.
-- **`FETCH_ERROR`**: Network/HTTP failure. Retry or verify the site is reachable.
-- **Cache miss (`Content not found`)**: Re-run `fetch-url` or verify the cache entry exists.
+- **`VALIDATION_ERROR`**: Ensure the URL is valid and publicly accessible.
+- **`FETCH_ERROR`**: Retry once. If persistent, the site may be blocking automated requests.
+- **Truncation**: If `isError` is false but content ends in `...[truncated]`, you MUST read the provided `resource_link` URI to get the full markdown.
