@@ -38,7 +38,7 @@ function parseMarkedJson<T>(output: string): T {
 describe('http server tuning helpers', () => {
   it('applyHttpServerTuning does nothing by default', async () => {
     const script = `
-      import { applyHttpServerTuning } from './dist/http.js';
+      import { applyHttpServerTuning } from './dist/http-utils.js';
       const server = { headersTimeout: 123, requestTimeout: 456, keepAliveTimeout: 789 };
       applyHttpServerTuning(server);
       console.error('${RESULT_MARKER}' + JSON.stringify(server));
@@ -63,7 +63,7 @@ describe('http server tuning helpers', () => {
 
   it('applyHttpServerTuning applies configured timeouts', async () => {
     const script = `
-      import { applyHttpServerTuning } from './dist/http.js';
+      import { applyHttpServerTuning } from './dist/http-utils.js';
       const server = {};
       applyHttpServerTuning(server);
       console.error('${RESULT_MARKER}' + JSON.stringify(server));
@@ -88,7 +88,7 @@ describe('http server tuning helpers', () => {
 
   it('drainConnectionsOnShutdown is a no-op by default', async () => {
     const script = `
-      import { drainConnectionsOnShutdown } from './dist/http.js';
+      import { drainConnectionsOnShutdown } from './dist/http-utils.js';
       let idleCalls = 0;
       let allCalls = 0;
       const server = {
@@ -115,7 +115,7 @@ describe('http server tuning helpers', () => {
 
   it('drainConnectionsOnShutdown closes idle connections when enabled', async () => {
     const script = `
-      import { drainConnectionsOnShutdown } from './dist/http.js';
+      import { drainConnectionsOnShutdown } from './dist/http-utils.js';
       let idleCalls = 0;
       const server = {
         closeIdleConnections: () => { idleCalls += 1; },
@@ -136,7 +136,7 @@ describe('http server tuning helpers', () => {
 
   it('drainConnectionsOnShutdown closes all connections when enabled', async () => {
     const script = `
-      import { drainConnectionsOnShutdown } from './dist/http.js';
+      import { drainConnectionsOnShutdown } from './dist/http-utils.js';
       let allCalls = 0;
       const server = {
         closeAllConnections: () => { allCalls += 1; },
@@ -155,13 +155,44 @@ describe('http server tuning helpers', () => {
     assert.equal(payload.allCalls, 1);
   });
 
+  it('requires ALLOW_REMOTE for non-loopback bindings', async () => {
+    const script = `
+      import { startHttpServer } from './dist/http-native.js';
+
+      let server;
+      try {
+        server = await startHttpServer();
+      } catch (error) {
+        console.error('${RESULT_MARKER}' + JSON.stringify({ error: error?.message ?? 'unknown' }));
+        process.exit(0);
+      }
+
+      await server.shutdown('TEST');
+      console.error('${RESULT_MARKER}' + JSON.stringify({ started: true }));
+    `;
+
+    const result = runIsolatedNode(script, {
+      HOST: '0.0.0.0',
+      PORT: '0',
+      ACCESS_TOKENS: 'test-token',
+      ALLOW_REMOTE: 'false',
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    const payload = parseMarkedJson<{ error?: string; started?: boolean }>(
+      result.stderr
+    );
+    assert.ok(payload.error);
+    assert.match(payload.error ?? '', /ALLOW_REMOTE/i);
+  });
+
   it('startHttpServer starts and stops without connecting', async () => {
     const script = `
-      import { startHttpServer } from './dist/http.js';
+      import { startHttpServer } from './dist/http-native.js';
 
-      const server = await startHttpServer({ registerSignalHandlers: false });
-      await server.stop();
-      console.error('${RESULT_MARKER}' + JSON.stringify({ host: server.host, port: server.port, url: server.url }));
+      const server = await startHttpServer();
+      await server.shutdown('TEST');
+      console.error('${RESULT_MARKER}' + JSON.stringify({ host: server.host, port: server.port, url: \`http://\${server.host}:\${server.port}\` }));
     `;
 
     const result = runIsolatedNode(script, {

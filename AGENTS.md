@@ -7,7 +7,7 @@
 - **Domain:** Intelligent web content fetcher MCP server (HTML to Markdown conversion).
 - **Tech Stack (Verified):**
   - **Languages:** TypeScript 5.9.x (`package.json`), Node.js >=20 (`engines` in `package.json`).
-  - **Frameworks:** Express 5.2.x, Model Context Protocol SDK 1.25.x.
+  - **Frameworks:** Model Context Protocol SDK 1.25.x.
   - **Key Libraries:** `zod` (validation), `undici` (HTTP), `node-html-markdown` (transform), `linkedom` (DOM), `@mozilla/readability`.
 - **Architecture:** Single-package MCP server with worker threads for transformation.
 
@@ -44,6 +44,7 @@
 - Do not edit `package-lock.json` manually.
 - Do not bypass the build step when running tests; tests run against `dist/` artifacts.
 - Do not commit secrets.
+- Do not disable or bypass existing ESLint/TypeScript rules without explicit approval.
 
 ## 6) Testing Strategy (Verified)
 

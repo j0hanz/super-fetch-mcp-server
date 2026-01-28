@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { isJsonRpcBatchRequest, isMcpRequestBody } from '../dist/http.js';
+import { isJsonRpcBatchRequest, isMcpRequestBody } from '../dist/http-utils.js';
 
 type Case<T> = {
   input: T;

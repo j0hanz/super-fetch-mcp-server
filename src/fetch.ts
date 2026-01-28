@@ -18,7 +18,7 @@ import {
   logWarn,
   redactUrl,
 } from './observability.js';
-import { isRecord } from './type-guards.js';
+import { isObject } from './type-guards.js';
 
 export interface FetchOptions {
   signal?: AbortSignal;
@@ -33,8 +33,6 @@ function buildIpv4(parts: readonly [number, number, number, number]): string {
 function buildIpv6(parts: readonly IpSegment[]): string {
   return parts.map(String).join(':');
 }
-
-const BLOCK_LIST = new BlockList();
 
 const IPV6_ZERO = buildIpv6([0, 0, 0, 0, 0, 0, 0, 0]);
 const IPV6_LOOPBACK = buildIpv6([0, 0, 0, 0, 0, 0, 0, 1]);
@@ -75,20 +73,26 @@ const BLOCKED_IPV6_SUBNETS: readonly {
   { subnet: IPV6_FF00, prefix: 8 },
 ];
 
-for (const entry of BLOCKED_IPV4_SUBNETS) {
-  BLOCK_LIST.addSubnet(entry.subnet, entry.prefix, 'ipv4');
-}
-for (const entry of BLOCKED_IPV6_SUBNETS) {
-  BLOCK_LIST.addSubnet(entry.subnet, entry.prefix, 'ipv6');
+let cachedBlockList: BlockList | undefined;
+
+function getBlockList(): BlockList {
+  if (!cachedBlockList) {
+    cachedBlockList = new BlockList();
+    for (const entry of BLOCKED_IPV4_SUBNETS) {
+      cachedBlockList.addSubnet(entry.subnet, entry.prefix, 'ipv4');
+    }
+    for (const entry of BLOCKED_IPV6_SUBNETS) {
+      cachedBlockList.addSubnet(entry.subnet, entry.prefix, 'ipv6');
+    }
+  }
+  return cachedBlockList;
 }
 
 function matchesBlockedIpPatterns(resolvedIp: string): boolean {
-  for (const pattern of config.security.blockedIpPatterns) {
-    if (pattern.test(resolvedIp)) {
-      return true;
-    }
-  }
-  return false;
+  return (
+    config.security.blockedIpPattern.test(resolvedIp) ||
+    config.security.blockedIpv4MappedPattern.test(resolvedIp)
+  );
 }
 
 export function isBlockedIp(ip: string): boolean {
@@ -108,10 +112,11 @@ function resolveIpType(ip: string): 4 | 6 | null {
 }
 
 function isBlockedByList(ip: string, ipType: 4 | 6): boolean {
+  const blockList = getBlockList();
   if (ipType === 4) {
-    return BLOCK_LIST.check(ip, 'ipv4');
+    return blockList.check(ip, 'ipv4');
   }
-  return BLOCK_LIST.check(ip, 'ipv6');
+  return blockList.check(ip, 'ipv6');
 }
 
 export function normalizeUrl(urlString: string): {
@@ -298,13 +303,15 @@ const TRANSFORM_RULES: readonly TransformRule[] = [
   BITBUCKET_SRC_RULE,
 ];
 
+const BITBUCKET_RAW_RE = /bitbucket\.org\/[^/]+\/[^/]+\/raw\//;
+
 function isRawUrl(url: string): boolean {
   const lowerUrl = url.toLowerCase();
   return (
     lowerUrl.includes('raw.githubusercontent.com') ||
     lowerUrl.includes('gist.githubusercontent.com') ||
     lowerUrl.includes('/-/raw/') ||
-    /bitbucket\.org\/[^/]+\/[^/]+\/raw\//.test(lowerUrl)
+    BITBUCKET_RAW_RE.test(lowerUrl)
   );
 }
 
@@ -314,16 +321,10 @@ function getUrlWithoutParams(url: string): {
 } {
   const hashIndex = url.indexOf('#');
   const queryIndex = url.indexOf('?');
-  let endIndex = url.length;
-  if (queryIndex !== -1) {
-    if (hashIndex !== -1) {
-      endIndex = Math.min(queryIndex, hashIndex);
-    } else {
-      endIndex = queryIndex;
-    }
-  } else if (hashIndex !== -1) {
-    endIndex = hashIndex;
-  }
+  const endIndex = Math.min(
+    queryIndex === -1 ? url.length : queryIndex,
+    hashIndex === -1 ? url.length : hashIndex
+  );
 
   const hash = hashIndex !== -1 ? url.slice(hashIndex) : '';
 
@@ -414,6 +415,7 @@ function hasKnownRawTextExtension(urlBaseLower: string): boolean {
 }
 
 const DNS_LOOKUP_TIMEOUT_MS = 5000;
+const SLOW_REQUEST_THRESHOLD_MS = 5000;
 
 function normalizeLookupResults(
   addresses: string | dns.LookupAddress[],
@@ -627,7 +629,7 @@ function resolveResultOrder(
 }
 
 function getLegacyVerbatim(options: dns.LookupOptions): boolean | undefined {
-  if (isRecord(options)) {
+  if (isObject(options)) {
     const { verbatim } = options;
     return typeof verbatim === 'boolean' ? verbatim : undefined;
   }
@@ -808,7 +810,7 @@ function getRequestUrl(record: Record<string, unknown>): string | null {
 
 function resolveErrorUrl(error: unknown, fallback: string): string {
   if (error instanceof FetchError) return error.url;
-  if (!isRecord(error)) return fallback;
+  if (!isObject(error)) return fallback;
   const requestUrl = getRequestUrl(error);
   if (requestUrl) return requestUrl;
   return fallback;
@@ -932,7 +934,7 @@ function logSlowRequest(
   durationLabel: string,
   contextFields: Partial<FetchContextFields>
 ): void {
-  if (duration <= 5000) return;
+  if (duration <= SLOW_REQUEST_THRESHOLD_MS) return;
   logWarn('Slow HTTP request detected', {
     requestId: context.requestId,
     url: context.url,
@@ -1132,7 +1134,7 @@ function getRedirectLocation(response: Response, currentUrl: string): string {
 }
 
 function annotateRedirectError(error: unknown, url: string): void {
-  if (!isRecord(error)) return;
+  if (!isObject(error)) return;
   error.requestUrl = url;
 }
 

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import * as cache from '../dist/cache.js';
-import { registerDownloadRoutes } from '../dist/cache.js';
+import { handleDownload } from '../dist/cache.js';
 
 type ResponseState = {
   headers: Record<string, string>;
@@ -10,17 +10,6 @@ type ResponseState = {
   jsonBody: unknown;
   body: unknown;
 };
-
-function getDownloadHandler() {
-  let handler: (req: unknown, res: unknown, next: () => void) => void;
-  const app = {
-    get: (_path: string, fn: typeof handler) => {
-      handler = fn;
-    },
-  };
-  registerDownloadRoutes(app as never);
-  return handler as (req: unknown, res: unknown, next: () => void) => void;
-}
 
 function createResponseState(): ResponseState {
   return {
@@ -49,6 +38,32 @@ function createResponse(state: ResponseState) {
       state.body = payload;
       return res;
     },
+    end: (payload: unknown) => {
+      if (typeof payload === 'string') {
+        try {
+          const parsed = JSON.parse(payload);
+          if (parsed && typeof parsed === 'object') {
+            state.jsonBody = parsed;
+          } else {
+            state.body = payload;
+          }
+        } catch {
+          state.body = payload;
+        }
+      } else {
+        state.body = payload;
+      }
+      return res;
+    },
+    writeHead: (code: number, headers?: Record<string, string>) => {
+      state.statusCode = code;
+      if (headers) {
+        for (const [key, value] of Object.entries(headers)) {
+          state.headers[key.toLowerCase()] = value as string;
+        }
+      }
+      return res;
+    },
   };
 
   return res;
@@ -66,16 +81,6 @@ function createResponseCapture() {
   };
 }
 
-function createNextTracker(): { next: () => void; getCalls: () => number } {
-  let nextCalls = 0;
-  return {
-    next: () => {
-      nextCalls += 1;
-    },
-    getCalls: () => nextCalls,
-  };
-}
-
 function registerMarkdownNamespaceTest(): void {
   it('returns markdown content for markdown namespace', async () => {
     const cacheKey = 'markdown:abc123def456';
@@ -84,17 +89,10 @@ function registerMarkdownNamespaceTest(): void {
       title: 'Example Article',
     });
 
-    const handler = getDownloadHandler();
     const { res, headers, getBody, getStatus } = createResponseCapture();
-    const nextTracker = createNextTracker();
 
-    await handler(
-      { params: { namespace: 'markdown', hash: 'abc123def456' } },
-      res,
-      nextTracker.next
-    );
+    handleDownload(res as any, 'markdown', 'abc123def456');
 
-    assert.equal(nextTracker.getCalls(), 0);
     assert.equal(getStatus(), 200);
     assert.equal(getBody(), '# Title\n\nBody');
     assert.equal(headers['content-type'], 'text/markdown; charset=utf-8');
@@ -109,14 +107,9 @@ function registerMarkdownContentFallbackTest(): void {
       url: 'https://example.com/article',
     });
 
-    const handler = getDownloadHandler();
     const { res, getBody } = createResponseCapture();
 
-    await handler(
-      { params: { namespace: 'markdown', hash: 'abc123ff' } },
-      res,
-      () => undefined
-    );
+    handleDownload(res as any, 'markdown', 'abc123ff');
 
     assert.equal(getBody(), '# Title\n\nBody');
   });
@@ -127,14 +120,9 @@ function registerInvalidPayloadTest(): void {
     const cacheKey = 'markdown:deadbeef';
     cache.set(cacheKey, 'not-json', { url: 'https://example.com/article' });
 
-    const handler = getDownloadHandler();
     const { res, getJson, getStatus } = createResponseCapture();
 
-    await handler(
-      { params: { namespace: 'markdown', hash: 'deadbeef' } },
-      res,
-      () => undefined
-    );
+    handleDownload(res as any, 'markdown', 'deadbeef');
 
     assert.equal(getStatus(), 404);
     assert.equal((getJson() as { code?: string }).code, 'NOT_FOUND');

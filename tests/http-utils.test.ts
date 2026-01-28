@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import * as http from '../dist/http.js';
+import * as http from '../dist/http-utils.js';
 
 describe('http utilities', () => {
   describe('normalizeHost', () => {
@@ -115,9 +115,36 @@ describe('http utilities', () => {
     });
   });
 
+  describe('acceptsEventStream', () => {
+    it('accepts exact text/event-stream', () => {
+      assert.equal(http.acceptsEventStream('text/event-stream'), true);
+    });
+
+    it('accepts text/event-stream with parameters', () => {
+      assert.equal(
+        http.acceptsEventStream('text/event-stream; charset=utf-8'),
+        true
+      );
+    });
+
+    it('accepts text/event-stream among other types', () => {
+      assert.equal(
+        http.acceptsEventStream('application/json, text/event-stream'),
+        true
+      );
+    });
+
+    it('rejects missing or non-event-stream types', () => {
+      assert.equal(http.acceptsEventStream(undefined), false);
+      assert.equal(http.acceptsEventStream('application/json'), false);
+      assert.equal(http.acceptsEventStream('*/*'), false);
+    });
+  });
+
   describe('createSlotTracker', () => {
     it('creates slot tracker with required methods', () => {
-      const tracker = http.createSlotTracker();
+      const store = http.createSessionStore(60000);
+      const tracker = http.createSlotTracker(store);
       assert.ok(tracker, 'Should create tracker');
       assert.ok(typeof tracker.releaseSlot === 'function');
       assert.ok(typeof tracker.markInitialized === 'function');
@@ -125,7 +152,8 @@ describe('http utilities', () => {
     });
 
     it('tracks initialization state', () => {
-      const tracker = http.createSlotTracker();
+      const store = http.createSessionStore(60000);
+      const tracker = http.createSlotTracker(store);
 
       assert.equal(
         tracker.isInitialized(),
@@ -142,7 +170,8 @@ describe('http utilities', () => {
     });
 
     it('releases slot only once', () => {
-      const tracker = http.createSlotTracker();
+      const store = http.createSessionStore(60000);
+      const tracker = http.createSlotTracker(store);
 
       // First release should work
       tracker.releaseSlot();

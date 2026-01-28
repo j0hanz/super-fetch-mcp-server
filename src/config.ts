@@ -44,14 +44,26 @@ function isLogLevel(value: string): value is LogLevel {
   return ALLOWED_LOG_LEVELS.has(value);
 }
 
-function isBelowMin(value: number, min: number | undefined): boolean {
-  if (min === undefined) return false;
-  return value < min;
+function isOutsideRange(
+  value: number,
+  min: number | undefined,
+  max: number | undefined
+): boolean {
+  return (
+    (min !== undefined && value < min) || (max !== undefined && value > max)
+  );
 }
 
-function isAboveMax(value: number, max: number | undefined): boolean {
-  if (max === undefined) return false;
-  return value > max;
+function parseIntegerValue(
+  envValue: string | undefined,
+  min?: number,
+  max?: number
+): number | null {
+  if (!envValue) return null;
+  const parsed = parseInt(envValue, 10);
+  if (Number.isNaN(parsed)) return null;
+  if (isOutsideRange(parsed, min, max)) return null;
+  return parsed;
 }
 
 function parseInteger(
@@ -60,12 +72,7 @@ function parseInteger(
   min?: number,
   max?: number
 ): number {
-  if (!envValue) return defaultValue;
-  const parsed = parseInt(envValue, 10);
-  if (Number.isNaN(parsed)) return defaultValue;
-  if (isBelowMin(parsed, min)) return defaultValue;
-  if (isAboveMax(parsed, max)) return defaultValue;
-  return parsed;
+  return parseIntegerValue(envValue, min, max) ?? defaultValue;
 }
 
 function parseOptionalInteger(
@@ -73,12 +80,7 @@ function parseOptionalInteger(
   min?: number,
   max?: number
 ): number | undefined {
-  if (!envValue) return undefined;
-  const parsed = parseInt(envValue, 10);
-  if (Number.isNaN(parsed)) return undefined;
-  if (isBelowMin(parsed, min)) return undefined;
-  if (isAboveMax(parsed, max)) return undefined;
-  return parsed;
+  return parseIntegerValue(envValue, min, max) ?? undefined;
 }
 
 function parseBoolean(
@@ -244,7 +246,7 @@ function collectStaticTokens(): string[] {
   if (process.env.API_KEY) {
     staticTokens.add(process.env.API_KEY);
   }
-  return Array.from(staticTokens);
+  return [...staticTokens];
 }
 
 function buildAuthConfig(baseUrl: URL): AuthConfig {
@@ -353,6 +355,10 @@ export const config = {
     maxBlockLength: 5000,
     minParagraphLength: 10,
   },
+  noiseRemoval: {
+    extraTokens: parseList(process.env.SUPERFETCH_EXTRA_NOISE_TOKENS),
+    extraSelectors: parseList(process.env.SUPERFETCH_EXTRA_NOISE_SELECTORS),
+  },
   logging: {
     level: parseLogLevel(process.env.LOG_LEVEL),
   },
@@ -390,6 +396,12 @@ export const config = {
       /^::ffff:192\.168\./,
       /^::ffff:169\.254\./,
     ] as const,
+    // Combined regex patterns for fast IP blocking (used in fetch.ts)
+    // Split into two patterns to reduce complexity while maintaining performance
+    blockedIpPattern:
+      /^(?:10\.|172\.(?:1[6-9]|2\d|3[01])\.|192\.168\.|127\.|0\.|169\.254\.|100\.64\.|fc00:|fd00:|fe80:)/i,
+    blockedIpv4MappedPattern:
+      /^::ffff:(?:127\.|10\.|172\.(?:1[6-9]|2\d|3[01])\.|192\.168\.|169\.254\.)/i,
     allowedHosts: parseAllowedHosts(process.env.ALLOWED_HOSTS),
     apiKey: process.env.API_KEY,
     allowRemote,

@@ -1,6 +1,6 @@
-import { setInterval as setIntervalPromise } from 'node:timers/promises';
+import type { ServerResponse } from 'node:http';
 
-import type { Express, Request, Response } from 'express';
+import { LRUCache } from 'lru-cache';
 
 import { ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -14,8 +14,9 @@ import {
 import { config } from './config.js';
 import { sha256Hex } from './crypto.js';
 import { getErrorMessage } from './errors.js';
+import { stableStringify as stableJsonStringify } from './json.js';
 import { logDebug, logWarn } from './observability.js';
-import { isRecord } from './type-guards.js';
+import { isObject } from './type-guards.js';
 
 export interface CacheEntry {
   url: string;
@@ -62,7 +63,7 @@ function hasOptionalStringProperty(
 }
 
 function isCachedPayload(value: unknown): value is CachedPayload {
-  if (!isRecord(value)) return false;
+  if (!isObject(value)) return false;
   if (!hasOptionalStringProperty(value, 'content')) return false;
   if (!hasOptionalStringProperty(value, 'markdown')) return false;
   if (!hasOptionalStringProperty(value, 'title')) return false;
@@ -75,165 +76,16 @@ export interface CacheKeyParts {
 }
 
 const CACHE_HASH = {
-  URL_HASH_LENGTH: 16,
-  VARY_HASH_LENGTH: 12,
+  URL_HASH_LENGTH: 32,
+  VARY_HASH_LENGTH: 16,
 };
-
-const CACHE_VARY_LIMITS = {
-  MAX_STRING_LENGTH: 4096,
-  MAX_KEYS: 64,
-  MAX_ARRAY_LENGTH: 64,
-  MAX_DEPTH: 6,
-  MAX_NODES: 512,
-};
-
-interface StableStringifyState {
-  depth: number;
-  nodes: number;
-  readonly stack: WeakSet<object>;
-}
-
-function bumpStableStringifyNodeCount(state: StableStringifyState): boolean {
-  state.nodes += 1;
-  return state.nodes <= CACHE_VARY_LIMITS.MAX_NODES;
-}
-
-function stableStringifyPrimitive(value: unknown): string {
-  if (value === null || value === undefined) {
-    return '';
-  }
-  const json = JSON.stringify(value);
-  return typeof json === 'string' ? json : '';
-}
-
-function stableStringifyArray(
-  value: unknown[],
-  state: StableStringifyState
-): string | null {
-  if (value.length > CACHE_VARY_LIMITS.MAX_ARRAY_LENGTH) {
-    return null;
-  }
-
-  const parts: string[] = ['['];
-  let length = 1;
-
-  for (let index = 0; index < value.length; index += 1) {
-    if (index > 0) {
-      parts.push(',');
-      length += 1;
-      if (length > CACHE_VARY_LIMITS.MAX_STRING_LENGTH) return null;
-    }
-
-    const entry = stableStringifyInner(value[index], state);
-    if (entry === null) return null;
-
-    parts.push(entry);
-    length += entry.length;
-    if (length > CACHE_VARY_LIMITS.MAX_STRING_LENGTH) return null;
-  }
-
-  parts.push(']');
-  length += 1;
-
-  return length > CACHE_VARY_LIMITS.MAX_STRING_LENGTH ? null : parts.join('');
-}
-
-function stableStringifyRecord(
-  value: Record<string, unknown>,
-  state: StableStringifyState
-): string | null {
-  const keys = Object.keys(value);
-  if (keys.length > CACHE_VARY_LIMITS.MAX_KEYS) {
-    return null;
-  }
-
-  keys.sort((a, b) => a.localeCompare(b));
-
-  const parts: string[] = ['{'];
-  let length = 1;
-  let isFirst = true;
-
-  for (const key of keys) {
-    const entryValue = value[key];
-    if (entryValue === undefined) continue;
-
-    const encodedValue = stableStringifyInner(entryValue, state);
-    if (encodedValue === null) return null;
-
-    const entry = `${JSON.stringify(key)}:${encodedValue}`;
-
-    if (!isFirst) {
-      parts.push(',');
-      length += 1;
-      if (length > CACHE_VARY_LIMITS.MAX_STRING_LENGTH) return null;
-    }
-
-    parts.push(entry);
-    length += entry.length;
-    if (length > CACHE_VARY_LIMITS.MAX_STRING_LENGTH) return null;
-
-    isFirst = false;
-  }
-
-  parts.push('}');
-  length += 1;
-
-  return length > CACHE_VARY_LIMITS.MAX_STRING_LENGTH ? null : parts.join('');
-}
-
-function stableStringifyObject(
-  value: object,
-  state: StableStringifyState
-): string | null {
-  if (state.stack.has(value)) {
-    return null;
-  }
-
-  if (state.depth >= CACHE_VARY_LIMITS.MAX_DEPTH) {
-    return null;
-  }
-
-  state.stack.add(value);
-  state.depth += 1;
-  try {
-    if (Array.isArray(value)) {
-      return stableStringifyArray(value, state);
-    }
-
-    return isRecord(value) ? stableStringifyRecord(value, state) : null;
-  } finally {
-    state.depth -= 1;
-    state.stack.delete(value);
-  }
-}
-
-function stableStringifyInner(
-  value: unknown,
-  state: StableStringifyState
-): string | null {
-  if (!bumpStableStringifyNodeCount(state)) {
-    return null;
-  }
-
-  if (value === null || value === undefined) {
-    return 'null';
-  }
-
-  if (typeof value !== 'object') {
-    return stableStringifyPrimitive(value);
-  }
-
-  return stableStringifyObject(value, state);
-}
 
 function stableStringify(value: unknown): string | null {
-  const state: StableStringifyState = {
-    depth: 0,
-    nodes: 0,
-    stack: new WeakSet(),
-  };
-
-  return stableStringifyInner(value, state);
+  try {
+    return stableJsonStringify(value);
+  } catch {
+    return null;
+  }
 }
 
 function createHashFragment(input: string, length: number): string {
@@ -256,8 +108,7 @@ function getVaryHash(
   if (!vary) return undefined;
   let varyString: string | null;
   if (typeof vary === 'string') {
-    varyString =
-      vary.length > CACHE_VARY_LIMITS.MAX_STRING_LENGTH ? null : vary;
+    varyString = vary;
   } else {
     varyString = stableStringify(vary);
   }
@@ -287,19 +138,21 @@ export function parseCacheKey(cacheKey: string): CacheKeyParts | null {
   return { namespace, urlHash };
 }
 
+function buildCacheResourceUri(namespace: string, urlHash: string): string {
+  return `superfetch://cache/${namespace}/${urlHash}`;
+}
+
 export function toResourceUri(cacheKey: string): string | null {
   const parts = parseCacheKey(cacheKey);
   if (!parts) return null;
-  return `superfetch://cache/${parts.namespace}/${parts.urlHash}`;
+  return buildCacheResourceUri(parts.namespace, parts.urlHash);
 }
 
-interface CacheItem {
-  entry: CacheEntry;
-  expiresAt: number;
-}
-const contentCache = new Map<string, CacheItem>();
-let cleanupController: AbortController | null = null;
-let nextExpiryAt: number | null = null;
+const contentCache = new LRUCache<string, CacheEntry>({
+  max: config.cache.maxKeys,
+  ttl: config.cache.ttl * 1000,
+  updateAgeOnGet: false,
+});
 
 interface CacheUpdateEvent {
   cacheKey: string;
@@ -328,46 +181,6 @@ function notifyCacheUpdate(cacheKey: string): void {
   }
 }
 
-function startCleanupLoop(): void {
-  if (cleanupController) return;
-  cleanupController = new AbortController();
-  void runCleanupLoop(cleanupController.signal).catch((error: unknown) => {
-    if (error instanceof Error && error.name !== 'AbortError') {
-      logWarn('Cache cleanup loop failed', { error: getErrorMessage(error) });
-    }
-  });
-}
-
-async function runCleanupLoop(signal: AbortSignal): Promise<void> {
-  const intervalMs = Math.floor(config.cache.ttl * 1000);
-  for await (const getNow of setIntervalPromise(intervalMs, Date.now, {
-    signal,
-    ref: false,
-  })) {
-    enforceCacheLimits(getNow());
-  }
-}
-
-function enforceCacheLimits(now: number): void {
-  if (nextExpiryAt !== null && now < nextExpiryAt) {
-    trimCacheToMaxKeys();
-    return;
-  }
-
-  let nextExpiry: number | null = null;
-  for (const [key, item] of contentCache.entries()) {
-    if (now > item.expiresAt) {
-      contentCache.delete(key);
-      continue;
-    }
-    if (nextExpiry === null || item.expiresAt < nextExpiry) {
-      nextExpiry = item.expiresAt;
-    }
-  }
-  nextExpiryAt = nextExpiry;
-  trimCacheToMaxKeys();
-}
-
 interface CacheEntryMetadata {
   url: string;
   title?: string;
@@ -376,7 +189,7 @@ interface CacheEntryMetadata {
 export function get(cacheKey: string | null): CacheEntry | undefined {
   if (!isCacheReadable(cacheKey)) return undefined;
   return runCacheOperation(cacheKey, 'Cache get error', () =>
-    readCacheEntry(cacheKey)
+    contentCache.get(cacheKey)
   );
 }
 
@@ -404,27 +217,6 @@ function runCacheOperation<T>(
   }
 }
 
-function readCacheEntry(cacheKey: string): CacheEntry | undefined {
-  const now = Date.now();
-  return readCacheItem(cacheKey, now)?.entry;
-}
-
-function isExpired(item: CacheItem, now: number): boolean {
-  return now > item.expiresAt;
-}
-
-function readCacheItem(cacheKey: string, now: number): CacheItem | undefined {
-  const item = contentCache.get(cacheKey);
-  if (!item) return undefined;
-
-  if (isExpired(item, now)) {
-    contentCache.delete(cacheKey);
-    return undefined;
-  }
-
-  return item;
-}
-
 export function set(
   cacheKey: string | null,
   content: string,
@@ -432,7 +224,6 @@ export function set(
 ): void {
   if (!isCacheWritable(cacheKey, content)) return;
   runCacheOperation(cacheKey, 'Cache set error', () => {
-    startCleanupLoop();
     const now = Date.now();
     const expiresAtMs = now + config.cache.ttl * 1000;
     const entry = buildCacheEntry({
@@ -441,12 +232,12 @@ export function set(
       fetchedAtMs: now,
       expiresAtMs,
     });
-    persistCacheEntry(cacheKey, entry, expiresAtMs);
+    persistCacheEntry(cacheKey, entry);
   });
 }
 
 export function keys(): readonly string[] {
-  return Array.from(contentCache.keys());
+  return [...contentCache.keys()];
 }
 
 export function isEnabled(): boolean {
@@ -473,36 +264,9 @@ function buildCacheEntry({
   };
 }
 
-function persistCacheEntry(
-  cacheKey: string,
-  entry: CacheEntry,
-  expiresAtMs: number
-): void {
-  contentCache.set(cacheKey, { entry, expiresAt: expiresAtMs });
-  if (nextExpiryAt === null || expiresAtMs < nextExpiryAt) {
-    nextExpiryAt = expiresAtMs;
-  }
-  trimCacheToMaxKeys();
+function persistCacheEntry(cacheKey: string, entry: CacheEntry): void {
+  contentCache.set(cacheKey, entry);
   notifyCacheUpdate(cacheKey);
-}
-
-function trimCacheToMaxKeys(): void {
-  if (contentCache.size <= config.cache.maxKeys) return;
-  removeOldestEntries(contentCache.size - config.cache.maxKeys);
-}
-
-function removeOldestEntries(count: number): void {
-  const iterator = contentCache.keys();
-  for (let removed = 0; removed < count; removed += 1) {
-    const next = iterator.next();
-    if (next.done) break;
-    const removedKey = next.value;
-    const removedItem = contentCache.get(removedKey);
-    contentCache.delete(removedKey);
-    if (nextExpiryAt !== null && removedItem?.expiresAt === nextExpiryAt) {
-      nextExpiryAt = null;
-    }
-  }
 }
 
 function logCacheError(
@@ -518,6 +282,11 @@ function logCacheError(
 
 const CACHE_NAMESPACE = 'markdown';
 const HASH_PATTERN = /^[a-f0-9.]+$/i;
+const INVALID_CACHE_PARAMS_MESSAGE = 'Invalid cache resource parameters';
+
+function throwInvalidCacheParams(): never {
+  throw new McpError(ErrorCode.InvalidParams, INVALID_CACHE_PARAMS_MESSAGE);
+}
 
 function resolveCacheParams(params: unknown): {
   namespace: string;
@@ -528,21 +297,15 @@ function resolveCacheParams(params: unknown): {
   const urlHash = requireParamString(parsed, 'urlHash');
 
   if (!isValidNamespace(namespace) || !isValidHash(urlHash)) {
-    throw new McpError(
-      ErrorCode.InvalidParams,
-      'Invalid cache resource parameters'
-    );
+    throwInvalidCacheParams();
   }
 
   return { namespace, urlHash };
 }
 
 function requireRecordParams(value: unknown): Record<string, unknown> {
-  if (!isRecord(value)) {
-    throw new McpError(
-      ErrorCode.InvalidParams,
-      'Invalid cache resource parameters'
-    );
+  if (!isObject(value)) {
+    throwInvalidCacheParams();
   }
   return value;
 }
@@ -605,7 +368,7 @@ function buildResourceEntry(
 } {
   return {
     name: `${namespace}:${urlHash}`,
-    uri: `superfetch://cache/${namespace}/${urlHash}`,
+    uri: buildCacheResourceUri(namespace, urlHash),
     description: `Cached content entry for ${namespace}`,
     mimeType: 'text/markdown',
   };
@@ -648,12 +411,12 @@ function getClientResourceCapabilities(server: McpServer): {
   subscribe: boolean;
 } {
   const caps = server.server.getClientCapabilities();
-  if (!caps || !isRecord(caps)) {
+  if (!caps || !isObject(caps)) {
     return { listChanged: false, subscribe: false };
   }
 
   const { resources } = caps as { resources?: unknown };
-  if (!isRecord(resources)) {
+  if (!isObject(resources)) {
     return { listChanged: false, subscribe: false };
   }
 
@@ -817,13 +580,14 @@ interface DownloadPayload {
   fileName: string;
 }
 
-function isSingleParam(value: string | string[] | undefined): value is string {
+function isSingleParam(value: unknown): value is string {
   return typeof value === 'string';
 }
 
-function parseDownloadParams(req: Request): DownloadParams | null {
-  const { namespace, hash } = req.params;
-
+function parseDownloadParams(
+  namespace: unknown,
+  hash: unknown
+): DownloadParams | null {
   if (!isSingleParam(namespace) || !isSingleParam(hash)) return null;
   if (!namespace || !hash) return null;
   if (!isValidNamespace(namespace)) return null;
@@ -836,25 +600,34 @@ function buildCacheKeyFromParams(params: DownloadParams): string {
   return `${params.namespace}:${params.hash}`;
 }
 
-function respondBadRequest(res: Response, message: string): void {
-  res.status(400).json({
-    error: message,
-    code: 'BAD_REQUEST',
-  });
+function respondBadRequest(res: ServerResponse, message: string): void {
+  res.writeHead(400, { 'Content-Type': 'application/json' });
+  res.end(
+    JSON.stringify({
+      error: message,
+      code: 'BAD_REQUEST',
+    })
+  );
 }
 
-function respondNotFound(res: Response): void {
-  res.status(404).json({
-    error: 'Content not found or expired',
-    code: 'NOT_FOUND',
-  });
+function respondNotFound(res: ServerResponse): void {
+  res.writeHead(404, { 'Content-Type': 'application/json' });
+  res.end(
+    JSON.stringify({
+      error: 'Content not found or expired',
+      code: 'NOT_FOUND',
+    })
+  );
 }
 
-function respondServiceUnavailable(res: Response): void {
-  res.status(503).json({
-    error: 'Download service is disabled',
-    code: 'SERVICE_UNAVAILABLE',
-  });
+function respondServiceUnavailable(res: ServerResponse): void {
+  res.writeHead(503, { 'Content-Type': 'application/json' });
+  res.end(
+    JSON.stringify({
+      error: 'Download service is disabled',
+      code: 'SERVICE_UNAVAILABLE',
+    })
+  );
 }
 
 export function generateSafeFilename(
@@ -983,22 +756,29 @@ function buildContentDisposition(fileName: string): string {
   return `attachment; filename="${fileName}"; filename*=UTF-8''${encodedName}`;
 }
 
-function sendDownloadPayload(res: Response, payload: DownloadPayload): void {
+function sendDownloadPayload(
+  res: ServerResponse,
+  payload: DownloadPayload
+): void {
   const disposition = buildContentDisposition(payload.fileName);
   res.setHeader('Content-Type', payload.contentType);
   res.setHeader('Content-Disposition', disposition);
   res.setHeader('Cache-Control', `private, max-age=${config.cache.ttl}`);
   res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.send(payload.content);
+  res.end(payload.content);
 }
 
-function handleDownload(req: Request, res: Response): void {
+export function handleDownload(
+  res: ServerResponse,
+  namespace: string,
+  hash: string
+): void {
   if (!config.cache.enabled) {
     respondServiceUnavailable(res);
     return;
   }
 
-  const params = parseDownloadParams(req);
+  const params = parseDownloadParams(namespace, hash);
   if (!params) {
     respondBadRequest(res, 'Invalid namespace or hash format');
     return;
@@ -1022,8 +802,4 @@ function handleDownload(req: Request, res: Response): void {
 
   logDebug('Serving download', { cacheKey, fileName: payload.fileName });
   sendDownloadPayload(res, payload);
-}
-
-export function registerDownloadRoutes(app: Express): void {
-  app.get('/mcp/downloads/:namespace/:hash', handleDownload);
 }
