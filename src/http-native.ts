@@ -1,0 +1,794 @@
+import { randomUUID } from 'node:crypto';
+import {
+  createServer,
+  type IncomingMessage,
+  type ServerResponse,
+} from 'node:http';
+import { setInterval as setIntervalPromise } from 'node:timers/promises';
+import { URL, URLSearchParams } from 'node:url';
+
+import {
+  InvalidTokenError,
+  ServerError,
+} from '@modelcontextprotocol/sdk/server/auth/errors.js';
+import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
+import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
+
+import { handleDownload } from './cache.js';
+import { config, enableHttpMode } from './config.js';
+import { timingSafeEqualUtf8 } from './crypto.js';
+import {
+  applyHttpServerTuning,
+  composeCloseHandlers,
+  createSessionStore,
+  createSlotTracker,
+  drainConnectionsOnShutdown,
+  ensureSessionCapacity,
+  isJsonRpcBatchRequest,
+  isMcpRequestBody,
+  type JsonRpcId,
+  reserveSessionSlot,
+  type SessionStore,
+  startSessionCleanupLoop,
+} from './http-utils.js';
+import { createMcpServer } from './mcp.js';
+import { logError, logInfo, logWarn } from './observability.js';
+import { isRecord } from './type-guards.js';
+
+// --- Shim Types ---
+
+interface ShimResponse extends ServerResponse {
+  status(code: number): this;
+  json(body: unknown): this;
+  send(body: string | Buffer): this;
+  sendStatus(code: number): this;
+}
+
+interface ShimRequest extends IncomingMessage {
+  query: Record<string, string | string[]>;
+  body?: unknown;
+  params: Record<string, string>;
+  auth?: AuthInfo;
+  ip?: string;
+}
+
+function shimResponse(res: ServerResponse): ShimResponse {
+  const shim = res as ShimResponse;
+  shim.status = function (code: number) {
+    this.statusCode = code;
+    return this;
+  };
+  shim.json = function (body: unknown) {
+    this.setHeader('Content-Type', 'application/json');
+    this.end(JSON.stringify(body));
+    return this;
+  };
+  shim.send = function (body: string | Buffer) {
+    this.end(body);
+    return this;
+  };
+  shim.sendStatus = function (code: number) {
+    this.statusCode = code;
+    this.end();
+    return this;
+  };
+  return shim;
+}
+
+// --- Body Parsing ---
+
+async function readJsonBody(
+  req: IncomingMessage,
+  limit = 1024 * 1024
+): Promise<unknown> {
+  const contentType = req.headers['content-type'];
+  if (!contentType?.includes('application/json')) return undefined;
+
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const chunks: Buffer[] = [];
+
+    req.on('data', (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > limit) {
+        req.destroy();
+        reject(new Error('Payload too large'));
+        return;
+      }
+      chunks.push(chunk);
+    });
+
+    req.on('end', () => {
+      try {
+        const body = Buffer.concat(chunks).toString();
+        if (!body) {
+          resolve(undefined);
+          return;
+        }
+        resolve(JSON.parse(body));
+      } catch (err) {
+        reject(err instanceof Error ? err : new Error(String(err)));
+      }
+    });
+
+    req.on('error', (err) => {
+      reject(err instanceof Error ? err : new Error(String(err)));
+    });
+  });
+}
+
+function parseQuery(url: URL): Record<string, string | string[]> {
+  const query: Record<string, string | string[]> = {};
+  for (const [key, value] of url.searchParams) {
+    const existing = query[key];
+    if (existing) {
+      if (Array.isArray(existing)) {
+        existing.push(value);
+      } else {
+        query[key] = [existing, value];
+      }
+    } else {
+      query[key] = value;
+    }
+  }
+  return query;
+}
+
+// --- CORS & Headers ---
+
+function handleCors(req: IncomingMessage, res: ServerResponse): boolean {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, DELETE');
+  res.setHeader(
+    'Access-Control-Allow-Headers',
+    'Content-Type, Authorization, MCP-Protocol-Version, X-MCP-Session-ID'
+  );
+
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204);
+    res.end();
+    return true;
+  }
+  return false;
+}
+
+function getHeaderValue(req: IncomingMessage, name: string): string | null {
+  const val = req.headers[name.toLowerCase()];
+  if (!val) return null;
+  if (Array.isArray(val)) return val[0] ?? null;
+  return val;
+}
+
+// --- Rate Limit Implementation (Inline) ---
+
+interface RateLimitEntry {
+  count: number;
+  resetTime: number;
+  lastAccessed: number;
+}
+
+interface RateLimitConfig {
+  maxRequests: number;
+  windowMs: number;
+  cleanupIntervalMs: number;
+  enabled: boolean;
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'AbortError';
+}
+
+interface RateLimitManagerImpl {
+  check(req: ShimRequest, res: ShimResponse): boolean;
+  stop(): void;
+}
+
+function createRateLimitManagerImpl(
+  options: RateLimitConfig
+): RateLimitManagerImpl {
+  const store = new Map<string, RateLimitEntry>();
+  const cleanup = new AbortController();
+
+  const interval = setIntervalPromise(options.cleanupIntervalMs, Date.now, {
+    signal: cleanup.signal,
+    ref: false,
+  });
+  void (async () => {
+    try {
+      for await (const getNow of interval) {
+        const now = getNow();
+        for (const [key, entry] of store.entries()) {
+          if (now - entry.lastAccessed > options.windowMs * 2) {
+            store.delete(key);
+          }
+        }
+      }
+    } catch (err) {
+      if (!isAbortError(err))
+        logWarn('Rate limit cleanup failed', { error: err });
+    }
+  })();
+
+  return {
+    check: (req: ShimRequest, res: ShimResponse): boolean => {
+      if (!options.enabled || req.method === 'OPTIONS') return true;
+      const key = req.ip ?? 'unknown';
+      const now = Date.now();
+      let entry = store.get(key);
+      if (!entry || now > entry.resetTime) {
+        entry = {
+          count: 1,
+          resetTime: now + options.windowMs,
+          lastAccessed: now,
+        };
+        store.set(key, entry);
+      } else {
+        entry.count++;
+        entry.lastAccessed = now;
+      }
+      if (entry.count > options.maxRequests) {
+        const retryAfter = Math.max(
+          1,
+          Math.ceil((entry.resetTime - now) / 1000)
+        );
+        res.setHeader('Retry-After', String(retryAfter));
+        res.status(429).json({ error: 'Rate limit exceeded', retryAfter });
+        return false;
+      }
+      return true;
+    },
+    stop: () => {
+      cleanup.abort();
+    },
+  };
+}
+
+// --- Auth ---
+
+const STATIC_TOKEN_TTL_SECONDS = 60 * 60 * 24;
+
+function buildStaticAuthInfo(token: string): AuthInfo {
+  return {
+    token,
+    clientId: 'static-token',
+    scopes: config.auth.requiredScopes,
+    expiresAt: Math.floor(Date.now() / 1000) + STATIC_TOKEN_TTL_SECONDS,
+    resource: config.auth.resourceUrl,
+  };
+}
+
+function verifyStaticToken(token: string): AuthInfo {
+  if (config.auth.staticTokens.length === 0) {
+    throw new InvalidTokenError('No static tokens configured');
+  }
+  const matched = config.auth.staticTokens.some((candidate) =>
+    timingSafeEqualUtf8(candidate, token)
+  );
+  if (!matched) throw new InvalidTokenError('Invalid token');
+  return buildStaticAuthInfo(token);
+}
+
+interface IntrospectionRequest {
+  body: string;
+  headers: Record<string, string>;
+}
+
+function stripHash(url: URL): string {
+  const clean = new URL(url);
+  clean.hash = '';
+  return clean.href;
+}
+
+function buildBasicAuthHeader(
+  clientId: string,
+  clientSecret: string | undefined
+): string {
+  const credentials = `${clientId}:${clientSecret ?? ''}`;
+  return `Basic ${Buffer.from(credentials).toString('base64')}`;
+}
+
+function buildIntrospectionRequest(
+  token: string,
+  resourceUrl: URL,
+  clientId: string | undefined,
+  clientSecret: string | undefined
+): IntrospectionRequest {
+  const body = new URLSearchParams({
+    token,
+    token_type_hint: 'access_token',
+    resource: stripHash(resourceUrl),
+  }).toString();
+  const headers: Record<string, string> = {
+    'content-type': 'application/x-www-form-urlencoded',
+  };
+  if (clientId)
+    headers.authorization = buildBasicAuthHeader(clientId, clientSecret);
+  return { body, headers };
+}
+
+async function requestIntrospection(
+  url: URL,
+  request: IntrospectionRequest,
+  timeoutMs: number
+): Promise<unknown> {
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: request.headers,
+    body: request.body,
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!response.ok) {
+    await response.body?.cancel();
+    throw new ServerError(`Token introspection failed: ${response.status}`);
+  }
+  return response.json();
+}
+
+function buildIntrospectionAuthInfo(
+  token: string,
+  payload: Record<string, unknown>
+): AuthInfo {
+  const expiresAt = typeof payload.exp === 'number' ? payload.exp : undefined;
+  const clientId =
+    typeof payload.client_id === 'string' ? payload.client_id : 'unknown';
+
+  const info: AuthInfo = {
+    token,
+    clientId,
+    scopes: typeof payload.scope === 'string' ? payload.scope.split(' ') : [],
+    resource: config.auth.resourceUrl,
+  };
+
+  if (expiresAt !== undefined) {
+    info.expiresAt = expiresAt;
+  }
+
+  return info;
+}
+
+async function verifyWithIntrospection(token: string): Promise<AuthInfo> {
+  if (!config.auth.introspectionUrl)
+    throw new ServerError('Introspection not configured');
+  const req = buildIntrospectionRequest(
+    token,
+    config.auth.resourceUrl,
+    config.auth.clientId,
+    config.auth.clientSecret
+  );
+  const payload = await requestIntrospection(
+    config.auth.introspectionUrl,
+    req,
+    config.auth.introspectionTimeoutMs
+  );
+  if (!isRecord(payload) || payload.active !== true)
+    throw new InvalidTokenError('Token is inactive');
+  return buildIntrospectionAuthInfo(token, payload);
+}
+
+async function authenticate(req: ShimRequest): Promise<AuthInfo> {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) throw new InvalidTokenError('Missing Authorization header');
+
+  const [type, token] = authHeader.split(' ');
+  if (type !== 'Bearer' || !token)
+    throw new InvalidTokenError('Invalid Authorization header format');
+
+  if (config.auth.mode === 'oauth') return verifyWithIntrospection(token);
+  return verifyStaticToken(token);
+}
+
+// --- MCP Routes ---
+
+function sendError(
+  res: ShimResponse,
+  code: number,
+  message: string,
+  status = 400,
+  id: JsonRpcId = null
+): void {
+  res.status(status).json({
+    jsonrpc: '2.0',
+    error: { code, message },
+    id,
+  });
+}
+
+function ensureMcpProtocolVersion(
+  req: ShimRequest,
+  res: ShimResponse
+): boolean {
+  const version = getHeaderValue(req, 'mcp-protocol-version');
+  if (!version) {
+    sendError(res, -32600, 'Missing MCP-Protocol-Version header');
+    return false;
+  }
+  if (version !== '2025-11-25') {
+    sendError(res, -32600, `Unsupported MCP-Protocol-Version: ${version}`);
+    return false;
+  }
+  return true;
+}
+
+async function createNewSession(
+  store: SessionStore,
+  mcpServer: McpServer,
+  res: ShimResponse,
+  requestId: JsonRpcId
+): Promise<StreamableHTTPServerTransport | null> {
+  const allowed = ensureSessionCapacity({
+    store,
+    maxSessions: config.server.maxSessions,
+    evictOldest: (s) => {
+      const evicted = s.evictOldest();
+      if (evicted) {
+        void evicted.transport.close().catch(() => {});
+        return true;
+      }
+      return false;
+    },
+  });
+
+  if (!allowed) {
+    sendError(res, -32000, 'Server busy', 503, requestId);
+    return null;
+  }
+
+  if (!reserveSessionSlot(store, config.server.maxSessions)) {
+    sendError(res, -32000, 'Server busy', 503, requestId);
+    return null;
+  }
+
+  const tracker = createSlotTracker();
+  const transportImpl = new StreamableHTTPServerTransport({
+    sessionIdGenerator: () => randomUUID(),
+  });
+
+  const initTimeout = setTimeout(() => {
+    if (!tracker.isInitialized()) {
+      tracker.releaseSlot();
+      void transportImpl.close().catch(() => {});
+    }
+  }, config.server.sessionInitTimeoutMs);
+
+  transportImpl.onclose = () => {
+    clearTimeout(initTimeout);
+    if (!tracker.isInitialized()) tracker.releaseSlot();
+  };
+
+  try {
+    await mcpServer.connect(transportImpl as unknown as Transport);
+  } catch (err) {
+    clearTimeout(initTimeout);
+    tracker.releaseSlot();
+    void transportImpl.close().catch(() => {});
+    throw err;
+  }
+
+  const newSessionId = transportImpl.sessionId;
+  if (!newSessionId) {
+    throw new ServerError('Failed to generate session ID');
+  }
+
+  tracker.markInitialized();
+  tracker.releaseSlot();
+  store.set(newSessionId, {
+    transport: transportImpl,
+    createdAt: Date.now(),
+    lastSeen: Date.now(),
+    protocolInitialized: false,
+  });
+
+  transportImpl.onclose = composeCloseHandlers(transportImpl.onclose, () => {
+    store.remove(newSessionId);
+  });
+
+  return transportImpl;
+}
+
+async function getOrCreateTransport(
+  req: ShimRequest,
+  res: ShimResponse,
+  store: SessionStore,
+  mcpServer: McpServer,
+  requestId: JsonRpcId
+): Promise<StreamableHTTPServerTransport | null> {
+  const sessionId = getHeaderValue(req, 'mcp-session-id');
+
+  if (sessionId) {
+    const session = store.get(sessionId);
+    if (!session) {
+      sendError(res, -32600, 'Session not found', 404, requestId);
+      return null;
+    }
+    store.touch(sessionId);
+    return session.transport;
+  }
+
+  if (!isInitializeRequest(req.body)) {
+    sendError(res, -32600, 'Missing session ID', 400, requestId);
+    return null;
+  }
+
+  return createNewSession(store, mcpServer, res, requestId);
+}
+
+async function handleMcpPost(
+  req: ShimRequest,
+  res: ShimResponse,
+  store: SessionStore,
+  mcpServer: McpServer
+): Promise<void> {
+  if (!ensureMcpProtocolVersion(req, res)) return;
+
+  const { body } = req;
+  if (isJsonRpcBatchRequest(body)) {
+    sendError(res, -32600, 'Batch requests not supported');
+    return;
+  }
+  if (!isMcpRequestBody(body)) {
+    sendError(res, -32600, 'Invalid request body');
+    return;
+  }
+
+  const requestId = body.id ?? null;
+  logInfo('[MCP POST]', {
+    method: body.method,
+    id: body.id,
+    sessionId: getHeaderValue(req, 'mcp-session-id'),
+  });
+
+  const transport = await getOrCreateTransport(
+    req,
+    res,
+    store,
+    mcpServer,
+    requestId
+  );
+  if (!transport) return;
+
+  await transport.handleRequest(req, res, body);
+}
+
+async function handleMcpGet(
+  req: ShimRequest,
+  res: ShimResponse,
+  store: SessionStore
+): Promise<void> {
+  if (!ensureMcpProtocolVersion(req, res)) return;
+
+  const sessionId = getHeaderValue(req, 'mcp-session-id');
+  if (!sessionId) {
+    sendError(res, -32600, 'Missing session ID');
+    return;
+  }
+
+  const session = store.get(sessionId);
+  if (!session) {
+    sendError(res, -32600, 'Session not found', 404);
+    return;
+  }
+
+  if (req.headers.accept !== 'text/event-stream') {
+    res.status(406).json({ error: 'Not Acceptable' });
+    return;
+  }
+
+  store.touch(sessionId);
+  await session.transport.handleRequest(req, res);
+}
+
+async function handleMcpDelete(
+  req: ShimRequest,
+  res: ShimResponse,
+  store: SessionStore
+): Promise<void> {
+  if (!ensureMcpProtocolVersion(req, res)) return;
+
+  const sessionId = getHeaderValue(req, 'mcp-session-id');
+  if (!sessionId) {
+    sendError(res, -32600, 'Missing session ID');
+    return;
+  }
+
+  const session = store.get(sessionId);
+  if (session) {
+    await session.transport.close();
+    store.remove(sessionId);
+  }
+
+  res.status(200).send('Session closed');
+}
+
+// --- Dispatch ---
+
+async function routeMcpRequest(
+  req: ShimRequest,
+  res: ShimResponse,
+  url: URL,
+  ctx: { store: SessionStore; mcpServer: McpServer }
+): Promise<boolean> {
+  const { pathname: path } = url;
+  const { method } = req;
+
+  if (path !== '/mcp') return false;
+
+  if (method === 'POST') {
+    await handleMcpPost(req, res, ctx.store, ctx.mcpServer);
+    return true;
+  }
+  if (method === 'GET') {
+    await handleMcpGet(req, res, ctx.store);
+    return true;
+  }
+  if (method === 'DELETE') {
+    await handleMcpDelete(req, res, ctx.store);
+    return true;
+  }
+
+  return false;
+}
+
+function checkDownloadRoute(
+  path: string
+): { namespace: string; hash: string } | null {
+  const downloadMatch = /^\/mcp\/downloads\/([^/]+)\/([^/]+)$/.exec(path);
+  if (downloadMatch) {
+    const namespace = downloadMatch[1];
+    const hash = downloadMatch[2];
+    if (namespace && hash) {
+      return { namespace, hash };
+    }
+  }
+  return null;
+}
+
+async function dispatchRequest(
+  req: ShimRequest,
+  res: ShimResponse,
+  url: URL,
+  ctx: { store: SessionStore; mcpServer: McpServer }
+): Promise<void> {
+  const { pathname: path } = url;
+  const { method } = req;
+
+  try {
+    if (method === 'GET' && path === '/health') {
+      res.status(200).json({ status: 'ok' });
+      return;
+    }
+
+    try {
+      const authInfo = await authenticate(req);
+      req.auth = authInfo;
+    } catch (err) {
+      res
+        .status(401)
+        .json({ error: err instanceof Error ? err.message : 'Unauthorized' });
+      return;
+    }
+
+    if (method === 'GET') {
+      const download = checkDownloadRoute(path);
+      if (download) {
+        handleDownload(res, download.namespace, download.hash);
+        return;
+      }
+    }
+
+    if (await routeMcpRequest(req, res, url, ctx)) return;
+
+    res.status(404).json({ error: 'Not Found' });
+  } catch (err) {
+    logError(
+      'Request failed',
+      err instanceof Error ? err : new Error(String(err))
+    );
+    if (!res.writableEnded) {
+      res.status(500).json({ error: 'Internal Server Error' });
+    }
+  }
+}
+
+// --- Main ---
+
+export async function startHttpServer(): Promise<{
+  shutdown: (signal: string) => Promise<void>;
+  port: number;
+  host: string;
+}> {
+  enableHttpMode();
+  const mcpServer = createMcpServer();
+  const rateLimiter = createRateLimitManagerImpl(config.rateLimit);
+  const sessionStore = createSessionStore(config.server.sessionTtlMs);
+  const sessionCleanup = startSessionCleanupLoop(
+    sessionStore,
+    config.server.sessionTtlMs
+  );
+
+  const server = createServer((req, res) => {
+    void handleRequest(req, res, rateLimiter, {
+      store: sessionStore,
+      mcpServer,
+    });
+  });
+
+  applyHttpServerTuning(server);
+
+  await new Promise<void>((resolve, reject) => {
+    server.listen(config.server.port, config.server.host, () => {
+      resolve();
+    });
+    server.on('error', reject);
+  });
+
+  const addr = server.address();
+  const port =
+    typeof addr === 'object' && addr ? addr.port : config.server.port;
+  logInfo(`HTTP server listening on port ${port}`);
+
+  return {
+    port,
+    host: config.server.host,
+    shutdown: async (signal) => {
+      logInfo(`Stopping HTTP server (${signal})...`);
+      rateLimiter.stop();
+      sessionCleanup.abort();
+      drainConnectionsOnShutdown(server);
+
+      const sessions = sessionStore.clear();
+      await Promise.all(
+        sessions.map(async (s) => {
+          try {
+            await s.transport.close();
+          } catch {
+            /* ignore */
+          }
+        })
+      );
+
+      server.close();
+      await mcpServer.close();
+    },
+  };
+}
+
+async function handleRequest(
+  rawReq: IncomingMessage,
+  rawRes: ServerResponse,
+  rateLimiter: RateLimitManagerImpl,
+  ctx: { store: SessionStore; mcpServer: McpServer }
+): Promise<void> {
+  const res = shimResponse(rawRes);
+  const req = rawReq as ShimRequest;
+
+  // 1. Basic Setup
+  const protocol = 'http';
+  const host = req.headers.host ?? 'localhost';
+  const url = new URL(req.url ?? '', `${protocol}://${host}`);
+
+  req.query = parseQuery(url);
+  if (req.socket.remoteAddress) {
+    req.ip = req.socket.remoteAddress;
+  }
+  req.params = {};
+
+  // 2. CORS
+  if (handleCors(req, res)) return;
+
+  // 3. Body Parsing
+  try {
+    req.body = await readJsonBody(req);
+  } catch {
+    res.status(400).json({ error: 'Invalid JSON or Payload too large' });
+    return;
+  }
+
+  // 4. Rate Limit
+  if (!rateLimiter.check(req, res)) return;
+
+  // 5. Routing
+  await dispatchRequest(req, res, url, ctx);
+}

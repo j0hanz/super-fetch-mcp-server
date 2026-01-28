@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import * as http from '../dist/http.js';
+import * as http from '../dist/http-utils.js';
 
 describe('http utilities', () => {
   describe('normalizeHost', () => {

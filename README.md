@@ -586,16 +586,16 @@ Rate limiting applies to `/mcp` and `/mcp/downloads` (100 req/min per IP, 60s wi
 
 ### Tech Stack
 
-| Category           | Technology                        |
-| ------------------ | --------------------------------- |
-| Runtime            | Node.js >=20.18.1                 |
-| Language           | TypeScript 5.9                    |
-| MCP SDK            | @modelcontextprotocol/sdk ^1.25.2 |
-| Content Extraction | @mozilla/readability ^0.6.0       |
-| HTML Parsing       | linkedom ^0.18.12                 |
-| Markdown           | node-html-markdown ^2.0.0         |
-| HTTP               | Express ^5.2.1, undici ^7.18.2    |
-| Validation         | Zod ^4.3.5                        |
+| Category           | Technology                          |
+| ------------------ | ----------------------------------- |
+| Runtime            | Node.js >=20.18.1                   |
+| Language           | TypeScript 5.9                      |
+| MCP SDK            | @modelcontextprotocol/sdk ^1.25.2   |
+| Content Extraction | @mozilla/readability ^0.6.0         |
+| HTML Parsing       | linkedom ^0.18.12                   |
+| Markdown           | node-html-markdown ^2.0.0           |
+| HTTP               | Node.js native http, undici ^7.18.2 |
+| Validation         | Zod ^4.3.5                          |
 
 ---
 

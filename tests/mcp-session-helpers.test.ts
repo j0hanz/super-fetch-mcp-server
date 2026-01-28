@@ -5,8 +5,8 @@ import {
   createSlotTracker,
   ensureSessionCapacity,
   reserveSessionSlot,
-} from '../dist/http.js';
-import type { SessionStore } from '../dist/http.js';
+} from '../dist/http-utils.js';
+import type { SessionStore } from '../dist/http-utils.js';
 
 function createStore(initialSize: number) {
   let currentSize = initialSize;
@@ -16,19 +16,6 @@ function createStore(initialSize: number) {
       currentSize = size;
     },
   };
-}
-
-function createStatusCapture() {
-  let statusCode: number | undefined;
-  const res = {
-    status: (code: number) => {
-      statusCode = code;
-      return res;
-    },
-    json: () => res,
-  };
-
-  return { res, getStatusCode: () => statusCode };
 }
 
 function testReservesAndReleasesSlots() {
@@ -49,27 +36,22 @@ function testTracksInitializationState() {
 
 function testRejectsWhenAtCapacityWithoutEviction() {
   const store = createStore(1);
-  const { res, getStatusCode } = createStatusCapture();
 
   const allowed = ensureSessionCapacity({
     store: store as SessionStore,
     maxSessions: 1,
-    res: res as never,
     evictOldest: () => false,
   });
 
   assert.equal(allowed, false);
-  assert.equal(getStatusCode(), 503);
 }
 
 function testAllowsWhenEvictionFreesCapacity() {
   const store = createStore(1);
-  const res = { status: () => res, json: () => res };
 
   const allowed = ensureSessionCapacity({
     store: store as SessionStore,
     maxSessions: 1,
-    res: res as never,
     evictOldest: () => {
       store.setSize(0);
       return true;
@@ -87,7 +69,7 @@ function registerMcpSessionHelpersTests() {
     it('tracks initialization state', () => {
       testTracksInitializationState();
     });
-    it('returns false and responds when at capacity without eviction', () => {
+    it('returns false when at capacity without eviction', () => {
       testRejectsWhenAtCapacityWithoutEviction();
     });
     it('allows when eviction frees capacity', () => {

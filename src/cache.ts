@@ -1,5 +1,5 @@
-import type { Express, Request, Response } from 'express';
-import stringify from 'fast-json-stable-stringify';
+import type { ServerResponse } from 'node:http';
+
 import { LRUCache } from 'lru-cache';
 
 import { ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -14,6 +14,7 @@ import {
 import { config } from './config.js';
 import { sha256Hex } from './crypto.js';
 import { getErrorMessage } from './errors.js';
+import { stableStringify as stableJsonStringify } from './json.js';
 import { logDebug, logWarn } from './observability.js';
 import { isRecord } from './type-guards.js';
 
@@ -81,7 +82,7 @@ const CACHE_HASH = {
 
 function stableStringify(value: unknown): string | null {
   try {
-    return stringify(value);
+    return stableJsonStringify(value);
   } catch {
     return null;
   }
@@ -576,13 +577,14 @@ interface DownloadPayload {
   fileName: string;
 }
 
-function isSingleParam(value: string | string[] | undefined): value is string {
+function isSingleParam(value: unknown): value is string {
   return typeof value === 'string';
 }
 
-function parseDownloadParams(req: Request): DownloadParams | null {
-  const { namespace, hash } = req.params;
-
+function parseDownloadParams(
+  namespace: unknown,
+  hash: unknown
+): DownloadParams | null {
   if (!isSingleParam(namespace) || !isSingleParam(hash)) return null;
   if (!namespace || !hash) return null;
   if (!isValidNamespace(namespace)) return null;
@@ -595,25 +597,34 @@ function buildCacheKeyFromParams(params: DownloadParams): string {
   return `${params.namespace}:${params.hash}`;
 }
 
-function respondBadRequest(res: Response, message: string): void {
-  res.status(400).json({
-    error: message,
-    code: 'BAD_REQUEST',
-  });
+function respondBadRequest(res: ServerResponse, message: string): void {
+  res.writeHead(400, { 'Content-Type': 'application/json' });
+  res.end(
+    JSON.stringify({
+      error: message,
+      code: 'BAD_REQUEST',
+    })
+  );
 }
 
-function respondNotFound(res: Response): void {
-  res.status(404).json({
-    error: 'Content not found or expired',
-    code: 'NOT_FOUND',
-  });
+function respondNotFound(res: ServerResponse): void {
+  res.writeHead(404, { 'Content-Type': 'application/json' });
+  res.end(
+    JSON.stringify({
+      error: 'Content not found or expired',
+      code: 'NOT_FOUND',
+    })
+  );
 }
 
-function respondServiceUnavailable(res: Response): void {
-  res.status(503).json({
-    error: 'Download service is disabled',
-    code: 'SERVICE_UNAVAILABLE',
-  });
+function respondServiceUnavailable(res: ServerResponse): void {
+  res.writeHead(503, { 'Content-Type': 'application/json' });
+  res.end(
+    JSON.stringify({
+      error: 'Download service is disabled',
+      code: 'SERVICE_UNAVAILABLE',
+    })
+  );
 }
 
 export function generateSafeFilename(
@@ -742,22 +753,29 @@ function buildContentDisposition(fileName: string): string {
   return `attachment; filename="${fileName}"; filename*=UTF-8''${encodedName}`;
 }
 
-function sendDownloadPayload(res: Response, payload: DownloadPayload): void {
+function sendDownloadPayload(
+  res: ServerResponse,
+  payload: DownloadPayload
+): void {
   const disposition = buildContentDisposition(payload.fileName);
   res.setHeader('Content-Type', payload.contentType);
   res.setHeader('Content-Disposition', disposition);
   res.setHeader('Cache-Control', `private, max-age=${config.cache.ttl}`);
   res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.send(payload.content);
+  res.end(payload.content);
 }
 
-function handleDownload(req: Request, res: Response): void {
+export function handleDownload(
+  res: ServerResponse,
+  namespace: string,
+  hash: string
+): void {
   if (!config.cache.enabled) {
     respondServiceUnavailable(res);
     return;
   }
 
-  const params = parseDownloadParams(req);
+  const params = parseDownloadParams(namespace, hash);
   if (!params) {
     respondBadRequest(res, 'Invalid namespace or hash format');
     return;
@@ -781,8 +799,4 @@ function handleDownload(req: Request, res: Response): void {
 
   logDebug('Serving download', { cacheKey, fileName: payload.fileName });
   sendDownloadPayload(res, payload);
-}
-
-export function registerDownloadRoutes(app: Express): void {
-  app.get('/mcp/downloads/:namespace/:hash', handleDownload);
 }

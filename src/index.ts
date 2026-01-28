@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { parseArgs } from 'node:util';
 
-import { startHttpServer } from './http.js';
+import { startHttpServer } from './http-native.js';
 import { startStdioServer } from './mcp.js';
 import { logError } from './observability.js';
 

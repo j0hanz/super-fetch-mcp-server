@@ -51,7 +51,7 @@ SuperFetch runs with no configuration by default. Just run with `--stdio`:
 
 ### HTTP Server Tuning (HTTP Mode, Advanced)
 
-These settings tune the underlying Node.js `http.Server` created by Express. All defaults are **no-op** unless you set the variables.
+These settings tune the underlying Node.js `http.Server`. All defaults are **no-op** unless you set the variables.
 
 > Caution: `SERVER_REQUEST_TIMEOUT_MS` can break long-lived Streamable HTTP / MCP sessions. Prefer `SERVER_HEADERS_TIMEOUT_MS` and `SERVER_KEEP_ALIVE_TIMEOUT_MS` unless you know you want a hard request deadline.
 
