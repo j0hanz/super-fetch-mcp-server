@@ -1,62 +1,63 @@
 # AGENTS.md
 
-> **Purpose:** Context and strict guidelines for AI agents working in this repository.
+> Purpose: High-signal context and strict guidelines for AI agents working in this repository.
 
-## 1. Project Context
+## 1) Project Context
 
-- **Domain:** MCP server that fetches web pages and transforms HTML into clean Markdown.
-- **Tech Stack:**
-  - **Language:** TypeScript 5.9.3 (Node.js >=20.18.1, ESM)
-  - **Framework:** MCP SDK v1.x with Express 5 (HTTP) + stdio transport
-  - **Key Libraries:** @modelcontextprotocol/sdk, zod, @mozilla/readability
-- **Architecture:** Pipeline-based (fetch → transform → cache) with stdio + streamable HTTP entrypoints.
+- **Domain:** Intelligent web content fetcher MCP server (HTML to Markdown conversion).
+- **Tech Stack (Verified):**
+  - **Languages:** TypeScript 5.9.x (`package.json`), Node.js >=20 (`engines` in `package.json`).
+  - **Frameworks:** Express 5.2.x, Model Context Protocol SDK 1.25.x.
+  - **Key Libraries:** `zod` (validation), `undici` (HTTP), `node-html-markdown` (transform), `linkedom` (DOM), `@mozilla/readability`.
+- **Architecture:** Single-package MCP server with worker threads for transformation.
 
-## 2. Repository Map (High-Level Only)
+## 2) Repository Map (High-Level)
 
-- [src](src): MCP server implementation (HTTP + stdio), fetch pipeline, transform, cache.
-- [tests](tests): Node test runner suites (import compiled dist outputs).
-- [scripts](scripts): Build/utility scripts (Node .mjs).
-- [.github/workflows](.github/workflows): Release and publish automation.
-- [docs](docs): Supplemental documentation.
-  > **Note:** Ignore dist, node_modules, .venv, and \_\_pycache\_\_.
+- `src/`: Application source code.
+- `src/workers/`: Worker threads (e.g., `transform-worker.ts`).
+- `tests/`: Test files (`*.test.ts`).
+- `scripts/`: Build and utility scripts.
+- `dist/`: Compiled JavaScript output (target for tests).
+  > Ignore generated/vendor dirs like `dist/`, `node_modules/`.
 
-## 3. Operational Commands
+## 3) Operational Commands (Verified)
 
-- **Environment:** Node.js >=20.18.1 (ESM; TypeScript NodeNext)
-- **Install:** `npm ci`
-- **Dev Server:** `npm run dev` (watch compile) or `npm run dev:run` (run compiled server)
-- **Test:** `npm test` (builds first, then runs node --test)
-- **Build:** `npm run build`
+- **Environment:** Node.js >=20.
+- **Install:** `npm install`
+- **Dev:** `npm run dev` (TSC watch) or `npm run dev:run` (Node watch `dist/`).
+- **Test:** `npm test` (Builds first, then runs `node --test`).
+- **Build:** `npm run build` (Clean + TSC + Assets + Make Executable).
+- **Lint/Format:** `npm run lint` (ESLint), `npm run format` (Prettier).
 
-## 4. Coding Standards (Style & Patterns)
+## 4) Coding Standards (Style & Patterns)
 
-- **Naming:** camelCase for vars/functions, PascalCase for types/classes, UPPER_CASE for constants.
-- **Structure:** Keep pipeline stages in dedicated modules; prefer small helpers and early returns.
-- **Typing:** Strict TypeScript; explicit return types on exported functions; no `any`.
-- **Preferred Patterns:**
-  - Use `.js` extensions for local imports (NodeNext ESM).
-  - Use Zod `z.strictObject(...)` for tool schemas and validate before side effects.
-  - Tool responses include both `structuredContent` and a JSON string in `content`.
+- **Naming:** `kebab-case` for file names (verified in `src/` and `tests/`).
+- **Structure:** Core logic in `src/` root; specialized tasks in subdirectories (`workers/`).
+- **Typing/Strictness:** TypeScript strict mode enabled (`"strict": true` in `tsconfig.json`).
+- **Patterns Observed:**
+  - Imports use `NodeNext` resolution (e.g., `import ... from './file.js'`).
+  - Worker threads used for heavy transformation tasks (`src/workers/transform-worker.ts`).
 
-## 5. Agent Behavioral Rules (The "Do Nots")
+## 5) Agent Behavioral Rules (Do Nots)
 
-- **Prohibited:** Do not use default exports.
-- **Prohibited:** Do not import from `zod/v3`; use `zod` (v4).
-- **Prohibited:** Do not write non-MCP output to stdout in stdio mode.
-- **Prohibited:** Do not edit lockfiles manually.
-- **Handling Secrets:** Never output `.env` values or hardcode secrets.
-- **File Creation:** Always verify folder existence before creating files.
+- Do not introduce new dependencies without updating `package.json`.
+- Do not edit `package-lock.json` manually.
+- Do not bypass the build step when running tests; tests run against `dist/` artifacts.
+- Do not commit secrets.
 
-## 6. Testing Strategy
+## 6) Testing Strategy (Verified)
 
-- **Framework:** Node.js built-in test runner (`node:test`).
-- **Approach:** Tests typically import compiled outputs from dist; prefer focused tests for the touched area.
+- **Framework:** Node.js native test runner (`node --test`).
+- **Where tests live:** `tests/*.test.ts`.
+- **Approach:**
+  - Tests import compiled code from `../dist/` (verified in `tests/mcp-server.test.ts`).
+  - Requires `npm run build` before running tests (handled by `npm test`).
 
-## 7. Evolution & Maintenance
+## 7) Common Pitfalls (Verified)
 
-- **Update Rule:** If a convention changes or a new pattern is established, the agent MUST suggest an update to this file in the PR.
-- **Feedback Loop:** If a build command fails twice, the correct fix MUST be recorded in the "Common Pitfalls" section.
+- **Test Failures due to Stale Build:** Tests run against `dist/`. If you modify `src/` and run `node --test tests/some.test.ts` directly without building, you will test old code. ALWAYS use `npm test` or build first.
 
-### Common Pitfalls
+## 8) Evolution Rules
 
-- (none yet)
+- If conventions change, include an `AGENTS.md` update in the same PR.
+- If a command is corrected after failures, record the final verified command here.
