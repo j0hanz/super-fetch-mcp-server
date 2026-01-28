@@ -190,7 +190,7 @@ export function createSessionStore(sessionTtlMs: number): SessionStore {
     },
     size: () => sessions.size,
     clear: () => {
-      const entries = Array.from(sessions.values());
+      const entries = [...sessions.values()];
       sessions.clear();
       return entries;
     },

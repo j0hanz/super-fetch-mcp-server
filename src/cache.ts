@@ -233,7 +233,7 @@ export function set(
 }
 
 export function keys(): readonly string[] {
-  return Array.from(contentCache.keys());
+  return [...contentCache.keys()];
 }
 
 export function isEnabled(): boolean {

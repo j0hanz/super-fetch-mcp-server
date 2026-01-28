@@ -205,19 +205,64 @@ function extractMetadata(document: Document): ExtractedMetadata {
 
   // Property-based handlers (og:*, article:*)
   const propertyHandlers = new Map<string, (content: string) => void>([
-    ['og:title', (c) => { title.og = c; }],
-    ['og:description', (c) => { description.og = c; }],
-    ['og:image', (c) => { image = c; }],
-    ['article:published_time', (c) => { publishedAt = c; }],
-    ['article:modified_time', (c) => { modifiedAt = c; }],
+    [
+      'og:title',
+      (c) => {
+        title.og = c;
+      },
+    ],
+    [
+      'og:description',
+      (c) => {
+        description.og = c;
+      },
+    ],
+    [
+      'og:image',
+      (c) => {
+        image = c;
+      },
+    ],
+    [
+      'article:published_time',
+      (c) => {
+        publishedAt = c;
+      },
+    ],
+    [
+      'article:modified_time',
+      (c) => {
+        modifiedAt = c;
+      },
+    ],
   ]);
 
   // Name-based handlers (twitter:*, standard meta)
   const nameHandlers = new Map<string, (content: string) => void>([
-    ['twitter:title', (c) => { title.twitter = c; }],
-    ['twitter:description', (c) => { description.twitter = c; }],
-    ['description', (c) => { description.standard = c; }],
-    ['author', (c) => { author = c; }],
+    [
+      'twitter:title',
+      (c) => {
+        title.twitter = c;
+      },
+    ],
+    [
+      'twitter:description',
+      (c) => {
+        description.twitter = c;
+      },
+    ],
+    [
+      'description',
+      (c) => {
+        description.standard = c;
+      },
+    ],
+    [
+      'author',
+      (c) => {
+        author = c;
+      },
+    ],
   ]);
 
   for (const tag of document.querySelectorAll('meta')) {
@@ -1176,9 +1221,11 @@ const MAX_TRUNCATED_LINE_RATIO = 0.5;
  * are considered potentially truncated.
  */
 function hasTruncatedSentences(text: string): boolean {
-  const lines = text.split('\n').filter(
-    (line) => line.trim().length > MIN_LINE_LENGTH_FOR_TRUNCATION_CHECK
-  );
+  const lines = text
+    .split('\n')
+    .filter(
+      (line) => line.trim().length > MIN_LINE_LENGTH_FOR_TRUNCATION_CHECK
+    );
   if (lines.length < 3) return false;
 
   const incompleteLines = lines.filter((line) => {

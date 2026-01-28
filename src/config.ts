@@ -244,7 +244,7 @@ function collectStaticTokens(): string[] {
   if (process.env.API_KEY) {
     staticTokens.add(process.env.API_KEY);
   }
-  return Array.from(staticTokens);
+  return [...staticTokens];
 }
 
 function buildAuthConfig(baseUrl: URL): AuthConfig {

@@ -1,14 +1,27 @@
-/**
- * Deterministic JSON stringify for cache keys.
- * Sorts object keys to ensure {a:1, b:2} and {b:2, a:1} produce the same string.
- */
-export function stableStringify(obj: unknown): string {
+const MAX_DEPTH = 20;
+
+function processValue(
+  obj: unknown,
+  depth: number,
+  seen: WeakSet<object>
+): unknown {
   if (typeof obj !== 'object' || obj === null) {
-    return JSON.stringify(obj);
+    return obj;
   }
 
+  // Depth guard
+  if (depth > MAX_DEPTH) {
+    throw new Error(`stableStringify: Max depth (${MAX_DEPTH}) exceeded`);
+  }
+
+  // Cycle detection
+  if (seen.has(obj)) {
+    throw new Error('stableStringify: Circular reference detected');
+  }
+  seen.add(obj);
+
   if (Array.isArray(obj)) {
-    return JSON.stringify(obj.map(stableStringify));
+    return obj.map((item) => processValue(item, depth + 1, seen));
   }
 
   const keys = Object.keys(obj).sort((a, b) => a.localeCompare(b));
@@ -16,8 +29,17 @@ export function stableStringify(obj: unknown): string {
   const sortedObj: Record<string, unknown> = {};
 
   for (const key of keys) {
-    sortedObj[key] = record[key];
+    sortedObj[key] = processValue(record[key], depth + 1, seen);
   }
 
-  return JSON.stringify(sortedObj);
+  return sortedObj;
+}
+
+export function stableStringify(
+  obj: unknown,
+  depth = 0,
+  seen = new WeakSet()
+): string {
+  const processed = processValue(obj, depth, seen);
+  return JSON.stringify(processed);
 }
