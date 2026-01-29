@@ -173,6 +173,17 @@ function getPromoTokens(): Set<string> {
   return tokens;
 }
 
+let promoRegexCache: RegExp | null = null;
+
+function getPromoRegex(): RegExp {
+  if (promoRegexCache) return promoRegexCache;
+  const tokens = Array.from(getPromoTokens());
+  const escaped = tokens.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  const pattern = `(?:^|[^a-z0-9])(?:${escaped.join('|')})(?:$|[^a-z0-9])`;
+  promoRegexCache = new RegExp(pattern, 'i');
+  return promoRegexCache;
+}
+
 const HEADER_NOISE_PATTERN =
   /\b(site-header|masthead|topbar|navbar|nav(?:bar)?|menu|header-nav)\b/i;
 const FIXED_PATTERN = /\b(fixed|sticky)\b/;
@@ -291,19 +302,9 @@ function hasNoiseRole(role: string | null): boolean {
   return role !== null && NAVIGATION_ROLES.has(role);
 }
 
-function tokenizeIdentifierLikeText(value: string): string[] {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim()
-    .split(' ')
-    .filter(Boolean);
-}
-
 function matchesPromoIdOrClass(className: string, id: string): boolean {
-  const tokens = tokenizeIdentifierLikeText(`${className} ${id}`);
-  const promoTokens = getPromoTokens();
-  return tokens.some((token) => promoTokens.has(token));
+  const regex = getPromoRegex();
+  return regex.test(className) || regex.test(id);
 }
 
 function matchesFixedOrHighZIsolate(className: string): boolean {
@@ -364,22 +365,28 @@ function isNoiseElement(node: HTMLElement): boolean {
 
 function isNodeListLike(
   value: unknown
-): value is { length: number; item?: (index: number) => Element | null } {
+): value is
+  | ArrayLike<Element>
+  | { length: number; item: (index: number) => Element | null } {
   return isObject(value) && typeof value.length === 'number';
 }
 
 function tryGetNodeListItem(
-  nodes: { length: number; item?: (index: number) => Element | null },
+  nodes:
+    | ArrayLike<Element>
+    | { length: number; item: (index: number) => Element | null },
   index: number
 ): Element | null {
-  if (typeof nodes.item === 'function') return nodes.item(index);
-  return (
-    (nodes as unknown as Record<number, Element | undefined>)[index] ?? null
-  );
+  if ('item' in nodes && typeof nodes.item === 'function') {
+    return nodes.item(index);
+  }
+  return (nodes as ArrayLike<Element>)[index] ?? null;
 }
 
 function removeNoiseFromNodeListLike(
-  nodes: { length: number; item?: (index: number) => Element | null },
+  nodes:
+    | ArrayLike<Element>
+    | { length: number; item: (index: number) => Element | null },
   shouldCheckNoise: boolean
 ): void {
   for (let index = nodes.length - 1; index >= 0; index -= 1) {

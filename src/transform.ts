@@ -22,10 +22,7 @@ import {
   detectLanguageFromCode,
   resolveLanguageFromAttributes,
 } from './language-detection.js';
-import {
-  cleanupMarkdownArtifacts,
-  promoteOrphanHeadings,
-} from './markdown-cleanup.js';
+import { cleanupMarkdownArtifacts } from './markdown-cleanup.js';
 import {
   getOperationId,
   getRequestId,
@@ -752,8 +749,7 @@ function translateHtmlToMarkdown(
 
   throwIfAborted(signal, url, 'markdown:translated');
 
-  const cleaned = cleanupMarkdownArtifacts(content);
-  return promoteOrphanHeadings(cleaned);
+  return cleanupMarkdownArtifacts(content);
 }
 
 function appendMetadataFooter(

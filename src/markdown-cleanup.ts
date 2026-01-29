@@ -100,19 +100,6 @@ function splitByFences(
   return segments;
 }
 
-/**
- * Apply a transformation function only to non-fenced content.
- */
-function mapOutsideFences(
-  content: string,
-  transform: (outside: string) => string
-): string {
-  const segments = splitByFences(content);
-  return segments
-    .map((seg) => (seg.inFence ? seg.content : transform(seg.content)))
-    .join('\n');
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Cleanup rules (OUTSIDE fences only)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -226,18 +213,32 @@ const CLEANUP_STEPS: readonly ((text: string) => string)[] = [
 // Public API
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Clean up common markdown artifacts and formatting issues.
- * IMPORTANT: All rules are applied ONLY outside fenced code blocks.
- */
+function getLastLine(text: string): string {
+  const index = text.lastIndexOf('\n');
+  return index === -1 ? text : text.slice(index + 1);
+}
+
 export function cleanupMarkdownArtifacts(content: string): string {
   if (!content) return '';
 
-  const cleaned = mapOutsideFences(content, (outside) => {
-    return CLEANUP_STEPS.reduce((text, step) => step(text), outside);
-  });
-
-  return cleaned.trim();
+  const segments = splitByFences(content);
+  return segments
+    .map((seg, index) => {
+      if (seg.inFence) return seg.content;
+      const prevSeg = segments[index - 1];
+      const prevLineContext = prevSeg ? getLastLine(prevSeg.content) : '';
+      const lines = seg.content.split('\n');
+      const promotedLines: string[] = [];
+      for (let i = 0; i < lines.length; i += 1) {
+        const line = lines[i] ?? '';
+        const prevLine = i > 0 ? (lines[i - 1] ?? '') : prevLineContext;
+        promotedLines.push(processNonFencedLine(line, prevLine));
+      }
+      const promoted = promotedLines.join('\n');
+      return CLEANUP_STEPS.reduce((text, step) => step(text), promoted);
+    })
+    .join('\n')
+    .trim();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

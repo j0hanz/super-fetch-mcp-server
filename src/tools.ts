@@ -3,7 +3,10 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
+import type {
+  CallToolResult,
+  ToolAnnotations,
+} from '@modelcontextprotocol/sdk/types.js';
 
 import * as cache from './cache.js';
 import { config } from './config.js';
@@ -59,7 +62,6 @@ export type ToolContentBlockUnion =
   | ToolContentResourceBlock;
 
 export interface ToolErrorResponse {
-  [x: string]: unknown;
   content: ToolContentBlockUnion[];
   structuredContent: {
     error: string;
@@ -69,7 +71,6 @@ export interface ToolErrorResponse {
 }
 
 export interface ToolResponseBase {
-  [x: string]: unknown;
   content: ToolContentBlockUnion[];
   structuredContent?: Record<string, unknown>;
   isError?: boolean;
@@ -864,6 +865,11 @@ export function registerTools(server: McpServer): void {
       outputSchema: TOOL_DEFINITION.outputSchema,
       annotations: TOOL_DEFINITION.annotations,
     },
-    withRequestContextIfMissing(TOOL_DEFINITION.handler)
+    withRequestContextIfMissing(
+      TOOL_DEFINITION.handler as unknown as (
+        params: FetchUrlInput,
+        extra?: ToolHandlerExtra
+      ) => Promise<CallToolResult>
+    )
   );
 }
