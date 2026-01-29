@@ -1722,7 +1722,10 @@ interface TransformWorkerPool {
 let pool: WorkerPool | null = null;
 
 function resolveDefaultWorkerCount(): number {
-  const parallelism = os.availableParallelism();
+  const parallelism =
+    typeof os.availableParallelism === 'function'
+      ? os.availableParallelism()
+      : 1;
   return Math.min(16, Math.max(1, parallelism - 1));
 }
 
@@ -1887,7 +1890,7 @@ class WorkerPool implements TransformWorkerPool {
     const safeSize = Math.max(1, size);
     this.capacity = safeSize;
     this.timeoutMs = timeoutMs;
-    this.queueMax = safeSize * 4;
+    this.queueMax = safeSize * 32;
   }
 
   private spawnWorker(workerIndex: number): WorkerSlot {
@@ -2039,6 +2042,7 @@ class WorkerPool implements TransformWorkerPool {
   }
 
   private drainQueue(): void {
+    if (this.closed) return;
     if (this.queue.length === 0) return;
 
     // First pass: try to find an idle existing worker
@@ -2054,12 +2058,16 @@ class WorkerPool implements TransformWorkerPool {
       }
     }
 
-    // Second pass: spawn new workers if we have capacity
-    while (this.workers.length < this.capacity && this.queue.length > 0) {
+    if (this.workers.length < this.capacity && this.queue.length > 0) {
       const workerIndex = this.workers.length;
       const slot = this.spawnWorker(workerIndex);
       this.workers.push(slot);
       this.dispatchQueueTask(workerIndex, slot);
+      if (this.workers.length < this.capacity && this.queue.length > 0) {
+        setImmediate(() => {
+          this.drainQueue();
+        });
+      }
     }
   }
 
@@ -2175,6 +2183,7 @@ class WorkerPool implements TransformWorkerPool {
     const terminations = this.workers
       .map((slot) => slot?.worker.terminate())
       .filter((p): p is Promise<number> => p !== undefined);
+    this.workers.fill(undefined);
     this.workers.length = 0;
 
     for (const [id, inflight] of this.inflight.entries()) {
