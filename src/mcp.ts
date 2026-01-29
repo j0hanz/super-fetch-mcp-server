@@ -51,13 +51,13 @@ function createServerCapabilities(): {
 
 function createServerInstructions(serverVersion: string): string {
   try {
-    const raw = readFileSync(new URL('./instructions.md', import.meta.url), {
-      encoding: 'utf8',
-    });
-    const resolved = raw.replaceAll('{{SERVER_VERSION}}', serverVersion);
-    return resolved.trim();
+    const raw = readFileSync(
+      new URL('./instructions.md', import.meta.url),
+      'utf8'
+    );
+    return raw.replaceAll('{{SERVER_VERSION}}', serverVersion).trim();
   } catch {
-    return `superFetch MCP server |${serverVersion}| A high-performance web content fetching and processing server.`;
+    return `Instructions unavailable | ${serverVersion}`;
   }
 }
 
@@ -69,8 +69,8 @@ function registerInstructionsResource(
     'instructions',
     new ResourceTemplate('internal://instructions', { list: undefined }),
     {
-      title: 'Server Instructions',
-      description: 'Usage guidance for the superFetch MCP server.',
+      title: `SuperFetch MCP | ${config.server.version}`,
+      description: 'Guidance for using the superFetch MCP server.',
       mimeType: 'text/markdown',
     },
     (uri) => ({
