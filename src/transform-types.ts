@@ -85,6 +85,8 @@ export interface TransformStageContext {
   readonly stage: string;
   readonly startTime: number;
   readonly url: string;
+  readonly budgetMs?: number;
+  readonly totalBudgetMs?: number;
 }
 
 /**

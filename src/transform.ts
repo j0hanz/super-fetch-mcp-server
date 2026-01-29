@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
 import diagnosticsChannel from 'node:diagnostics_channel';
-import os from 'node:os';
 import { performance } from 'node:perf_hooks';
 import { Worker } from 'node:worker_threads';
 
@@ -86,33 +85,67 @@ function publishTransformEvent(event: TransformStageEvent): void {
   }
 }
 
+export interface StageBudget {
+  totalBudgetMs: number;
+  elapsedMs: number;
+}
+
 export function startTransformStage(
   url: string,
-  stage: string
+  stage: string,
+  budget?: StageBudget
 ): TransformStageContext | null {
-  if (!transformChannel.hasSubscribers) return null;
+  if (!transformChannel.hasSubscribers && !budget) return null;
 
-  return {
+  const remainingBudgetMs = budget
+    ? budget.totalBudgetMs - budget.elapsedMs
+    : undefined;
+
+  const base = {
     stage,
     startTime: performance.now(),
     url: redactUrl(url),
   };
+
+  if (remainingBudgetMs !== undefined && budget) {
+    return {
+      ...base,
+      budgetMs: remainingBudgetMs,
+      totalBudgetMs: budget.totalBudgetMs,
+    };
+  }
+
+  return base;
 }
 
 export function endTransformStage(
   context: TransformStageContext | null,
   options?: { truncated?: boolean }
-): void {
-  if (!context) return;
+): number {
+  if (!context) return 0;
 
+  const durationMs = performance.now() - context.startTime;
   const requestId = getRequestId();
   const operationId = getOperationId();
+
+  if (context.totalBudgetMs !== undefined) {
+    const warnThresholdMs =
+      context.totalBudgetMs * config.transform.stageWarnRatio;
+    if (durationMs > warnThresholdMs) {
+      logWarn('Transform stage exceeded warning threshold', {
+        stage: context.stage,
+        durationMs: Math.round(durationMs),
+        thresholdMs: Math.round(warnThresholdMs),
+        url: context.url,
+      });
+    }
+  }
 
   const event: TransformStageEvent = {
     v: 1,
     type: 'stage',
     stage: context.stage,
-    durationMs: performance.now() - context.startTime,
+    durationMs,
     url: context.url,
     ...(requestId ? { requestId } : {}),
     ...(operationId ? { operationId } : {}),
@@ -122,10 +155,25 @@ export function endTransformStage(
   };
 
   publishTransformEvent(event);
+  return durationMs;
 }
 
-function runTransformStage<T>(url: string, stage: string, fn: () => T): T {
-  const context = startTransformStage(url, stage);
+function runTransformStage<T>(
+  url: string,
+  stage: string,
+  fn: () => T,
+  budget?: StageBudget
+): T {
+  if (budget && budget.elapsedMs >= budget.totalBudgetMs) {
+    throw new FetchError('Transform budget exhausted', url, 504, {
+      reason: 'timeout',
+      stage: `${stage}:budget_exhausted`,
+      elapsedMs: budget.elapsedMs,
+      totalBudgetMs: budget.totalBudgetMs,
+    });
+  }
+
+  const context = startTransformStage(url, stage, budget);
   try {
     return fn();
   } finally {
@@ -1430,12 +1478,12 @@ interface TransformWorkerPool {
 
 let pool: WorkerPool | null = null;
 
+const POOL_MIN_WORKERS = 2;
+const POOL_MAX_WORKERS = 4;
+const POOL_SCALE_THRESHOLD = 0.5;
+
 function resolveDefaultWorkerCount(): number {
-  const parallelism =
-    typeof os.availableParallelism === 'function'
-      ? os.availableParallelism()
-      : 1;
-  return Math.min(16, Math.max(1, parallelism - 1));
+  return POOL_MIN_WORKERS;
 }
 
 const DEFAULT_TIMEOUT_MS = config.transform.timeoutMs;
@@ -1451,9 +1499,26 @@ export async function shutdownTransformWorkerPool(): Promise<void> {
   pool = null;
 }
 
+export interface TransformPoolStats {
+  queueDepth: number;
+  activeWorkers: number;
+  capacity: number;
+}
+
+export function getTransformPoolStats(): TransformPoolStats | null {
+  if (!pool) return null;
+  return {
+    queueDepth: pool.getQueueDepth(),
+    activeWorkers: pool.getActiveWorkers(),
+    capacity: pool.getCapacity(),
+  };
+}
+
 class WorkerPool implements TransformWorkerPool {
   private readonly workers: (WorkerSlot | undefined)[] = [];
-  private readonly capacity: number;
+  private capacity: number;
+  private readonly minCapacity: number;
+  private readonly maxCapacity: number;
   private readonly queue: PendingTask[] = [];
   private readonly inflight = new Map<string, InflightTask>();
   private readonly timeoutMs: number;
@@ -1596,10 +1661,14 @@ class WorkerPool implements TransformWorkerPool {
   }
 
   constructor(size: number, timeoutMs: number) {
-    const safeSize = Math.max(1, size);
-    this.capacity = safeSize;
+    this.minCapacity = POOL_MIN_WORKERS;
+    this.maxCapacity = POOL_MAX_WORKERS;
+    this.capacity = Math.max(
+      this.minCapacity,
+      Math.min(size, this.maxCapacity)
+    );
     this.timeoutMs = timeoutMs;
-    this.queueMax = safeSize * 32;
+    this.queueMax = this.maxCapacity * 32;
   }
 
   private spawnWorker(workerIndex: number): WorkerSlot {
@@ -1750,9 +1819,21 @@ class WorkerPool implements TransformWorkerPool {
     });
   }
 
+  /** Scale capacity up if queue pressure exceeds threshold. */
+  private maybeScaleUp(): void {
+    if (
+      this.queue.length > this.capacity * POOL_SCALE_THRESHOLD &&
+      this.capacity < this.maxCapacity
+    ) {
+      this.capacity += 1;
+    }
+  }
+
   private drainQueue(): void {
     if (this.closed) return;
     if (this.queue.length === 0) return;
+
+    this.maybeScaleUp();
 
     // First pass: try to find an idle existing worker
     for (
@@ -1883,6 +1964,18 @@ class WorkerPool implements TransformWorkerPool {
     task.reject(message);
 
     this.restartWorker(workerIndex, slot);
+  }
+
+  getQueueDepth(): number {
+    return this.queue.length;
+  }
+
+  getActiveWorkers(): number {
+    return this.workers.filter((s) => s?.busy).length;
+  }
+
+  getCapacity(): number {
+    return this.capacity;
   }
 
   async close(): Promise<void> {

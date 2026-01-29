@@ -17,8 +17,8 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 
-import { handleDownload } from './cache.js';
-import { config, enableHttpMode } from './config.js';
+import { keys as cacheKeys, handleDownload } from './cache.js';
+import { config, enableHttpMode, serverVersion } from './config.js';
 import { timingSafeEqualUtf8 } from './crypto.js';
 import { normalizeHost } from './host-normalization.js';
 import {
@@ -42,6 +42,7 @@ import {
   type SessionStore,
   startSessionCleanupLoop,
 } from './session.js';
+import { getTransformPoolStats } from './transform.js';
 import { isObject } from './type-guards.js';
 
 function createTransportAdapter(
@@ -831,7 +832,22 @@ async function dispatchRequest(
 
   try {
     if (method === 'GET' && path === '/health') {
-      res.status(200).json({ status: 'ok' });
+      const poolStats = getTransformPoolStats();
+      res.status(200).json({
+        status: 'ok',
+        version: serverVersion,
+        uptime: Math.floor(process.uptime()),
+        timestamp: new Date().toISOString(),
+        stats: {
+          activeSessions: ctx.store.size(),
+          cacheKeys: cacheKeys().length,
+          workerPool: poolStats ?? {
+            queueDepth: 0,
+            activeWorkers: 0,
+            capacity: 0,
+          },
+        },
+      });
       return;
     }
 

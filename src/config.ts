@@ -1,5 +1,7 @@
 import packageJson from '../package.json' with { type: 'json' };
 
+export const serverVersion: string = packageJson.version;
+
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
 export type TransformMetadataFormat = 'markdown' | 'frontmatter';
@@ -326,6 +328,7 @@ export const config = {
   },
   transform: {
     timeoutMs: TIMEOUT.DEFAULT_TRANSFORM_TIMEOUT_MS,
+    stageWarnRatio: parseFloat(process.env.TRANSFORM_STAGE_WARN_RATIO ?? '0.5'),
     metadataFormat: parseTransformMetadataFormat(
       process.env.TRANSFORM_METADATA_FORMAT
     ),
