@@ -44,33 +44,6 @@ import type {
 } from './transform-types.js';
 import { isObject } from './type-guards.js';
 
-// Re-export language detection for backward compatibility
-export {
-  detectLanguageFromCode,
-  resolveLanguageFromAttributes,
-} from './language-detection.js';
-
-// Re-export markdown cleanup for backward compatibility
-export {
-  cleanupMarkdownArtifacts,
-  promoteOrphanHeadings,
-} from './markdown-cleanup.js';
-
-// Re-export DOM noise removal for backward compatibility
-export { removeNoiseFromHtml } from './dom-noise-removal.js';
-
-// Re-export types for backward compatibility
-export type {
-  MetadataBlock,
-  ExtractedArticle,
-  ExtractedMetadata,
-  ExtractionResult,
-  MarkdownTransformResult,
-  TransformOptions,
-  TransformStageEvent,
-  TransformStageContext,
-} from './transform-types.js';
-
 interface ExtractionContext extends ExtractionResult {
   document: Document;
   truncated?: boolean;
@@ -149,7 +122,6 @@ function runTransformStage<T>(url: string, stage: string, fn: () => T): T {
   try {
     return fn();
   } finally {
-    // Emit duration even if the stage throws; callers decide how to handle the error.
     endTransformStage(context);
   }
 }
@@ -503,24 +475,20 @@ function applyBaseUri(document: Document, url: string): void {
   }
 }
 
-// DOM noise removal functions moved to ./dom-noise-removal.ts
-
 function buildInlineCode(content: string): string {
-  const runs = content.match(/`+/g);
-  let longest = '';
-  if (runs) {
-    for (const run of runs) {
-      if (run.length > longest.length) {
-        longest = run;
-      }
+  let maxBackticks = 0;
+  let currentRun = 0;
+  for (const char of content) {
+    if (char === '`') {
+      currentRun++;
+    } else {
+      if (currentRun > maxBackticks) maxBackticks = currentRun;
+      currentRun = 0;
     }
   }
+  if (currentRun > maxBackticks) maxBackticks = currentRun;
 
-  // Use a fence longer than any run of backticks in the content.
-  const delimiter = `\`${longest}`;
-
-  // Only pad when needed to avoid altering code spans unnecessarily.
-  // CommonMark recommends padding when the code starts/ends with a backtick.
+  const delimiter = '`'.repeat(maxBackticks + 1);
   const padding = content.startsWith('`') || content.endsWith('`') ? ' ' : '';
 
   return `${delimiter}${padding}${content}${padding}${delimiter}`;

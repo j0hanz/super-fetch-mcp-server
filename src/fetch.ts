@@ -408,10 +408,10 @@ export function isRawTextContentUrl(url: string): boolean {
 }
 
 function hasKnownRawTextExtension(urlBaseLower: string): boolean {
-  for (const ext of RAW_TEXT_EXTENSIONS) {
-    if (urlBaseLower.endsWith(ext)) return true;
-  }
-  return false;
+  const lastDot = urlBaseLower.lastIndexOf('.');
+  if (lastDot === -1) return false;
+  const ext = urlBaseLower.slice(lastDot);
+  return RAW_TEXT_EXTENSIONS.has(ext);
 }
 
 const DNS_LOOKUP_TIMEOUT_MS = 5000;
@@ -426,41 +426,6 @@ function normalizeLookupResults(
   }
 
   return [{ address: addresses, family: family ?? 4 }];
-}
-
-function findBlockedIpError(
-  list: dns.LookupAddress[],
-  hostname: string
-): NodeJS.ErrnoException | null {
-  for (const addr of list) {
-    const ip = typeof addr === 'string' ? addr : addr.address;
-    if (!isBlockedIp(ip)) {
-      continue;
-    }
-
-    return createErrorWithCode(
-      `Blocked IP detected for ${hostname}`,
-      'EBLOCKED'
-    );
-  }
-
-  return null;
-}
-
-function findInvalidFamilyError(
-  list: dns.LookupAddress[],
-  hostname: string
-): NodeJS.ErrnoException | null {
-  for (const addr of list) {
-    const family = typeof addr === 'string' ? 0 : addr.family;
-    if (family === 4 || family === 6) continue;
-    return createErrorWithCode(
-      `Invalid address family returned for ${hostname}`,
-      'EINVAL'
-    );
-  }
-
-  return null;
 }
 
 function createNoDnsResultsError(hostname: string): NodeJS.ErrnoException {
@@ -511,9 +476,23 @@ function findLookupError(
   list: dns.LookupAddress[],
   hostname: string
 ): NodeJS.ErrnoException | null {
-  return (
-    findInvalidFamilyError(list, hostname) ?? findBlockedIpError(list, hostname)
-  );
+  for (const addr of list) {
+    const family = typeof addr === 'string' ? 0 : addr.family;
+    if (family !== 4 && family !== 6) {
+      return createErrorWithCode(
+        `Invalid address family returned for ${hostname}`,
+        'EINVAL'
+      );
+    }
+    const ip = typeof addr === 'string' ? addr : addr.address;
+    if (isBlockedIp(ip)) {
+      return createErrorWithCode(
+        `Blocked IP detected for ${hostname}`,
+        'EBLOCKED'
+      );
+    }
+  }
+  return null;
 }
 
 type LookupCallback = (

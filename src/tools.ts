@@ -23,10 +23,8 @@ import {
   logWarn,
   runWithRequestContext,
 } from './observability.js';
-import {
-  type MarkdownTransformResult,
-  transformHtmlToMarkdown,
-} from './transform.js';
+import type { MarkdownTransformResult } from './transform-types.js';
+import { transformHtmlToMarkdown } from './transform.js';
 import { isObject } from './type-guards.js';
 
 export interface FetchUrlInput {
