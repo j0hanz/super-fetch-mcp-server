@@ -1,5 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+
 import { config, type LogLevel } from './config.js';
 
 export type LogMetadata = Record<string, unknown>;
@@ -11,6 +13,11 @@ interface RequestContext {
 }
 
 const requestContext = new AsyncLocalStorage<RequestContext>();
+let mcpServer: McpServer | undefined;
+
+export function setMcpServer(server: McpServer): void {
+  mcpServer = server;
+}
 
 export function runWithRequestContext<T>(
   context: RequestContext,
@@ -69,9 +76,34 @@ function shouldLog(level: LogLevel): boolean {
   return true;
 }
 
+function mapToMcpLevel(
+  level: LogLevel
+): 'debug' | 'info' | 'warning' | 'error' {
+  switch (level) {
+    case 'warn':
+      return 'warning';
+    case 'error':
+      return 'error';
+    case 'debug':
+      return 'debug';
+    case 'info':
+    default:
+      return 'info';
+  }
+}
+
 function writeLog(level: LogLevel, message: string, meta?: LogMetadata): void {
   if (!shouldLog(level)) return;
   process.stderr.write(`${formatLogEntry(level, message, meta)}\n`);
+
+  if (mcpServer) {
+    mcpServer.server
+      .sendLoggingMessage({
+        level: mapToMcpLevel(level),
+        data: meta ? { message, ...meta } : message,
+      })
+      .catch(() => {});
+  }
 }
 
 export function logInfo(message: string, meta?: LogMetadata): void {

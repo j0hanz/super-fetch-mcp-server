@@ -9,24 +9,43 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { registerCachedContentResource } from './cache.js';
 import { config } from './config.js';
 import { destroyAgents } from './fetch.js';
-import { logError, logInfo } from './observability.js';
+import { logError, logInfo, setMcpServer } from './observability.js';
 import { registerTools } from './tools.js';
 import { shutdownTransformWorkerPool } from './transform.js';
 
-function createServerInfo(): { name: string; version: string } {
+function getLocalIconData(): string | undefined {
+  try {
+    const iconPath = new URL('../assets/logo.svg', import.meta.url);
+    const buffer = readFileSync(iconPath);
+    return `data:image/svg+xml;base64,${buffer.toString('base64')}`;
+  } catch {
+    return undefined;
+  }
+}
+
+function createServerInfo(): {
+  name: string;
+  version: string;
+  icons?: { src: string; sizes: string[] }[];
+} {
+  const localIcon = getLocalIconData();
+
   return {
     name: config.server.name,
     version: config.server.version,
+    ...(localIcon ? { icons: [{ src: localIcon, sizes: ['any'] }] } : {}),
   };
 }
 
 function createServerCapabilities(): {
   tools: { listChanged: true };
   resources: { listChanged: true; subscribe: true };
+  logging: Record<string, never>;
 } {
   return {
     tools: { listChanged: true },
     resources: { listChanged: true, subscribe: true },
+    logging: {},
   };
 }
 
@@ -73,6 +92,7 @@ export function createMcpServer(): McpServer {
     instructions,
   });
 
+  setMcpServer(server);
   registerTools(server);
   registerCachedContentResource(server);
   registerInstructionsResource(server, instructions);
