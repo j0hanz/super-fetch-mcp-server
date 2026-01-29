@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { describe, it, mock } from 'node:test';
 
 import { getRequestId, runWithRequestContext } from '../dist/observability.js';
 import { withRequestContextIfMissing } from '../dist/tools.js';
@@ -38,5 +38,38 @@ describe('withRequestContextIfMissing', () => {
     );
 
     assert.equal(requestId, 'existing-request');
+  });
+});
+
+describe('Progress notification timeout', () => {
+  it('times out progress notifications after 5 seconds', async () => {
+    const { createProgressReporter } = await import('../dist/tools.js');
+    const startTime = Date.now();
+
+    // Mock sendNotification that takes 10 seconds (longer than 5-second timeout)
+    const sendNotificationMock = mock.fn(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10000));
+    });
+
+    const extra = {
+      _meta: { progressToken: 'test-token' },
+      sendNotification: sendNotificationMock,
+    };
+
+    const reporter = createProgressReporter(extra);
+
+    // Progress report should timeout after 5 seconds, not wait 10 seconds
+    await reporter.report(50, 'test progress');
+
+    const elapsedMs = Date.now() - startTime;
+
+    // Verify it completed in less than 8 seconds (giving buffer for test execution)
+    assert.ok(
+      elapsedMs < 8000,
+      `Expected timeout within 8s but took ${elapsedMs}ms`
+    );
+
+    // Verify sendNotification was called
+    assert.equal(sendNotificationMock.mock.calls.length, 1);
   });
 });

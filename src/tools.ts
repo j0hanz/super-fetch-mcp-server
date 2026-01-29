@@ -128,6 +128,7 @@ export interface ToolHandlerExtra {
 
 const TRUNCATION_MARKER = '...[truncated]';
 const FETCH_PROGRESS_TOTAL = 4;
+const PROGRESS_NOTIFICATION_TIMEOUT_MS = 5000;
 
 const fetchUrlInputSchema = z.strictObject({
   url: z
@@ -174,7 +175,9 @@ interface ProgressReporter {
   report: (progress: number, message: string) => Promise<void>;
 }
 
-function createProgressReporter(extra?: ToolHandlerExtra): ProgressReporter {
+export function createProgressReporter(
+  extra?: ToolHandlerExtra
+): ProgressReporter {
   const token = extra?._meta?.progressToken ?? null;
   const sendNotification = extra?.sendNotification;
 
@@ -185,18 +188,33 @@ function createProgressReporter(extra?: ToolHandlerExtra): ProgressReporter {
   return {
     report: async (progress: number, message: string): Promise<void> => {
       try {
-        await sendNotification({
-          method: 'notifications/progress',
-          params: {
-            progressToken: token,
-            progress,
-            total: FETCH_PROGRESS_TOTAL,
-            message,
-          },
-        });
+        await Promise.race([
+          sendNotification({
+            method: 'notifications/progress',
+            params: {
+              progressToken: token,
+              progress,
+              total: FETCH_PROGRESS_TOTAL,
+              message,
+            },
+          }),
+          new Promise<void>((_, reject) => {
+            setTimeout(() => {
+              reject(new Error('Progress notification timeout'));
+            }, PROGRESS_NOTIFICATION_TIMEOUT_MS);
+          }),
+        ]);
       } catch (error: unknown) {
-        logWarn('Failed to send progress notification', {
+        const isTimeout =
+          error instanceof Error &&
+          error.message === 'Progress notification timeout';
+        const logMessage = isTimeout
+          ? 'Progress notification timed out'
+          : 'Failed to send progress notification';
+        logWarn(logMessage, {
           error: getErrorMessage(error),
+          progress,
+          message,
         });
       }
     },
