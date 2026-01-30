@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
+import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
+
 export type TaskStatus =
   | 'working'
   | 'input_required'
@@ -87,7 +89,8 @@ export class TaskManager {
       task.status === 'failed' ||
       task.status === 'cancelled'
     ) {
-      throw new Error(
+      throw new McpError(
+        ErrorCode.InvalidParams,
         `Cannot cancel task: already in terminal status '${task.status}'`
       );
     }

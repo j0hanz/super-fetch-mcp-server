@@ -677,7 +677,7 @@ class McpSessionGateway {
 
     const acceptHeader = getHeaderValue(req, 'accept');
     if (!acceptsEventStream(acceptHeader)) {
-      res.status(406).json({ error: 'Not Acceptable' });
+      res.status(405).json({ error: 'Method Not Allowed' });
       return;
     }
 

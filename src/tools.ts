@@ -894,6 +894,9 @@ const TOOL_DEFINITION = {
   inputSchema: fetchUrlInputSchema,
   outputSchema: fetchUrlOutputSchema,
   handler: fetchUrlToolHandler,
+  execution: {
+    taskSupport: true,
+  },
   annotations: {
     readOnlyHint: true,
     destructiveHint: false,
@@ -906,6 +909,7 @@ const TOOL_DEFINITION = {
   description: string;
   inputSchema: typeof fetchUrlInputSchema;
   outputSchema: typeof fetchUrlOutputSchema;
+  execution: { taskSupport: boolean };
   annotations: ToolAnnotations;
   handler: FetchUrlToolHandler;
 };

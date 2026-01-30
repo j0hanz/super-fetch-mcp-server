@@ -59,6 +59,7 @@ function createServerInfo(): {
 function createServerCapabilities(): {
   tools: { listChanged: true };
   resources: { listChanged: true; subscribe: true };
+  prompts: Record<string, never>;
   logging: Record<string, never>;
   tasks: {
     list: Record<string, never>;
@@ -73,6 +74,7 @@ function createServerCapabilities(): {
   return {
     tools: { listChanged: true },
     resources: { listChanged: true, subscribe: true },
+    prompts: {},
     logging: {},
     tasks: {
       list: {},
@@ -122,35 +124,20 @@ function registerInstructionsResource(
   );
 }
 
-interface TaskGetRequest {
-  method: 'tasks/get';
-  params: {
-    taskId: string;
-    _meta?: {
-      'io.modelcontextprotocol/related-task'?: never;
-    };
-  };
-}
-
-interface TaskCancelRequest {
-  method: 'tasks/cancel';
-  params: {
-    taskId: string;
-  };
-}
-
-interface TaskResultRequest {
-  method: 'tasks/result';
-  params: {
-    taskId: string;
-  };
-}
-
 // Schemas based on methods strings
-const TaskGetSchema = z.object({ method: z.literal('tasks/get') });
+const TaskGetSchema = z.object({
+  method: z.literal('tasks/get'),
+  params: z.object({ taskId: z.string() }),
+});
 const TaskListSchema = z.object({ method: z.literal('tasks/list') });
-const TaskCancelSchema = z.object({ method: z.literal('tasks/cancel') });
-const TaskResultSchema = z.object({ method: z.literal('tasks/result') });
+const TaskCancelSchema = z.object({
+  method: z.literal('tasks/cancel'),
+  params: z.object({ taskId: z.string() }),
+});
+const TaskResultSchema = z.object({
+  method: z.literal('tasks/result'),
+  params: z.object({ taskId: z.string() }),
+});
 
 // Type for interception
 interface ExtendedCallToolRequest {
@@ -232,6 +219,19 @@ function registerTaskHandlers(server: McpServer): void {
           ttl: task.ttl,
           pollInterval: task.pollInterval,
         },
+        _meta: {
+          'io.modelcontextprotocol/related-task': {
+            taskId: task.taskId,
+            status: task.status,
+            ...(task.statusMessage
+              ? { statusMessage: task.statusMessage }
+              : {}),
+            createdAt: task.createdAt,
+            lastUpdatedAt: task.lastUpdatedAt,
+            ttl: task.ttl,
+            pollInterval: task.pollInterval,
+          },
+        },
       };
       return response as unknown as { content: [] };
     }
@@ -258,7 +258,7 @@ function registerTaskHandlers(server: McpServer): void {
   });
 
   server.server.setRequestHandler(TaskGetSchema, async (request) => {
-    const { taskId } = (request as unknown as TaskGetRequest).params;
+    const { taskId } = request.params;
     const task = taskManager.getTask(taskId);
 
     if (!task) {
@@ -277,7 +277,7 @@ function registerTaskHandlers(server: McpServer): void {
   });
 
   server.server.setRequestHandler(TaskResultSchema, async (request) => {
-    const { taskId } = (request as unknown as TaskResultRequest).params;
+    const { taskId } = request.params;
     const task = taskManager.getTask(taskId);
 
     if (!task) {
@@ -318,7 +318,7 @@ function registerTaskHandlers(server: McpServer): void {
   });
 
   server.server.setRequestHandler(TaskCancelSchema, async (request) => {
-    const { taskId } = (request as unknown as TaskCancelRequest).params;
+    const { taskId } = request.params;
 
     const task = taskManager.cancelTask(taskId);
     if (!task) {
