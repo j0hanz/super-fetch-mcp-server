@@ -45,6 +45,10 @@ import {
 import { getTransformPoolStats } from './transform.js';
 import { isObject } from './type-guards.js';
 
+/* -------------------------------------------------------------------------------------------------
+ * Transport adaptation
+ * ------------------------------------------------------------------------------------------------- */
+
 function createTransportAdapter(
   transportImpl: StreamableHTTPServerTransport
 ): Transport {
@@ -88,7 +92,9 @@ function createTransportAdapter(
   };
 }
 
-// --- Shim Types ---
+/* -------------------------------------------------------------------------------------------------
+ * Shim types
+ * ------------------------------------------------------------------------------------------------- */
 
 interface ShimResponse extends ServerResponse {
   status(code: number): this;
@@ -107,102 +113,89 @@ interface ShimRequest extends IncomingMessage {
 
 function shimResponse(res: ServerResponse): ShimResponse {
   const shim = res as ShimResponse;
+
   shim.status = function (code: number) {
     this.statusCode = code;
     return this;
   };
+
   shim.json = function (body: unknown) {
     this.setHeader('Content-Type', 'application/json');
     this.end(JSON.stringify(body));
     return this;
   };
+
   shim.send = function (body: string | Buffer) {
     this.end(body);
     return this;
   };
+
   shim.sendStatus = function (code: number) {
     this.statusCode = code;
     this.end();
     return this;
   };
+
   return shim;
 }
 
-// --- Body Parsing ---
+/* -------------------------------------------------------------------------------------------------
+ * Request parsing helpers
+ * ------------------------------------------------------------------------------------------------- */
 
-async function readJsonBody(
-  req: IncomingMessage,
-  limit = 1024 * 1024
-): Promise<unknown> {
-  const contentType = req.headers['content-type'];
-  if (!contentType?.includes('application/json')) return undefined;
+class JsonBodyReader {
+  async read(req: IncomingMessage, limit = 1024 * 1024): Promise<unknown> {
+    const contentType = req.headers['content-type'];
+    if (!contentType?.includes('application/json')) return undefined;
 
-  return new Promise((resolve, reject) => {
-    let size = 0;
-    const chunks: Buffer[] = [];
+    return new Promise((resolve, reject) => {
+      let size = 0;
+      const chunks: Buffer[] = [];
 
-    req.on('data', (chunk: Buffer) => {
-      size += chunk.length;
-      if (size > limit) {
-        req.destroy();
-        reject(new Error('Payload too large'));
-        return;
-      }
-      chunks.push(chunk);
-    });
-
-    req.on('end', () => {
-      try {
-        const body = Buffer.concat(chunks).toString();
-        if (!body) {
-          resolve(undefined);
+      req.on('data', (chunk: Buffer) => {
+        size += chunk.length;
+        if (size > limit) {
+          req.destroy();
+          reject(new Error('Payload too large'));
           return;
         }
-        resolve(JSON.parse(body));
-      } catch (err) {
-        reject(err instanceof Error ? err : new Error(String(err)));
-      }
-    });
+        chunks.push(chunk);
+      });
 
-    req.on('error', (err) => {
-      reject(err instanceof Error ? err : new Error(String(err)));
+      req.on('end', () => {
+        try {
+          const body = Buffer.concat(chunks).toString();
+          if (!body) {
+            resolve(undefined);
+            return;
+          }
+          resolve(JSON.parse(body));
+        } catch (err) {
+          reject(err instanceof Error ? err : new Error(String(err)));
+        }
+      });
+
+      req.on('error', (err) => {
+        reject(err instanceof Error ? err : new Error(String(err)));
+      });
     });
-  });
+  }
 }
+
+const jsonBodyReader = new JsonBodyReader();
 
 function parseQuery(url: URL): Record<string, string | string[]> {
   const query: Record<string, string | string[]> = {};
   for (const [key, value] of url.searchParams) {
     const existing = query[key];
     if (existing) {
-      if (Array.isArray(existing)) {
-        existing.push(value);
-      } else {
-        query[key] = [existing, value];
-      }
+      if (Array.isArray(existing)) existing.push(value);
+      else query[key] = [existing, value];
     } else {
       query[key] = value;
     }
   }
   return query;
-}
-
-// --- CORS & Headers ---
-
-function handleCors(req: IncomingMessage, res: ServerResponse): boolean {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, DELETE');
-  res.setHeader(
-    'Access-Control-Allow-Headers',
-    'Content-Type, Authorization, X-API-Key, MCP-Protocol-Version, X-MCP-Session-ID'
-  );
-
-  if (req.method === 'OPTIONS') {
-    res.writeHead(204);
-    res.end();
-    return true;
-  }
-  return false;
 }
 
 function getHeaderValue(req: IncomingMessage, name: string): string | null {
@@ -211,6 +204,30 @@ function getHeaderValue(req: IncomingMessage, name: string): string | null {
   if (Array.isArray(val)) return val[0] ?? null;
   return val;
 }
+
+/* -------------------------------------------------------------------------------------------------
+ * CORS & Host/Origin policy
+ * ------------------------------------------------------------------------------------------------- */
+
+class CorsPolicy {
+  handle(req: IncomingMessage, res: ServerResponse): boolean {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, DELETE');
+    res.setHeader(
+      'Access-Control-Allow-Headers',
+      'Content-Type, Authorization, X-API-Key, MCP-Protocol-Version, X-MCP-Session-ID'
+    );
+
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204);
+      res.end();
+      return true;
+    }
+    return false;
+  }
+}
+
+const corsPolicy = new CorsPolicy();
 
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
 const WILDCARD_HOSTS = new Set(['0.0.0.0', '::']);
@@ -229,9 +246,7 @@ function buildAllowedHosts(): ReadonlySet<string> {
 
   for (const host of config.security.allowedHosts) {
     const normalized = normalizeHost(host);
-    if (normalized) {
-      allowed.add(normalized);
-    }
+    if (normalized) allowed.add(normalized);
   }
 
   return allowed;
@@ -239,56 +254,51 @@ function buildAllowedHosts(): ReadonlySet<string> {
 
 const ALLOWED_HOSTS = buildAllowedHosts();
 
-function resolveHostHeader(req: IncomingMessage): string | null {
-  const host = getHeaderValue(req, 'host');
-  if (!host) return null;
-  return normalizeHost(host);
-}
+class HostOriginPolicy {
+  validate(req: IncomingMessage, res: ShimResponse): boolean {
+    const host = this.resolveHostHeader(req);
+    if (!host) return this.reject(res, 400, 'Missing or invalid Host header');
+    if (!ALLOWED_HOSTS.has(host))
+      return this.reject(res, 403, 'Host not allowed');
 
-function resolveOriginHost(origin: string): string | null {
-  if (origin === 'null') return null;
-  try {
-    const parsed = new URL(origin);
-    return normalizeHost(parsed.host);
-  } catch {
-    return null;
-  }
-}
-
-function rejectHostRequest(
-  res: ShimResponse,
-  status: number,
-  message: string
-): boolean {
-  res.status(status).json({ error: message });
-  return false;
-}
-
-function validateHostAndOrigin(
-  req: IncomingMessage,
-  res: ShimResponse
-): boolean {
-  const host = resolveHostHeader(req);
-  if (!host) {
-    return rejectHostRequest(res, 400, 'Missing or invalid Host header');
-  }
-  if (!ALLOWED_HOSTS.has(host)) {
-    return rejectHostRequest(res, 403, 'Host not allowed');
-  }
-
-  const originHeader = getHeaderValue(req, 'origin');
-  if (originHeader) {
-    const originHost = resolveOriginHost(originHeader);
-    if (!originHost) {
-      return rejectHostRequest(res, 403, 'Invalid Origin header');
+    const originHeader = getHeaderValue(req, 'origin');
+    if (originHeader) {
+      const originHost = this.resolveOriginHost(originHeader);
+      if (!originHost) return this.reject(res, 403, 'Invalid Origin header');
+      if (!ALLOWED_HOSTS.has(originHost))
+        return this.reject(res, 403, 'Origin not allowed');
     }
-    if (!ALLOWED_HOSTS.has(originHost)) {
-      return rejectHostRequest(res, 403, 'Origin not allowed');
+
+    return true;
+  }
+
+  private resolveHostHeader(req: IncomingMessage): string | null {
+    const host = getHeaderValue(req, 'host');
+    if (!host) return null;
+    return normalizeHost(host);
+  }
+
+  private resolveOriginHost(origin: string): string | null {
+    if (origin === 'null') return null;
+    try {
+      const parsed = new URL(origin);
+      return normalizeHost(parsed.host);
+    } catch {
+      return null;
     }
   }
 
-  return true;
+  private reject(res: ShimResponse, status: number, message: string): boolean {
+    res.status(status).json({ error: message });
+    return false;
+  }
 }
+
+const hostOriginPolicy = new HostOriginPolicy();
+
+/* -------------------------------------------------------------------------------------------------
+ * HTTP mode configuration assertions
+ * ------------------------------------------------------------------------------------------------- */
 
 function assertHttpModeConfiguration(): void {
   const configuredHost = normalizeHost(config.server.host);
@@ -313,7 +323,9 @@ function assertHttpModeConfiguration(): void {
   }
 }
 
-// --- Rate Limit Implementation (Inline) ---
+/* -------------------------------------------------------------------------------------------------
+ * Rate limiting (same semantics, encapsulated)
+ * ------------------------------------------------------------------------------------------------- */
 
 interface RateLimitEntry {
   count: number;
@@ -337,224 +349,252 @@ interface RateLimitManagerImpl {
   stop(): void;
 }
 
+class RateLimiter implements RateLimitManagerImpl {
+  private readonly store = new Map<string, RateLimitEntry>();
+  private readonly cleanup = new AbortController();
+
+  constructor(private readonly options: RateLimitConfig) {
+    this.startCleanupLoop();
+  }
+
+  private startCleanupLoop(): void {
+    const interval = setIntervalPromise(
+      this.options.cleanupIntervalMs,
+      Date.now,
+      { signal: this.cleanup.signal, ref: false }
+    );
+
+    void (async () => {
+      try {
+        for await (const getNow of interval) {
+          const now = getNow();
+          for (const [key, entry] of this.store.entries()) {
+            if (now - entry.lastAccessed > this.options.windowMs * 2) {
+              this.store.delete(key);
+            }
+          }
+        }
+      } catch (err) {
+        if (!isAbortError(err)) {
+          logWarn('Rate limit cleanup failed', { error: err });
+        }
+      }
+    })();
+  }
+
+  check(req: ShimRequest, res: ShimResponse): boolean {
+    if (!this.options.enabled || req.method === 'OPTIONS') return true;
+
+    const key = req.ip ?? 'unknown';
+    const now = Date.now();
+    let entry = this.store.get(key);
+
+    if (!entry || now > entry.resetTime) {
+      entry = {
+        count: 1,
+        resetTime: now + this.options.windowMs,
+        lastAccessed: now,
+      };
+      this.store.set(key, entry);
+    } else {
+      entry.count += 1;
+      entry.lastAccessed = now;
+    }
+
+    if (entry.count > this.options.maxRequests) {
+      const retryAfter = Math.max(1, Math.ceil((entry.resetTime - now) / 1000));
+      res.setHeader('Retry-After', String(retryAfter));
+      res.status(429).json({ error: 'Rate limit exceeded', retryAfter });
+      return false;
+    }
+
+    return true;
+  }
+
+  stop(): void {
+    this.cleanup.abort();
+  }
+}
+
 function createRateLimitManagerImpl(
   options: RateLimitConfig
 ): RateLimitManagerImpl {
-  const store = new Map<string, RateLimitEntry>();
-  const cleanup = new AbortController();
-
-  const interval = setIntervalPromise(options.cleanupIntervalMs, Date.now, {
-    signal: cleanup.signal,
-    ref: false,
-  });
-  void (async () => {
-    try {
-      for await (const getNow of interval) {
-        const now = getNow();
-        for (const [key, entry] of store.entries()) {
-          if (now - entry.lastAccessed > options.windowMs * 2) {
-            store.delete(key);
-          }
-        }
-      }
-    } catch (err) {
-      if (!isAbortError(err))
-        logWarn('Rate limit cleanup failed', { error: err });
-    }
-  })();
-
-  return {
-    check: (req: ShimRequest, res: ShimResponse): boolean => {
-      if (!options.enabled || req.method === 'OPTIONS') return true;
-      const key = req.ip ?? 'unknown';
-      const now = Date.now();
-      let entry = store.get(key);
-      if (!entry || now > entry.resetTime) {
-        entry = {
-          count: 1,
-          resetTime: now + options.windowMs,
-          lastAccessed: now,
-        };
-        store.set(key, entry);
-      } else {
-        entry.count++;
-        entry.lastAccessed = now;
-      }
-      if (entry.count > options.maxRequests) {
-        const retryAfter = Math.max(
-          1,
-          Math.ceil((entry.resetTime - now) / 1000)
-        );
-        res.setHeader('Retry-After', String(retryAfter));
-        res.status(429).json({ error: 'Rate limit exceeded', retryAfter });
-        return false;
-      }
-      return true;
-    },
-    stop: () => {
-      cleanup.abort();
-    },
-  };
+  return new RateLimiter(options);
 }
 
-// --- Auth ---
+/* -------------------------------------------------------------------------------------------------
+ * Auth (static + OAuth introspection)
+ * ------------------------------------------------------------------------------------------------- */
 
 const STATIC_TOKEN_TTL_SECONDS = 60 * 60 * 24;
 
-function buildStaticAuthInfo(token: string): AuthInfo {
-  return {
-    token,
-    clientId: 'static-token',
-    scopes: config.auth.requiredScopes,
-    expiresAt: Math.floor(Date.now() / 1000) + STATIC_TOKEN_TTL_SECONDS,
-    resource: config.auth.resourceUrl,
-  };
-}
+class AuthService {
+  async authenticate(req: ShimRequest): Promise<AuthInfo> {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) {
+      return this.authenticateWithApiKey(req);
+    }
 
-function verifyStaticToken(token: string): AuthInfo {
-  if (config.auth.staticTokens.length === 0) {
-    throw new InvalidTokenError('No static tokens configured');
-  }
-  const matched = config.auth.staticTokens.some((candidate) =>
-    timingSafeEqualUtf8(candidate, token)
-  );
-  if (!matched) throw new InvalidTokenError('Invalid token');
-  return buildStaticAuthInfo(token);
-}
-
-interface IntrospectionRequest {
-  body: string;
-  headers: Record<string, string>;
-}
-
-function stripHash(url: URL): string {
-  const clean = new URL(url);
-  clean.hash = '';
-  return clean.href;
-}
-
-function buildBasicAuthHeader(
-  clientId: string,
-  clientSecret: string | undefined
-): string {
-  const credentials = `${clientId}:${clientSecret ?? ''}`;
-  return `Basic ${Buffer.from(credentials).toString('base64')}`;
-}
-
-function buildIntrospectionRequest(
-  token: string,
-  resourceUrl: URL,
-  clientId: string | undefined,
-  clientSecret: string | undefined
-): IntrospectionRequest {
-  const body = new URLSearchParams({
-    token,
-    token_type_hint: 'access_token',
-    resource: stripHash(resourceUrl),
-  }).toString();
-  const headers: Record<string, string> = {
-    'content-type': 'application/x-www-form-urlencoded',
-  };
-  if (clientId)
-    headers.authorization = buildBasicAuthHeader(clientId, clientSecret);
-  return { body, headers };
-}
-
-async function requestIntrospection(
-  url: URL,
-  request: IntrospectionRequest,
-  timeoutMs: number
-): Promise<unknown> {
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: request.headers,
-    body: request.body,
-    signal: AbortSignal.timeout(timeoutMs),
-  });
-  if (!response.ok) {
-    await response.body?.cancel();
-    throw new ServerError(`Token introspection failed: ${response.status}`);
-  }
-  return response.json();
-}
-
-function buildIntrospectionAuthInfo(
-  token: string,
-  payload: Record<string, unknown>
-): AuthInfo {
-  const expiresAt = typeof payload.exp === 'number' ? payload.exp : undefined;
-  const clientId =
-    typeof payload.client_id === 'string' ? payload.client_id : 'unknown';
-
-  const info: AuthInfo = {
-    token,
-    clientId,
-    scopes: typeof payload.scope === 'string' ? payload.scope.split(' ') : [],
-    resource: config.auth.resourceUrl,
-  };
-
-  if (expiresAt !== undefined) {
-    info.expiresAt = expiresAt;
+    const token = this.resolveBearerToken(authHeader);
+    return this.authenticateWithToken(token);
   }
 
-  return info;
-}
-
-async function verifyWithIntrospection(token: string): Promise<AuthInfo> {
-  if (!config.auth.introspectionUrl)
-    throw new ServerError('Introspection not configured');
-  const req = buildIntrospectionRequest(
-    token,
-    config.auth.resourceUrl,
-    config.auth.clientId,
-    config.auth.clientSecret
-  );
-  const payload = await requestIntrospection(
-    config.auth.introspectionUrl,
-    req,
-    config.auth.introspectionTimeoutMs
-  );
-  if (!isObject(payload) || payload.active !== true)
-    throw new InvalidTokenError('Token is inactive');
-  return buildIntrospectionAuthInfo(token, payload);
-}
-
-function resolveBearerToken(authHeader: string): string {
-  const [type, token] = authHeader.split(' ');
-  if (type !== 'Bearer' || !token) {
-    throw new InvalidTokenError('Invalid Authorization header format');
-  }
-  return token;
-}
-
-function authenticateWithToken(token: string): Promise<AuthInfo> {
-  return config.auth.mode === 'oauth'
-    ? verifyWithIntrospection(token)
-    : Promise.resolve(verifyStaticToken(token));
-}
-
-function authenticateWithApiKey(req: ShimRequest): AuthInfo {
-  const apiKey = getHeaderValue(req, 'x-api-key');
-  if (apiKey && config.auth.mode === 'static') {
-    return verifyStaticToken(apiKey);
-  }
-  if (apiKey && config.auth.mode === 'oauth') {
-    throw new InvalidTokenError('X-API-Key not supported for OAuth');
-  }
-  throw new InvalidTokenError('Missing Authorization header');
-}
-
-async function authenticate(req: ShimRequest): Promise<AuthInfo> {
-  const authHeader = req.headers.authorization;
-  if (!authHeader) {
-    return authenticateWithApiKey(req);
+  private authenticateWithToken(token: string): Promise<AuthInfo> {
+    return config.auth.mode === 'oauth'
+      ? this.verifyWithIntrospection(token)
+      : Promise.resolve(this.verifyStaticToken(token));
   }
 
-  const token = resolveBearerToken(authHeader);
-  return authenticateWithToken(token);
+  private authenticateWithApiKey(req: ShimRequest): AuthInfo {
+    const apiKey = getHeaderValue(req, 'x-api-key');
+
+    if (apiKey && config.auth.mode === 'static') {
+      return this.verifyStaticToken(apiKey);
+    }
+    if (apiKey && config.auth.mode === 'oauth') {
+      throw new InvalidTokenError('X-API-Key not supported for OAuth');
+    }
+
+    throw new InvalidTokenError('Missing Authorization header');
+  }
+
+  private resolveBearerToken(authHeader: string): string {
+    const [type, token] = authHeader.split(' ');
+    if (type !== 'Bearer' || !token) {
+      throw new InvalidTokenError('Invalid Authorization header format');
+    }
+    return token;
+  }
+
+  private buildStaticAuthInfo(token: string): AuthInfo {
+    return {
+      token,
+      clientId: 'static-token',
+      scopes: config.auth.requiredScopes,
+      expiresAt: Math.floor(Date.now() / 1000) + STATIC_TOKEN_TTL_SECONDS,
+      resource: config.auth.resourceUrl,
+    };
+  }
+
+  private verifyStaticToken(token: string): AuthInfo {
+    if (config.auth.staticTokens.length === 0) {
+      throw new InvalidTokenError('No static tokens configured');
+    }
+
+    const matched = config.auth.staticTokens.some((candidate) =>
+      timingSafeEqualUtf8(candidate, token)
+    );
+
+    if (!matched) throw new InvalidTokenError('Invalid token');
+    return this.buildStaticAuthInfo(token);
+  }
+
+  private stripHash(url: URL): string {
+    const clean = new URL(url);
+    clean.hash = '';
+    return clean.href;
+  }
+
+  private buildBasicAuthHeader(
+    clientId: string,
+    clientSecret: string | undefined
+  ): string {
+    const credentials = `${clientId}:${clientSecret ?? ''}`;
+    return `Basic ${Buffer.from(credentials).toString('base64')}`;
+  }
+
+  private buildIntrospectionRequest(
+    token: string,
+    resourceUrl: URL,
+    clientId: string | undefined,
+    clientSecret: string | undefined
+  ): { body: string; headers: Record<string, string> } {
+    const body = new URLSearchParams({
+      token,
+      token_type_hint: 'access_token',
+      resource: this.stripHash(resourceUrl),
+    }).toString();
+
+    const headers: Record<string, string> = {
+      'content-type': 'application/x-www-form-urlencoded',
+    };
+
+    if (clientId)
+      headers.authorization = this.buildBasicAuthHeader(clientId, clientSecret);
+
+    return { body, headers };
+  }
+
+  private async requestIntrospection(
+    url: URL,
+    request: { body: string; headers: Record<string, string> },
+    timeoutMs: number
+  ): Promise<unknown> {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: request.headers,
+      body: request.body,
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+
+    if (!response.ok) {
+      await response.body?.cancel();
+      throw new ServerError(`Token introspection failed: ${response.status}`);
+    }
+
+    return response.json();
+  }
+
+  private buildIntrospectionAuthInfo(
+    token: string,
+    payload: Record<string, unknown>
+  ): AuthInfo {
+    const expiresAt = typeof payload.exp === 'number' ? payload.exp : undefined;
+    const clientId =
+      typeof payload.client_id === 'string' ? payload.client_id : 'unknown';
+
+    const info: AuthInfo = {
+      token,
+      clientId,
+      scopes: typeof payload.scope === 'string' ? payload.scope.split(' ') : [],
+      resource: config.auth.resourceUrl,
+    };
+
+    if (expiresAt !== undefined) info.expiresAt = expiresAt;
+    return info;
+  }
+
+  private async verifyWithIntrospection(token: string): Promise<AuthInfo> {
+    if (!config.auth.introspectionUrl) {
+      throw new ServerError('Introspection not configured');
+    }
+
+    const req = this.buildIntrospectionRequest(
+      token,
+      config.auth.resourceUrl,
+      config.auth.clientId,
+      config.auth.clientSecret
+    );
+
+    const payload = await this.requestIntrospection(
+      config.auth.introspectionUrl,
+      req,
+      config.auth.introspectionTimeoutMs
+    );
+
+    if (!isObject(payload) || payload.active !== true) {
+      throw new InvalidTokenError('Token is inactive');
+    }
+
+    return this.buildIntrospectionAuthInfo(token, payload);
+  }
 }
 
-// --- MCP Routes ---
+const authService = new AuthService();
+
+/* -------------------------------------------------------------------------------------------------
+ * MCP routing + session gateway
+ * ------------------------------------------------------------------------------------------------- */
 
 function sendError(
   res: ShimResponse,
@@ -570,6 +610,8 @@ function sendError(
   });
 }
 
+const MCP_PROTOCOL_VERSION = '2025-11-25';
+
 function ensureMcpProtocolVersion(
   req: ShimRequest,
   res: ShimResponse
@@ -579,320 +621,354 @@ function ensureMcpProtocolVersion(
     sendError(res, -32600, 'Missing MCP-Protocol-Version header');
     return false;
   }
-  if (version !== '2025-11-25') {
+  if (version !== MCP_PROTOCOL_VERSION) {
     sendError(res, -32600, `Unsupported MCP-Protocol-Version: ${version}`);
     return false;
   }
   return true;
 }
 
-async function createNewSession(
-  store: SessionStore,
-  mcpServer: McpServer,
-  res: ShimResponse,
-  requestId: JsonRpcId
-): Promise<StreamableHTTPServerTransport | null> {
-  const allowed = ensureSessionCapacity({
-    store,
-    maxSessions: config.server.maxSessions,
-    evictOldest: (s) => {
-      const evicted = s.evictOldest();
-      if (evicted) {
-        void evicted.transport.close().catch(() => {});
-        return true;
-      }
-      return false;
-    },
-  });
+class McpSessionGateway {
+  constructor(
+    private readonly store: SessionStore,
+    private readonly mcpServer: McpServer
+  ) {}
 
-  if (!allowed) {
-    sendError(res, -32000, 'Server busy', 503, requestId);
-    return null;
-  }
+  async handlePost(req: ShimRequest, res: ShimResponse): Promise<void> {
+    if (!ensureMcpProtocolVersion(req, res)) return;
 
-  if (!reserveSessionSlot(store, config.server.maxSessions)) {
-    sendError(res, -32000, 'Server busy', 503, requestId);
-    return null;
-  }
-
-  const tracker = createSlotTracker(store);
-  const transportImpl = new StreamableHTTPServerTransport({
-    sessionIdGenerator: () => randomUUID(),
-  });
-
-  const initTimeout = setTimeout(() => {
-    if (!tracker.isInitialized()) {
-      tracker.releaseSlot();
-      void transportImpl.close().catch(() => {});
+    const { body } = req;
+    if (isJsonRpcBatchRequest(body)) {
+      sendError(res, -32600, 'Batch requests not supported');
+      return;
     }
-  }, config.server.sessionInitTimeoutMs);
+    if (!isMcpRequestBody(body)) {
+      sendError(res, -32600, 'Invalid request body');
+      return;
+    }
 
-  transportImpl.onclose = () => {
-    clearTimeout(initTimeout);
-    if (!tracker.isInitialized()) tracker.releaseSlot();
-  };
+    const requestId = body.id ?? null;
+    logInfo('[MCP POST]', {
+      method: body.method,
+      id: body.id,
+      sessionId: getHeaderValue(req, 'mcp-session-id'),
+    });
 
-  try {
-    const transport = createTransportAdapter(transportImpl);
-    await mcpServer.connect(transport);
-  } catch (err) {
-    clearTimeout(initTimeout);
-    tracker.releaseSlot();
-    void transportImpl.close().catch(() => {});
-    throw err;
+    const transport = await this.getOrCreateTransport(req, res, requestId);
+    if (!transport) return;
+
+    await transport.handleRequest(req, res, body);
   }
 
-  const newSessionId = transportImpl.sessionId;
-  if (!newSessionId) {
-    throw new ServerError('Failed to generate session ID');
-  }
+  async handleGet(req: ShimRequest, res: ShimResponse): Promise<void> {
+    if (!ensureMcpProtocolVersion(req, res)) return;
 
-  tracker.markInitialized();
-  tracker.releaseSlot();
-  store.set(newSessionId, {
-    transport: transportImpl,
-    createdAt: Date.now(),
-    lastSeen: Date.now(),
-    protocolInitialized: false,
-  });
+    const sessionId = getHeaderValue(req, 'mcp-session-id');
+    if (!sessionId) {
+      sendError(res, -32600, 'Missing session ID');
+      return;
+    }
 
-  transportImpl.onclose = composeCloseHandlers(transportImpl.onclose, () => {
-    store.remove(newSessionId);
-  });
-
-  return transportImpl;
-}
-
-async function getOrCreateTransport(
-  req: ShimRequest,
-  res: ShimResponse,
-  store: SessionStore,
-  mcpServer: McpServer,
-  requestId: JsonRpcId
-): Promise<StreamableHTTPServerTransport | null> {
-  const sessionId = getHeaderValue(req, 'mcp-session-id');
-
-  if (sessionId) {
-    const session = store.get(sessionId);
+    const session = this.store.get(sessionId);
     if (!session) {
-      sendError(res, -32600, 'Session not found', 404, requestId);
+      sendError(res, -32600, 'Session not found', 404);
+      return;
+    }
+
+    const acceptHeader = getHeaderValue(req, 'accept');
+    if (!acceptsEventStream(acceptHeader)) {
+      res.status(406).json({ error: 'Not Acceptable' });
+      return;
+    }
+
+    this.store.touch(sessionId);
+    await session.transport.handleRequest(req, res);
+  }
+
+  async handleDelete(req: ShimRequest, res: ShimResponse): Promise<void> {
+    if (!ensureMcpProtocolVersion(req, res)) return;
+
+    const sessionId = getHeaderValue(req, 'mcp-session-id');
+    if (!sessionId) {
+      sendError(res, -32600, 'Missing session ID');
+      return;
+    }
+
+    const session = this.store.get(sessionId);
+    if (session) {
+      await session.transport.close();
+      this.store.remove(sessionId);
+    }
+
+    res.status(200).send('Session closed');
+  }
+
+  private async getOrCreateTransport(
+    req: ShimRequest,
+    res: ShimResponse,
+    requestId: JsonRpcId
+  ): Promise<StreamableHTTPServerTransport | null> {
+    const sessionId = getHeaderValue(req, 'mcp-session-id');
+
+    if (sessionId) {
+      const session = this.store.get(sessionId);
+      if (!session) {
+        sendError(res, -32600, 'Session not found', 404, requestId);
+        return null;
+      }
+      this.store.touch(sessionId);
+      return session.transport;
+    }
+
+    if (!isInitializeRequest(req.body)) {
+      sendError(res, -32600, 'Missing session ID', 400, requestId);
       return null;
     }
-    store.touch(sessionId);
-    return session.transport;
+
+    return this.createNewSession(res, requestId);
   }
 
-  if (!isInitializeRequest(req.body)) {
-    sendError(res, -32600, 'Missing session ID', 400, requestId);
-    return null;
-  }
+  private async createNewSession(
+    res: ShimResponse,
+    requestId: JsonRpcId
+  ): Promise<StreamableHTTPServerTransport | null> {
+    const allowed = ensureSessionCapacity({
+      store: this.store,
+      maxSessions: config.server.maxSessions,
+      evictOldest: (s) => {
+        const evicted = s.evictOldest();
+        if (evicted) {
+          void evicted.transport.close().catch(() => {});
+          return true;
+        }
+        return false;
+      },
+    });
 
-  return createNewSession(store, mcpServer, res, requestId);
+    if (!allowed) {
+      sendError(res, -32000, 'Server busy', 503, requestId);
+      return null;
+    }
+
+    if (!reserveSessionSlot(this.store, config.server.maxSessions)) {
+      sendError(res, -32000, 'Server busy', 503, requestId);
+      return null;
+    }
+
+    const tracker = createSlotTracker(this.store);
+    const transportImpl = new StreamableHTTPServerTransport({
+      sessionIdGenerator: () => randomUUID(),
+    });
+
+    const initTimeout = setTimeout(() => {
+      if (!tracker.isInitialized()) {
+        tracker.releaseSlot();
+        void transportImpl.close().catch(() => {});
+      }
+    }, config.server.sessionInitTimeoutMs);
+
+    transportImpl.onclose = () => {
+      clearTimeout(initTimeout);
+      if (!tracker.isInitialized()) tracker.releaseSlot();
+    };
+
+    try {
+      const transport = createTransportAdapter(transportImpl);
+      await this.mcpServer.connect(transport);
+    } catch (err) {
+      clearTimeout(initTimeout);
+      tracker.releaseSlot();
+      void transportImpl.close().catch(() => {});
+      throw err;
+    }
+
+    const newSessionId = transportImpl.sessionId;
+    if (!newSessionId) {
+      throw new ServerError('Failed to generate session ID');
+    }
+
+    tracker.markInitialized();
+    tracker.releaseSlot();
+
+    this.store.set(newSessionId, {
+      transport: transportImpl,
+      createdAt: Date.now(),
+      lastSeen: Date.now(),
+      protocolInitialized: false,
+    });
+
+    transportImpl.onclose = composeCloseHandlers(transportImpl.onclose, () => {
+      this.store.remove(newSessionId);
+    });
+
+    return transportImpl;
+  }
 }
 
-async function handleMcpPost(
-  req: ShimRequest,
-  res: ShimResponse,
-  store: SessionStore,
-  mcpServer: McpServer
-): Promise<void> {
-  if (!ensureMcpProtocolVersion(req, res)) return;
-
-  const { body } = req;
-  if (isJsonRpcBatchRequest(body)) {
-    sendError(res, -32600, 'Batch requests not supported');
-    return;
-  }
-  if (!isMcpRequestBody(body)) {
-    sendError(res, -32600, 'Invalid request body');
-    return;
-  }
-
-  const requestId = body.id ?? null;
-  logInfo('[MCP POST]', {
-    method: body.method,
-    id: body.id,
-    sessionId: getHeaderValue(req, 'mcp-session-id'),
-  });
-
-  const transport = await getOrCreateTransport(
-    req,
-    res,
-    store,
-    mcpServer,
-    requestId
-  );
-  if (!transport) return;
-
-  await transport.handleRequest(req, res, body);
-}
-
-async function handleMcpGet(
-  req: ShimRequest,
-  res: ShimResponse,
-  store: SessionStore
-): Promise<void> {
-  if (!ensureMcpProtocolVersion(req, res)) return;
-
-  const sessionId = getHeaderValue(req, 'mcp-session-id');
-  if (!sessionId) {
-    sendError(res, -32600, 'Missing session ID');
-    return;
-  }
-
-  const session = store.get(sessionId);
-  if (!session) {
-    sendError(res, -32600, 'Session not found', 404);
-    return;
-  }
-
-  const acceptHeader = getHeaderValue(req, 'accept');
-  if (!acceptsEventStream(acceptHeader)) {
-    res.status(406).json({ error: 'Not Acceptable' });
-    return;
-  }
-
-  store.touch(sessionId);
-  await session.transport.handleRequest(req, res);
-}
-
-async function handleMcpDelete(
-  req: ShimRequest,
-  res: ShimResponse,
-  store: SessionStore
-): Promise<void> {
-  if (!ensureMcpProtocolVersion(req, res)) return;
-
-  const sessionId = getHeaderValue(req, 'mcp-session-id');
-  if (!sessionId) {
-    sendError(res, -32600, 'Missing session ID');
-    return;
-  }
-
-  const session = store.get(sessionId);
-  if (session) {
-    await session.transport.close();
-    store.remove(sessionId);
-  }
-
-  res.status(200).send('Session closed');
-}
-
-// --- Dispatch ---
-
-async function routeMcpRequest(
-  req: ShimRequest,
-  res: ShimResponse,
-  url: URL,
-  ctx: { store: SessionStore; mcpServer: McpServer }
-): Promise<boolean> {
-  const { pathname: path } = url;
-  const { method } = req;
-
-  if (path !== '/mcp') return false;
-
-  if (method === 'POST') {
-    await handleMcpPost(req, res, ctx.store, ctx.mcpServer);
-    return true;
-  }
-  if (method === 'GET') {
-    await handleMcpGet(req, res, ctx.store);
-    return true;
-  }
-  if (method === 'DELETE') {
-    await handleMcpDelete(req, res, ctx.store);
-    return true;
-  }
-
-  return false;
-}
+/* -------------------------------------------------------------------------------------------------
+ * Downloads + dispatcher
+ * ------------------------------------------------------------------------------------------------- */
 
 function checkDownloadRoute(
   path: string
 ): { namespace: string; hash: string } | null {
   const downloadMatch = /^\/mcp\/downloads\/([^/]+)\/([^/]+)$/.exec(path);
-  if (downloadMatch) {
-    const namespace = downloadMatch[1];
-    const hash = downloadMatch[2];
-    if (namespace && hash) {
-      return { namespace, hash };
-    }
-  }
-  return null;
+  if (!downloadMatch) return null;
+
+  const namespace = downloadMatch[1];
+  const hash = downloadMatch[2];
+  if (!namespace || !hash) return null;
+
+  return { namespace, hash };
 }
 
-async function dispatchRequest(
-  req: ShimRequest,
-  res: ShimResponse,
-  url: URL,
-  ctx: { store: SessionStore; mcpServer: McpServer }
-): Promise<void> {
-  const { pathname: path } = url;
-  const { method } = req;
+class HttpDispatcher {
+  constructor(
+    private readonly store: SessionStore,
+    private readonly mcpGateway: McpSessionGateway
+  ) {}
 
-  try {
-    if (method === 'GET' && path === '/health') {
-      const poolStats = getTransformPoolStats();
-      res.status(200).json({
-        status: 'ok',
-        version: serverVersion,
-        uptime: Math.floor(process.uptime()),
-        timestamp: new Date().toISOString(),
-        stats: {
-          activeSessions: ctx.store.size(),
-          cacheKeys: cacheKeys().length,
-          workerPool: poolStats ?? {
-            queueDepth: 0,
-            activeWorkers: 0,
-            capacity: 0,
-          },
-        },
-      });
-      return;
-    }
+  async dispatch(req: ShimRequest, res: ShimResponse, url: URL): Promise<void> {
+    const { pathname: path } = url;
+    const { method } = req;
 
-    if (!(await authenticateRequest(req, res))) {
-      return;
-    }
-
-    if (method === 'GET') {
-      const download = checkDownloadRoute(path);
-      if (download) {
-        handleDownload(res, download.namespace, download.hash);
+    try {
+      // 1) Health endpoint bypasses auth (preserve existing behavior)
+      if (method === 'GET' && path === '/health') {
+        this.handleHealthCheck(res);
         return;
       }
-    }
 
-    if (await routeMcpRequest(req, res, url, ctx)) return;
+      // 2) Auth required for everything else (preserve existing behavior)
+      if (!(await this.authenticateRequest(req, res))) return;
 
-    res.status(404).json({ error: 'Not Found' });
-  } catch (err) {
-    logError(
-      'Request failed',
-      err instanceof Error ? err : new Error(String(err))
-    );
-    if (!res.writableEnded) {
-      res.status(500).json({ error: 'Internal Server Error' });
+      // 3) Downloads
+      if (method === 'GET') {
+        const download = checkDownloadRoute(path);
+        if (download) {
+          handleDownload(res, download.namespace, download.hash);
+          return;
+        }
+      }
+
+      // 4) MCP routes
+      if (path === '/mcp') {
+        if (await this.handleMcpRoutes(req, res, method)) {
+          return;
+        }
+      }
+
+      res.status(404).json({ error: 'Not Found' });
+    } catch (err) {
+      logError(
+        'Request failed',
+        err instanceof Error ? err : new Error(String(err))
+      );
+      if (!res.writableEnded) {
+        res.status(500).json({ error: 'Internal Server Error' });
+      }
     }
   }
-}
 
-async function authenticateRequest(
-  req: ShimRequest,
-  res: ShimResponse
-): Promise<boolean> {
-  try {
-    req.auth = await authenticate(req);
-    return true;
-  } catch (err) {
-    res
-      .status(401)
-      .json({ error: err instanceof Error ? err.message : 'Unauthorized' });
+  private handleHealthCheck(res: ShimResponse): void {
+    const poolStats = getTransformPoolStats();
+    res.status(200).json({
+      status: 'ok',
+      version: serverVersion,
+      uptime: Math.floor(process.uptime()),
+      timestamp: new Date().toISOString(),
+      stats: {
+        activeSessions: this.store.size(),
+        cacheKeys: cacheKeys().length,
+        workerPool: poolStats ?? {
+          queueDepth: 0,
+          activeWorkers: 0,
+          capacity: 0,
+        },
+      },
+    });
+  }
+
+  private async handleMcpRoutes(
+    req: ShimRequest,
+    res: ShimResponse,
+    method: string | undefined
+  ): Promise<boolean> {
+    if (method === 'POST') {
+      await this.mcpGateway.handlePost(req, res);
+      return true;
+    }
+    if (method === 'GET') {
+      await this.mcpGateway.handleGet(req, res);
+      return true;
+    }
+    if (method === 'DELETE') {
+      await this.mcpGateway.handleDelete(req, res);
+      return true;
+    }
     return false;
   }
+
+  private async authenticateRequest(
+    req: ShimRequest,
+    res: ShimResponse
+  ): Promise<boolean> {
+    try {
+      req.auth = await authService.authenticate(req);
+      return true;
+    } catch (err) {
+      res.status(401).json({
+        error: err instanceof Error ? err.message : 'Unauthorized',
+      });
+      return false;
+    }
+  }
 }
 
-// --- Main ---
+/* -------------------------------------------------------------------------------------------------
+ * Request pipeline (order is part of behavior)
+ * ------------------------------------------------------------------------------------------------- */
+
+class HttpRequestPipeline {
+  constructor(
+    private readonly rateLimiter: RateLimitManagerImpl,
+    private readonly dispatcher: HttpDispatcher
+  ) {}
+
+  async handle(rawReq: IncomingMessage, rawRes: ServerResponse): Promise<void> {
+    const res = shimResponse(rawRes);
+    const req = rawReq as ShimRequest;
+
+    // 1. Basic setup
+    const url = new URL(req.url ?? '', 'http://localhost');
+
+    req.query = parseQuery(url);
+    if (req.socket.remoteAddress) req.ip = req.socket.remoteAddress;
+    req.params = {};
+
+    // 2. Host/Origin + CORS (preserve exact order)
+    if (!hostOriginPolicy.validate(req, res)) return;
+    if (corsPolicy.handle(req, res)) return;
+
+    // 3. Body parsing
+    try {
+      req.body = await jsonBodyReader.read(req);
+    } catch {
+      res.status(400).json({ error: 'Invalid JSON or Payload too large' });
+      return;
+    }
+
+    // 4. Rate limit
+    if (!this.rateLimiter.check(req, res)) return;
+
+    // 5. Dispatch
+    await this.dispatcher.dispatch(req, res, url);
+  }
+}
+
+/* -------------------------------------------------------------------------------------------------
+ * Server lifecycle
+ * ------------------------------------------------------------------------------------------------- */
 
 export async function startHttpServer(): Promise<{
   shutdown: (signal: string) => Promise<void>;
@@ -901,19 +977,22 @@ export async function startHttpServer(): Promise<{
 }> {
   assertHttpModeConfiguration();
   enableHttpMode();
+
   const mcpServer = createMcpServer();
   const rateLimiter = createRateLimitManagerImpl(config.rateLimit);
+
   const sessionStore = createSessionStore(config.server.sessionTtlMs);
   const sessionCleanup = startSessionCleanupLoop(
     sessionStore,
     config.server.sessionTtlMs
   );
 
+  const mcpGateway = new McpSessionGateway(sessionStore, mcpServer);
+  const dispatcher = new HttpDispatcher(sessionStore, mcpGateway);
+  const pipeline = new HttpRequestPipeline(rateLimiter, dispatcher);
+
   const server = createServer((req, res) => {
-    void handleRequest(req, res, rateLimiter, {
-      store: sessionStore,
-      mcpServer,
-    });
+    void pipeline.handle(req, res);
   });
 
   applyHttpServerTuning(server);
@@ -928,6 +1007,7 @@ export async function startHttpServer(): Promise<{
   const addr = server.address();
   const port =
     typeof addr === 'object' && addr ? addr.port : config.server.port;
+
   logInfo(`HTTP server listening on port ${port}`);
 
   return {
@@ -935,6 +1015,7 @@ export async function startHttpServer(): Promise<{
     host: config.server.host,
     shutdown: async (signal) => {
       logInfo(`Stopping HTTP server (${signal})...`);
+
       rateLimiter.stop();
       sessionCleanup.abort();
       drainConnectionsOnShutdown(server);
@@ -954,41 +1035,4 @@ export async function startHttpServer(): Promise<{
       await mcpServer.close();
     },
   };
-}
-
-async function handleRequest(
-  rawReq: IncomingMessage,
-  rawRes: ServerResponse,
-  rateLimiter: RateLimitManagerImpl,
-  ctx: { store: SessionStore; mcpServer: McpServer }
-): Promise<void> {
-  const res = shimResponse(rawRes);
-  const req = rawReq as ShimRequest;
-
-  // 1. Basic Setup
-  const url = new URL(req.url ?? '', 'http://localhost');
-
-  req.query = parseQuery(url);
-  if (req.socket.remoteAddress) {
-    req.ip = req.socket.remoteAddress;
-  }
-  req.params = {};
-
-  // 2. CORS
-  if (!validateHostAndOrigin(req, res)) return;
-  if (handleCors(req, res)) return;
-
-  // 3. Body Parsing
-  try {
-    req.body = await readJsonBody(req);
-  } catch {
-    res.status(400).json({ error: 'Invalid JSON or Payload too large' });
-    return;
-  }
-
-  // 4. Rate Limit
-  if (!rateLimiter.check(req, res)) return;
-
-  // 5. Routing
-  await dispatchRequest(req, res, url, ctx);
 }

@@ -7,47 +7,139 @@ import { parseHTML } from 'linkedom';
 import { config } from './config.js';
 import { isObject } from './type-guards.js';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// DOM Type Guards and Accessors
-// ─────────────────────────────────────────────────────────────────────────────
+/* -------------------------------------------------------------------------------------------------
+ * DOM guards & small helpers
+ * ------------------------------------------------------------------------------------------------- */
 
 function isElement(node: unknown): node is HTMLElement {
   return (
     isObject(node) &&
     'getAttribute' in node &&
-    typeof node.getAttribute === 'function'
+    typeof (node as { getAttribute?: unknown }).getAttribute === 'function'
   );
 }
 
-function getBodyInnerHtml(document: unknown): string | undefined {
-  if (!isObject(document)) return undefined;
-  const { body } = document;
-  if (isObject(body) && typeof body.innerHTML === 'string') {
-    return body.innerHTML;
-  }
-  return undefined;
+function isNodeListLike(
+  value: unknown
+): value is
+  | ArrayLike<Element>
+  | { length: number; item: (index: number) => Element | null } {
+  return (
+    isObject(value) &&
+    typeof (value as { length?: unknown }).length === 'number'
+  );
 }
 
-function getDocumentToString(document: unknown): (() => string) | undefined {
-  if (!isObject(document)) return undefined;
-  if (typeof document.toString === 'function') {
-    return document.toString.bind(document) as () => string;
+function getNodeListItem(
+  nodes:
+    | ArrayLike<Element>
+    | { length: number; item: (index: number) => Element | null },
+  index: number
+): Element | null {
+  if ('item' in nodes && typeof nodes.item === 'function') {
+    return nodes.item(index);
   }
-  return undefined;
+  return (nodes as ArrayLike<Element>)[index] ?? null;
 }
 
-function getDocumentElementOuterHtml(document: unknown): string | undefined {
-  if (!isObject(document)) return undefined;
-  const docEl = document.documentElement;
-  if (isObject(docEl) && typeof docEl.outerHTML === 'string') {
-    return docEl.outerHTML;
+/**
+ * Remove nodes from a list/iterable.
+ * - For NodeList-like collections we iterate backwards to be safe with live collections.
+ * - For iterables we snapshot into an array first.
+ */
+function removeNodes(
+  nodes: NodeListOf<Element> | Iterable<Element>,
+  shouldRemove: (node: Element) => boolean
+): void {
+  if (isNodeListLike(nodes)) {
+    for (let i = nodes.length - 1; i >= 0; i -= 1) {
+      const node = getNodeListItem(nodes, i);
+      if (node && shouldRemove(node)) node.remove();
+    }
+    return;
   }
-  return undefined;
+
+  for (const node of Array.from(nodes)) {
+    if (shouldRemove(node)) node.remove();
+  }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Noise Detection Constants
-// ─────────────────────────────────────────────────────────────────────────────
+/* -------------------------------------------------------------------------------------------------
+ * Fast-path parsing heuristics
+ * ------------------------------------------------------------------------------------------------- */
+
+const HTML_DOCUMENT_MARKERS = /<\s*(?:!doctype|html|head|body)\b/i;
+
+function isFullDocumentHtml(html: string): boolean {
+  return HTML_DOCUMENT_MARKERS.test(html);
+}
+
+const NOISE_SCAN_LIMIT = 50_000;
+
+const NOISE_MARKERS = [
+  '<script',
+  '<style',
+  '<noscript',
+  '<iframe',
+  '<nav',
+  '<footer',
+  '<header',
+  '<form',
+  '<button',
+  '<input',
+  '<select',
+  '<textarea',
+  '<svg',
+  '<canvas',
+  ' aria-hidden="true"',
+  " aria-hidden='true'",
+  ' hidden',
+  ' role="navigation"',
+  " role='navigation'",
+  ' role="banner"',
+  " role='banner'",
+  ' role="complementary"',
+  " role='complementary'",
+  ' role="contentinfo"',
+  " role='contentinfo'",
+  ' role="tree"',
+  " role='tree'",
+  ' role="menubar"',
+  " role='menubar'",
+  ' role="menu"',
+  " role='menu'",
+  ' banner',
+  ' promo',
+  ' announcement',
+  ' cta',
+  ' advert',
+  ' newsletter',
+  ' subscribe',
+  ' cookie',
+  ' consent',
+  ' popup',
+  ' modal',
+  ' overlay',
+  ' toast',
+  ' fixed',
+  ' sticky',
+  ' z-50',
+  ' z-4',
+  ' isolate',
+  ' breadcrumb',
+  ' pagination',
+] as const;
+
+function mayContainNoise(html: string): boolean {
+  const sample =
+    html.length > NOISE_SCAN_LIMIT ? html.slice(0, NOISE_SCAN_LIMIT) : html;
+  const haystack = sample.toLowerCase();
+  return NOISE_MARKERS.some((marker) => haystack.includes(marker));
+}
+
+/* -------------------------------------------------------------------------------------------------
+ * Noise selectors & classification
+ * ------------------------------------------------------------------------------------------------- */
 
 const STRUCTURAL_TAGS = new Set([
   'script',
@@ -78,7 +170,7 @@ const BASE_NOISE_SELECTORS = [
   '[style*="display:none"]',
   '[hidden]',
   '[aria-hidden="true"]',
-];
+] as const;
 
 const BASE_NOISE_SELECTOR = BASE_NOISE_SELECTORS.join(',');
 const CANDIDATE_NOISE_SELECTOR = [
@@ -93,9 +185,10 @@ const CANDIDATE_NOISE_SELECTOR = [
 ].join(',');
 
 function buildNoiseSelector(extraSelectors: readonly string[]): string {
-  const extra = extraSelectors.filter((selector) => selector.trim().length > 0);
-  if (extra.length === 0) return BASE_NOISE_SELECTOR;
-  return `${BASE_NOISE_SELECTOR},${extra.join(',')}`;
+  const extra = extraSelectors.filter((s) => s.trim().length > 0);
+  return extra.length === 0
+    ? BASE_NOISE_SELECTOR
+    : `${BASE_NOISE_SELECTOR},${extra.join(',')}`;
 }
 
 const NAVIGATION_ROLES = new Set([
@@ -154,279 +247,188 @@ const BASE_PROMO_TOKENS = [
   'taglist',
 ] as const;
 
-/**
- * Get promo tokens merged with any user-configured extra tokens.
- * Memoized because it is used in hot paths when scanning many nodes.
- */
-let promoTokensCache: Set<string> | null = null;
-
-function getPromoTokens(): Set<string> {
-  if (promoTokensCache) return promoTokensCache;
-
-  const tokens = new Set<string>(BASE_PROMO_TOKENS);
-  for (const token of config.noiseRemoval.extraTokens) {
-    const normalized = token.toLowerCase().trim();
-    if (normalized) tokens.add(normalized);
-  }
-
-  promoTokensCache = tokens;
-  return tokens;
-}
-
-let promoRegexCache: RegExp | null = null;
-
-function getPromoRegex(): RegExp {
-  if (promoRegexCache) return promoRegexCache;
-  const tokens = Array.from(getPromoTokens());
-  const escaped = tokens.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-  const pattern = `(?:^|[^a-z0-9])(?:${escaped.join('|')})(?:$|[^a-z0-9])`;
-  promoRegexCache = new RegExp(pattern, 'i');
-  return promoRegexCache;
-}
-
 const HEADER_NOISE_PATTERN =
   /\b(site-header|masthead|topbar|navbar|nav(?:bar)?|menu|header-nav)\b/i;
 const FIXED_PATTERN = /\b(fixed|sticky)\b/;
 const HIGH_Z_PATTERN = /\bz-(?:4\d|50)\b/;
 const ISOLATE_PATTERN = /\bisolate\b/;
 
-const HTML_DOCUMENT_MARKERS = /<\s*(?:!doctype|html|head|body)\b/i;
-const NOISE_MARKERS = [
-  '<script',
-  '<style',
-  '<noscript',
-  '<iframe',
-  '<nav',
-  '<footer',
-  '<header',
-  '<form',
-  '<button',
-  '<input',
-  '<select',
-  '<textarea',
-  '<svg',
-  '<canvas',
-  ' aria-hidden="true"',
-  " aria-hidden='true'",
-  ' hidden',
-  ' role="navigation"',
-  " role='navigation'",
-  ' role="banner"',
-  " role='banner'",
-  ' role="complementary"',
-  " role='complementary'",
-  ' role="contentinfo"',
-  " role='contentinfo'",
-  ' role="tree"',
-  " role='tree'",
-  ' role="menubar"',
-  " role='menubar'",
-  ' role="menu"',
-  " role='menu'",
-  ' banner',
-  ' promo',
-  ' announcement',
-  ' cta',
-  ' advert',
-  ' newsletter',
-  ' subscribe',
-  ' cookie',
-  ' consent',
-  ' popup',
-  ' modal',
-  ' overlay',
-  ' toast',
-  ' fixed',
-  ' sticky',
-  ' z-50',
-  ' z-4',
-  ' isolate',
-  ' breadcrumb',
-  ' pagination',
-];
+class PromoDetector {
+  private tokenCache: Set<string> | null = null;
+  private regexCache: RegExp | null = null;
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Noise Detection Functions
-// ─────────────────────────────────────────────────────────────────────────────
-
-const NOISE_SCAN_LIMIT = 50_000;
-
-function mayContainNoise(html: string): boolean {
-  // Fast path: only scan a bounded prefix; parsing is the expensive step anyway.
-  // Most noise markers appear near the top of the document (nav, scripts, meta, etc.).
-  const sample =
-    html.length > NOISE_SCAN_LIMIT ? html.slice(0, NOISE_SCAN_LIMIT) : html;
-  const haystack = sample.toLowerCase();
-  return NOISE_MARKERS.some((marker) => haystack.includes(marker));
-}
-
-function isFullDocumentHtml(html: string): boolean {
-  return HTML_DOCUMENT_MARKERS.test(html);
-}
-
-function isStructuralNoiseTag(tagName: string): boolean {
-  return STRUCTURAL_TAGS.has(tagName);
-}
-
-function isInteractiveComponent(element: HTMLElement): boolean {
-  const role = element.getAttribute('role');
-  if (role && INTERACTIVE_CONTENT_ROLES.has(role)) return true;
-
-  // Check for common UI framework data attributes that indicate managed visibility
-  const dataState = element.getAttribute('data-state');
-  if (dataState === 'inactive' || dataState === 'closed') return true;
-
-  const dataOrientation = element.getAttribute('data-orientation');
-  if (dataOrientation === 'horizontal' || dataOrientation === 'vertical') {
-    return true;
+  matches(className: string, id: string): boolean {
+    const regex = this.getRegex();
+    return regex.test(className) || regex.test(id);
   }
 
-  // Check for accordion/collapse patterns
-  if (element.getAttribute('data-accordion-item') !== null) return true;
-  if (element.getAttribute('data-radix-collection-item') !== null) return true;
+  private getTokens(): Set<string> {
+    if (this.tokenCache) return this.tokenCache;
 
-  return false;
+    const tokens = new Set<string>(BASE_PROMO_TOKENS);
+    for (const token of config.noiseRemoval.extraTokens) {
+      const normalized = token.toLowerCase().trim();
+      if (normalized) tokens.add(normalized);
+    }
+
+    this.tokenCache = tokens;
+    return tokens;
+  }
+
+  private getRegex(): RegExp {
+    if (this.regexCache) return this.regexCache;
+
+    const tokens = Array.from(this.getTokens());
+    const escaped = tokens.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    const pattern = `(?:^|[^a-z0-9])(?:${escaped.join('|')})(?:$|[^a-z0-9])`;
+
+    this.regexCache = new RegExp(pattern, 'i');
+    return this.regexCache;
+  }
 }
 
-function isElementHidden(element: HTMLElement): boolean {
-  const style = element.getAttribute('style') ?? '';
-  return (
-    element.getAttribute('hidden') !== null ||
-    element.getAttribute('aria-hidden') === 'true' ||
-    /\bdisplay\s*:\s*none\b/i.test(style) ||
-    /\bvisibility\s*:\s*hidden\b/i.test(style)
-  );
-}
-
-function hasNoiseRole(role: string | null): boolean {
-  return role !== null && NAVIGATION_ROLES.has(role);
-}
-
-function matchesPromoIdOrClass(className: string, id: string): boolean {
-  const regex = getPromoRegex();
-  return regex.test(className) || regex.test(id);
-}
-
-function matchesFixedOrHighZIsolate(className: string): boolean {
-  return (
-    FIXED_PATTERN.test(className) ||
-    (HIGH_Z_PATTERN.test(className) && ISOLATE_PATTERN.test(className))
-  );
-}
-
-interface ElementMetadata {
+type ElementMetadata = Readonly<{
   tagName: string;
   className: string;
   id: string;
   role: string | null;
   isHidden: boolean;
-}
+}>;
 
-function readElementMetadata(element: HTMLElement): ElementMetadata {
-  return {
-    tagName: element.tagName.toLowerCase(),
-    className: element.getAttribute('class') ?? '',
-    id: element.getAttribute('id') ?? '',
-    role: element.getAttribute('role'),
-    isHidden: isElementHidden(element),
-  };
-}
+class NoiseClassifier {
+  constructor(private readonly promo: PromoDetector) {}
 
-function isBoilerplateHeader({
-  className,
-  id,
-  role,
-}: ElementMetadata): boolean {
-  if (hasNoiseRole(role)) return true;
-  const combined = `${className} ${id}`.toLowerCase();
-  return HEADER_NOISE_PATTERN.test(combined);
-}
+  isNoise(element: HTMLElement): boolean {
+    const meta = this.readMetadata(element);
 
-function isNoiseElement(node: HTMLElement): boolean {
-  const metadata = readElementMetadata(node);
-  const isComplementaryAside =
-    metadata.tagName === 'aside' && metadata.role === 'complementary';
+    if (this.isStructuralNoise(meta, element)) return true;
+    if (ALWAYS_NOISE_TAGS.has(meta.tagName)) return true;
+    if (this.isHeaderBoilerplate(meta)) return true;
 
-  const shouldCheckHidden = metadata.isHidden && !isInteractiveComponent(node);
+    if (this.isHiddenNoise(meta, element)) return true;
+    if (this.isRoleNoise(meta)) return true;
 
-  const isInteractiveStructural =
-    isStructuralNoiseTag(metadata.tagName) && isInteractiveComponent(node);
+    if (this.matchesFixedOrHighZIsolate(meta.className)) return true;
+    if (this.promo.matches(meta.className, meta.id)) return true;
 
-  return (
-    (isStructuralNoiseTag(metadata.tagName) && !isInteractiveStructural) ||
-    ALWAYS_NOISE_TAGS.has(metadata.tagName) ||
-    (metadata.tagName === 'header' && isBoilerplateHeader(metadata)) ||
-    shouldCheckHidden ||
-    (!isComplementaryAside && hasNoiseRole(metadata.role)) ||
-    matchesFixedOrHighZIsolate(metadata.className) ||
-    matchesPromoIdOrClass(metadata.className, metadata.id)
-  );
-}
-
-function isNodeListLike(
-  value: unknown
-): value is
-  | ArrayLike<Element>
-  | { length: number; item: (index: number) => Element | null } {
-  return isObject(value) && typeof value.length === 'number';
-}
-
-function tryGetNodeListItem(
-  nodes:
-    | ArrayLike<Element>
-    | { length: number; item: (index: number) => Element | null },
-  index: number
-): Element | null {
-  if ('item' in nodes && typeof nodes.item === 'function') {
-    return nodes.item(index);
+    return false;
   }
-  return (nodes as ArrayLike<Element>)[index] ?? null;
-}
 
-function removeNoiseFromNodeListLike(
-  nodes:
-    | ArrayLike<Element>
-    | { length: number; item: (index: number) => Element | null },
-  shouldCheckNoise: boolean
-): void {
-  for (let index = nodes.length - 1; index >= 0; index -= 1) {
-    const node = tryGetNodeListItem(nodes, index);
-    if (!node) continue;
-    if (isElement(node) && (!shouldCheckNoise || isNoiseElement(node))) {
-      node.remove();
-    }
+  private readMetadata(element: HTMLElement): ElementMetadata {
+    return {
+      tagName: element.tagName.toLowerCase(),
+      className: element.getAttribute('class') ?? '',
+      id: element.getAttribute('id') ?? '',
+      role: element.getAttribute('role'),
+      isHidden: this.isHidden(element),
+    };
+  }
+
+  private isStructuralNoise(
+    meta: ElementMetadata,
+    element: HTMLElement
+  ): boolean {
+    if (!STRUCTURAL_TAGS.has(meta.tagName)) return false;
+
+    // Interactive structural components (dialogs, menus) are handled elsewhere.
+    return !this.isInteractiveComponent(element);
+  }
+
+  private isHeaderBoilerplate(meta: ElementMetadata): boolean {
+    if (meta.tagName !== 'header') return false;
+    if (this.hasNoiseRole(meta.role)) return true;
+
+    const combined = `${meta.className} ${meta.id}`.toLowerCase();
+    return HEADER_NOISE_PATTERN.test(combined);
+  }
+
+  private isHiddenNoise(meta: ElementMetadata, element: HTMLElement): boolean {
+    if (!meta.isHidden) return false;
+    // Don't remove hidden interactive components (they may be managed by UI framework state).
+    return !this.isInteractiveComponent(element);
+  }
+
+  private isRoleNoise(meta: ElementMetadata): boolean {
+    const isComplementaryAside =
+      meta.tagName === 'aside' && meta.role === 'complementary';
+    if (isComplementaryAside) return false;
+
+    return this.hasNoiseRole(meta.role);
+  }
+
+  private hasNoiseRole(role: string | null): boolean {
+    return role !== null && NAVIGATION_ROLES.has(role);
+  }
+
+  private matchesFixedOrHighZIsolate(className: string): boolean {
+    return (
+      FIXED_PATTERN.test(className) ||
+      (HIGH_Z_PATTERN.test(className) && ISOLATE_PATTERN.test(className))
+    );
+  }
+
+  private isHidden(element: HTMLElement): boolean {
+    const style = element.getAttribute('style') ?? '';
+    return (
+      element.getAttribute('hidden') !== null ||
+      element.getAttribute('aria-hidden') === 'true' ||
+      /\bdisplay\s*:\s*none\b/i.test(style) ||
+      /\bvisibility\s*:\s*hidden\b/i.test(style)
+    );
+  }
+
+  private isInteractiveComponent(element: HTMLElement): boolean {
+    const role = element.getAttribute('role');
+    if (role && INTERACTIVE_CONTENT_ROLES.has(role)) return true;
+
+    const dataState = element.getAttribute('data-state');
+    if (dataState === 'inactive' || dataState === 'closed') return true;
+
+    const dataOrientation = element.getAttribute('data-orientation');
+    if (dataOrientation === 'horizontal' || dataOrientation === 'vertical')
+      return true;
+
+    if (element.getAttribute('data-accordion-item') !== null) return true;
+    if (element.getAttribute('data-radix-collection-item') !== null)
+      return true;
+
+    return false;
   }
 }
 
-function removeNoiseNodes(
-  nodes: NodeListOf<Element> | Iterable<Element>,
-  shouldCheckNoise = true
-): void {
-  if (isNodeListLike(nodes)) {
-    removeNoiseFromNodeListLike(nodes, shouldCheckNoise);
-    return;
+class NoiseStripper {
+  constructor(private readonly classifier: NoiseClassifier) {}
+
+  strip(document: Document): void {
+    this.removeBySelector(
+      document,
+      buildNoiseSelector(config.noiseRemoval.extraSelectors),
+      /* checkNoise */ false
+    );
+    this.removeBySelector(
+      document,
+      CANDIDATE_NOISE_SELECTOR,
+      /* checkNoise */ true
+    );
   }
-  const nodeList = Array.from(nodes);
-  for (const node of nodeList) {
-    if (isElement(node) && (!shouldCheckNoise || isNoiseElement(node))) {
-      node.remove();
-    }
+
+  private removeBySelector(
+    document: Document,
+    selector: string,
+    checkNoise: boolean
+  ): void {
+    const nodes = document.querySelectorAll(selector);
+    removeNodes(nodes, (node) => {
+      if (!isElement(node)) return false;
+      return checkNoise ? this.classifier.isNoise(node) : true;
+    });
   }
 }
 
-function stripNoiseNodes(document: Document): void {
-  const targetSelectors = buildNoiseSelector(
-    config.noiseRemoval.extraSelectors
-  );
-  const potentialNoiseNodes = document.querySelectorAll(targetSelectors);
-  removeNoiseNodes(potentialNoiseNodes, false);
-  const allElements = document.querySelectorAll(CANDIDATE_NOISE_SELECTOR);
-  removeNoiseNodes(allElements, true);
-}
+/* -------------------------------------------------------------------------------------------------
+ * Relative URL resolution
+ * ------------------------------------------------------------------------------------------------- */
 
-// ─────────────────────────────────────────────────────────────────────────────
-// URL Resolution
-// ─────────────────────────────────────────────────────────────────────────────
 const SKIP_URL_PREFIXES = [
   '#',
   'java' + 'script:',
@@ -441,9 +443,6 @@ function shouldSkipUrlResolution(url: string): boolean {
   return SKIP_URL_PREFIXES.some((prefix) => normalized.startsWith(prefix));
 }
 
-/**
- * Safely resolve a relative URL to absolute using base URL.
- */
 function tryResolveUrl(relativeUrl: string, baseUrl: URL): string | null {
   try {
     return new URL(relativeUrl, baseUrl).href;
@@ -452,94 +451,158 @@ function tryResolveUrl(relativeUrl: string, baseUrl: URL): string | null {
   }
 }
 
-function resolveAnchorElement(element: Element, base: URL): void {
-  const href = element.getAttribute('href');
-  if (href && !shouldSkipUrlResolution(href)) {
-    const resolved = tryResolveUrl(href, base);
-    if (resolved) element.setAttribute('href', resolved);
-  }
-}
+class RelativeUrlResolver {
+  resolve(document: Document, baseUrl: string): void {
+    let base: URL;
+    try {
+      base = new URL(baseUrl);
+    } catch {
+      // invalid base URL - skip resolution
+      return;
+    }
 
-function resolveImageElement(element: Element, base: URL): void {
-  const src = element.getAttribute('src');
-  if (src && !shouldSkipUrlResolution(src)) {
-    const resolved = tryResolveUrl(src, base);
-    if (resolved) element.setAttribute('src', resolved);
-  }
-}
-
-function resolveSourceElement(element: Element, base: URL): void {
-  const srcset = element.getAttribute('srcset');
-  if (!srcset) return;
-  const resolved = srcset
-    .split(',')
-    .map((entry) => {
-      const parts = entry.trim().split(/\s+/);
-      const url = parts[0];
-      if (url) {
-        const resolvedUrl = tryResolveUrl(url, base);
-        if (resolvedUrl) parts[0] = resolvedUrl;
-      }
-      return parts.join(' ');
-    })
-    .join(', ');
-  element.setAttribute('srcset', resolved);
-}
-
-function resolveRelativeUrls(document: Document, baseUrl: string): void {
-  try {
-    const base = new URL(baseUrl);
     for (const element of document.querySelectorAll(
       'a[href], img[src], source[srcset]'
     )) {
       const tag = element.tagName.toLowerCase();
-      if (tag === 'a') {
-        resolveAnchorElement(element, base);
-      } else if (tag === 'img') {
-        resolveImageElement(element, base);
-      } else if (tag === 'source') {
-        resolveSourceElement(element, base);
-      }
+      if (tag === 'a') this.resolveAnchor(element, base);
+      else if (tag === 'img') this.resolveImage(element, base);
+      else if (tag === 'source') this.resolveSource(element, base);
     }
-  } catch {
-    /* invalid base URL - skip resolution */
+  }
+
+  private resolveAnchor(element: Element, base: URL): void {
+    const href = element.getAttribute('href');
+    if (!href || shouldSkipUrlResolution(href)) return;
+
+    const resolved = tryResolveUrl(href, base);
+    if (resolved) element.setAttribute('href', resolved);
+  }
+
+  private resolveImage(element: Element, base: URL): void {
+    const src = element.getAttribute('src');
+    if (!src || shouldSkipUrlResolution(src)) return;
+
+    const resolved = tryResolveUrl(src, base);
+    if (resolved) element.setAttribute('src', resolved);
+  }
+
+  /**
+   * Keep original behavior: srcset entries are always attempted to be resolved (no prefix skipping).
+   */
+  private resolveSource(element: Element, base: URL): void {
+    const srcset = element.getAttribute('srcset');
+    if (!srcset) return;
+
+    const resolved = srcset
+      .split(',')
+      .map((entry) => {
+        const parts = entry.trim().split(/\s+/);
+        const url = parts[0];
+        if (url) {
+          const resolvedUrl = tryResolveUrl(url, base);
+          if (resolvedUrl) parts[0] = resolvedUrl;
+        }
+        return parts.join(' ');
+      })
+      .join(', ');
+
+    element.setAttribute('srcset', resolved);
   }
 }
+
+/* -------------------------------------------------------------------------------------------------
+ * Serialization
+ * ------------------------------------------------------------------------------------------------- */
+
+class DocumentSerializer {
+  /**
+   * Preserve existing behavior:
+   * - Prefer body.innerHTML only if it has "substantial" content (> 100 chars).
+   * - Otherwise fall back to document.toString(), then documentElement.outerHTML, then original HTML.
+   */
+  serialize(document: unknown, fallbackHtml: string): string {
+    const bodyInner = this.getBodyInnerHtml(document);
+    if (bodyInner && bodyInner.trim().length > 100) return bodyInner;
+
+    const toStringFn = this.getDocumentToString(document);
+    if (toStringFn) return toStringFn();
+
+    const outer = this.getDocumentElementOuterHtml(document);
+    if (outer) return outer;
+
+    return fallbackHtml;
+  }
+
+  private getBodyInnerHtml(document: unknown): string | undefined {
+    if (!isObject(document)) return undefined;
+    const { body } = document as { body?: unknown };
+    if (
+      isObject(body) &&
+      typeof (body as { innerHTML?: unknown }).innerHTML === 'string'
+    ) {
+      return (body as { innerHTML: string }).innerHTML;
+    }
+    return undefined;
+  }
+
+  private getDocumentToString(document: unknown): (() => string) | undefined {
+    if (!isObject(document)) return undefined;
+    const fn = (document as { toString?: unknown }).toString;
+    if (typeof fn === 'function') return fn.bind(document) as () => string;
+    return undefined;
+  }
+
+  private getDocumentElementOuterHtml(document: unknown): string | undefined {
+    if (!isObject(document)) return undefined;
+    const docEl = (document as { documentElement?: unknown }).documentElement;
+    if (
+      isObject(docEl) &&
+      typeof (docEl as { outerHTML?: unknown }).outerHTML === 'string'
+    ) {
+      return (docEl as { outerHTML: string }).outerHTML;
+    }
+    return undefined;
+  }
+}
+
+/* -------------------------------------------------------------------------------------------------
+ * Public pipeline
+ * ------------------------------------------------------------------------------------------------- */
+
+class HtmlNoiseRemovalPipeline {
+  private readonly promo = new PromoDetector();
+  private readonly classifier = new NoiseClassifier(this.promo);
+  private readonly stripper = new NoiseStripper(this.classifier);
+  private readonly urlResolver = new RelativeUrlResolver();
+  private readonly serializer = new DocumentSerializer();
+
+  removeNoise(html: string, document?: Document, baseUrl?: string): string {
+    const shouldParse = isFullDocumentHtml(html) || mayContainNoise(html);
+    if (!shouldParse) return html;
+
+    try {
+      const resolvedDocument = document ?? parseHTML(html).document;
+
+      this.stripper.strip(resolvedDocument);
+
+      if (baseUrl) {
+        this.urlResolver.resolve(resolvedDocument, baseUrl);
+      }
+
+      return this.serializer.serialize(resolvedDocument, html);
+    } catch {
+      return html;
+    }
+  }
+}
+
+const pipeline = new HtmlNoiseRemovalPipeline();
 
 export function removeNoiseFromHtml(
   html: string,
   document?: Document,
   baseUrl?: string
 ): string {
-  const shouldParse = isFullDocumentHtml(html) || mayContainNoise(html);
-  if (!shouldParse) return html;
-
-  try {
-    const resolvedDocument = document ?? parseHTML(html).document;
-
-    stripNoiseNodes(resolvedDocument);
-
-    // Resolve relative URLs before converting to markdown
-    if (baseUrl) {
-      resolveRelativeUrls(resolvedDocument, baseUrl);
-    }
-
-    const bodyInnerHtml = getBodyInnerHtml(resolvedDocument);
-    // Only use body innerHTML if it has substantial content
-    // On some sites (e.g., Framer), noise removal empties body but leaves content in documentElement
-    if (bodyInnerHtml && bodyInnerHtml.trim().length > 100) {
-      return bodyInnerHtml;
-    }
-
-    const docToString = getDocumentToString(resolvedDocument);
-    if (docToString) return docToString();
-
-    const documentElementOuterHtml =
-      getDocumentElementOuterHtml(resolvedDocument);
-    if (documentElementOuterHtml) return documentElementOuterHtml;
-
-    return html;
-  } catch {
-    return html;
-  }
+  return pipeline.removeNoise(html, document, baseUrl);
 }

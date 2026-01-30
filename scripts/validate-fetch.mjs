@@ -1,0 +1,633 @@
+#!/usr/bin/env node
+/* eslint-disable */
+/**
+ * Reusable URL Fetch Validation Script
+ *
+ * Usage:
+ *   node scripts/validate-fetch.mjs <url> [options]
+ *   node scripts/validate-fetch.mjs --config <config.json>
+ *
+ * Options:
+ *   --config <file>         Load test config from JSON file
+ *   --expect-text <text>    Comma-separated texts that must be present
+ *   --expect-code-blocks    Require at least one code block
+ *   --min-code-blocks <n>   Minimum number of code blocks required
+ *   --min-length <n>        Minimum markdown length in characters
+ *   --reference <file>      Compare against reference markdown file
+ *   --save-output <file>    Save markdown output to file
+ *   --verbose               Show detailed output
+ *   --help                  Show this help
+ *
+ * Config file format (JSON):
+ * {
+ *   "tests": [
+ *     {
+ *       "name": "Test MCP Architecture Docs",
+ *       "url": "https://modelcontextprotocol.io/docs/learn/architecture",
+ *       "validations": {
+ *         "expectText": ["Initialize Request", "jsonrpc", "tools/list"],
+ *         "minCodeBlocks": 10,
+ *         "minLength": 15000,
+ *         "expectStructure": ["headings", "code-blocks", "links"]
+ *       },
+ *       "saveOutput": ".github/test-outputs/mcp-architecture.md"
+ *     }
+ *   ]
+ * }
+ */
+import { existsSync } from 'node:fs';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { pathToFileURL } from 'node:url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const projectRoot = resolve(__dirname, '..');
+
+// Import the transform function from built dist
+const distPath = join(projectRoot, 'dist', 'transform.js');
+if (!existsSync(distPath)) {
+  console.error(
+    '❌ Error: dist/transform.js not found. Run `npm run build` first.'
+  );
+  process.exit(1);
+}
+
+const { transformHtmlToMarkdown } = await import(pathToFileURL(distPath).href);
+const { fetchNormalizedUrl } = await import(
+  pathToFileURL(join(projectRoot, 'dist', 'fetch.js')).href
+);
+
+// ============================================================================
+// Validators
+// ============================================================================
+
+const validators = {
+  /**
+   * Check if markdown contains expected text patterns
+   * Supports: array of strings, object with {patterns, caseInsensitive}, regex /pattern/flags
+   */
+  expectText: {
+    name: 'Expected Text Presence',
+    validate: (markdown, expected) => {
+      // Normalize input: support both array and object format
+      const patterns = Array.isArray(expected) ? expected : expected.patterns;
+      const caseInsensitive =
+        !Array.isArray(expected) && expected.caseInsensitive;
+
+      const missing = [];
+      const found = [];
+
+      for (const pattern of patterns) {
+        // Detect regex patterns: /pattern/flags
+        const regexMatch = pattern.match(/^\/(.+)\/([gimsuvy]*)$/);
+
+        let isMatch = false;
+        if (regexMatch) {
+          // Regex mode
+          try {
+            const [, regexPattern, flags] = regexMatch;
+            const regex = new RegExp(regexPattern, flags);
+            isMatch = regex.test(markdown);
+          } catch (error) {
+            // Invalid regex, treat as literal
+            isMatch = markdown.includes(pattern);
+          }
+        } else {
+          // Literal mode with optional case-insensitive
+          const searchIn = caseInsensitive ? markdown.toLowerCase() : markdown;
+          const searchFor = caseInsensitive ? pattern.toLowerCase() : pattern;
+          isMatch = searchIn.includes(searchFor);
+        }
+
+        if (isMatch) {
+          found.push(pattern);
+        } else {
+          missing.push(pattern);
+        }
+      }
+
+      return {
+        passed: missing.length === 0,
+        message:
+          missing.length === 0
+            ? `✓ All ${patterns.length} expected texts found`
+            : `✗ Missing ${missing.length}/${patterns.length} expected texts`,
+        details: {
+          found: found.length,
+          missing: missing.length,
+          missingTexts: missing,
+          foundTexts: found,
+        },
+      };
+    },
+  },
+
+  /**
+   * Check minimum number of code blocks
+   */
+  minCodeBlocks: {
+    name: 'Minimum Code Blocks',
+    validate: (markdown, minCount) => {
+      const codeBlockRegex = /```[\s\S]*?```/g;
+      const matches = markdown.match(codeBlockRegex) || [];
+      const count = matches.length;
+
+      return {
+        passed: count >= minCount,
+        message:
+          count >= minCount
+            ? `✓ Found ${count} code blocks (required: ${minCount})`
+            : `✗ Found ${count} code blocks (required: ${minCount})`,
+        details: {
+          count,
+          required: minCount,
+          blocks: matches.slice(0, 3).map((block) => ({
+            preview:
+              block.substring(0, 100) + (block.length > 100 ? '...' : ''),
+            language: block.match(/```(\w+)/)?.[1] || 'none',
+          })),
+        },
+      };
+    },
+  },
+
+  /**
+   * Check minimum markdown length
+   */
+  minLength: {
+    name: 'Minimum Content Length',
+    validate: (markdown, minLength) => {
+      const length = markdown.length;
+
+      return {
+        passed: length >= minLength,
+        message:
+          length >= minLength
+            ? `✓ Content length ${length} chars (required: ${minLength})`
+            : `✗ Content length ${length} chars (required: ${minLength})`,
+        details: {
+          length,
+          required: minLength,
+          percentage: Math.round((length / minLength) * 100),
+        },
+      };
+    },
+  },
+
+  /**
+   * Check for expected structural elements
+   */
+  expectStructure: {
+    name: 'Content Structure',
+    validate: (markdown, elements) => {
+      const checks = {
+        headings: /^#{1,6}\s+/m,
+        'code-blocks': /```/,
+        links: /\[.+?\]\([^)]+\)/,
+        lists: /^[-*+]\s+/m,
+        'numbered-lists': /^\d+\.\s+/m,
+        images: /!\[.*?\]\([^)]+\)/,
+        tables: /\|/,
+        blockquotes: /^>\s+/m,
+      };
+
+      const results = {};
+      const missing = [];
+      const found = [];
+
+      for (const element of elements) {
+        const regex = checks[element];
+        if (!regex) {
+          results[element] = { found: false, error: 'Unknown element type' };
+          continue;
+        }
+
+        const hasElement = regex.test(markdown);
+        results[element] = { found: hasElement };
+
+        if (hasElement) {
+          found.push(element);
+        } else {
+          missing.push(element);
+        }
+      }
+
+      return {
+        passed: missing.length === 0,
+        message:
+          missing.length === 0
+            ? `✓ All ${elements.length} structural elements found`
+            : `✗ Missing ${missing.length}/${elements.length} structural elements`,
+        details: {
+          results,
+          found,
+          missing,
+        },
+      };
+    },
+  },
+
+  /**
+   * Compare against reference markdown file
+   */
+  reference: {
+    name: 'Reference Comparison',
+    validate: async (markdown, referencePath) => {
+      try {
+        const refPath = resolve(projectRoot, referencePath);
+        const reference = await readFile(refPath, 'utf-8');
+
+        const currentLength = markdown.length;
+        const referenceLength = reference.length;
+        const lengthDiff = currentLength - referenceLength;
+        const lengthDiffPercent = Math.round(
+          (lengthDiff / referenceLength) * 100
+        );
+
+        // Simple similarity check: count common lines
+        const currentLines = new Set(
+          markdown
+            .split('\n')
+            .map((l) => l.trim())
+            .filter(Boolean)
+        );
+        const referenceLines = new Set(
+          reference
+            .split('\n')
+            .map((l) => l.trim())
+            .filter(Boolean)
+        );
+
+        let commonLines = 0;
+        for (const line of currentLines) {
+          if (referenceLines.has(line)) {
+            commonLines++;
+          }
+        }
+
+        const similarity = Math.round(
+          (commonLines / referenceLines.size) * 100
+        );
+
+        return {
+          passed: similarity >= 70, // 70% similarity threshold
+          message:
+            similarity >= 70
+              ? `✓ Output matches reference (${similarity}% similar)`
+              : `✗ Output differs from reference (${similarity}% similar)`,
+          details: {
+            similarity,
+            lengthDiff,
+            lengthDiffPercent,
+            currentLength,
+            referenceLength,
+            commonLines,
+            totalLines: referenceLines.size,
+          },
+        };
+      } catch (error) {
+        return {
+          passed: false,
+          message: `✗ Reference file error: ${error.message}`,
+          details: { error: error.message },
+        };
+      }
+    },
+  },
+};
+
+// ============================================================================
+// Core Testing Logic
+// ============================================================================
+
+/**
+ * Fetch and transform a URL
+ */
+async function fetchAndTransform(url, options = {}) {
+  const startTime = Date.now();
+
+  try {
+    // Fetch HTML
+    console.log(`\n🌐 Fetching: ${url}`);
+    const html = await fetchNormalizedUrl(url, {
+      maxBytes: 10 * 1024 * 1024, // 10MB
+      signal: options.signal,
+    });
+    const fetchTime = Date.now() - startTime;
+    console.log(`✓ Fetched ${html.length} bytes in ${fetchTime}ms`);
+
+    // Transform to markdown
+    console.log(`\n🔄 Transforming to markdown...`);
+    const transformStart = Date.now();
+    const result = await transformHtmlToMarkdown(html, url, {
+      includeMetadata: true,
+      signal: options.signal,
+    });
+    const transformTime = Date.now() - transformStart;
+    console.log(`✓ Transformed in ${transformTime}ms`);
+
+    const totalTime = Date.now() - startTime;
+
+    return {
+      success: true,
+      markdown: result.markdown,
+      title: result.title,
+      url: result.url,
+      truncated: result.truncated,
+      timing: {
+        fetch: fetchTime,
+        transform: transformTime,
+        total: totalTime,
+      },
+      stats: {
+        htmlLength: html.length,
+        markdownLength: result.markdown.length,
+      },
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message,
+      timing: {
+        total: Date.now() - startTime,
+      },
+    };
+  }
+}
+
+/**
+ * Run validations on markdown output
+ */
+async function runValidations(markdown, validations, options = {}) {
+  const results = [];
+
+  for (const [key, value] of Object.entries(validations)) {
+    const validator = validators[key];
+    if (!validator) {
+      console.warn(`⚠️  Unknown validator: ${key}`);
+      continue;
+    }
+
+    console.log(`\n📋 Running: ${validator.name}`);
+    const result = await validator.validate(markdown, value);
+
+    results.push({
+      validator: key,
+      name: validator.name,
+      ...result,
+    });
+
+    console.log(`   ${result.message}`);
+    if (options.verbose && result.details) {
+      console.log(`   Details:`, JSON.stringify(result.details, null, 2));
+    }
+  }
+
+  return results;
+}
+
+/**
+ * Run a single test
+ */
+async function runTest(test, options = {}) {
+  console.log(`\n${'='.repeat(80)}`);
+  console.log(`📝 Test: ${test.name || test.url}`);
+  console.log(`${'='.repeat(80)}`);
+
+  // Fetch and transform
+  const fetchResult = await fetchAndTransform(test.url, options);
+
+  if (!fetchResult.success) {
+    console.error(`\n❌ Fetch failed: ${fetchResult.error}`);
+    return {
+      testName: test.name || test.url,
+      passed: false,
+      error: fetchResult.error,
+    };
+  }
+
+  // Display basic info
+  console.log(`\n📊 Output Summary:`);
+  console.log(`   Title: ${fetchResult.title || '(none)'}`);
+  console.log(`   Length: ${fetchResult.stats.markdownLength} chars`);
+  console.log(`   Truncated: ${fetchResult.truncated ? 'Yes' : 'No'}`);
+  console.log(`   Timing: ${fetchResult.timing.total}ms total`);
+
+  // Save output if requested
+  if (test.saveOutput) {
+    const outputPath = resolve(projectRoot, test.saveOutput);
+    await mkdir(dirname(outputPath), { recursive: true });
+    await writeFile(outputPath, fetchResult.markdown, 'utf-8');
+    console.log(`\n💾 Saved output to: ${test.saveOutput}`);
+  }
+
+  // Run validations
+  let validationResults = [];
+  if (test.validations && Object.keys(test.validations).length > 0) {
+    console.log(`\n🔍 Validations:`);
+    validationResults = await runValidations(
+      fetchResult.markdown,
+      test.validations,
+      options
+    );
+  }
+
+  const allPassed = validationResults.every((r) => r.passed);
+
+  // Summary
+  console.log(`\n${'─'.repeat(80)}`);
+  if (allPassed) {
+    console.log(`✅ Test PASSED: ${test.name || test.url}`);
+  } else {
+    console.log(`❌ Test FAILED: ${test.name || test.url}`);
+    const failedValidations = validationResults.filter((r) => !r.passed);
+    console.log(
+      `   Failed validations: ${failedValidations.map((v) => v.name).join(', ')}`
+    );
+  }
+  console.log(`${'─'.repeat(80)}`);
+
+  return {
+    testName: test.name || test.url,
+    passed: allPassed,
+    fetchResult,
+    validationResults,
+  };
+}
+
+// ============================================================================
+// CLI Interface
+// ============================================================================
+
+function printHelp() {
+  console.log(`
+Reusable URL Fetch Validation Script
+
+Usage:
+  node scripts/validate-fetch.mjs <url> [options]
+  node scripts/validate-fetch.mjs --config <config.json>
+
+Options:
+  --config <file>         Load test config from JSON file
+  --expect-text <text>    Comma-separated texts that must be present
+  --expect-code-blocks    Require at least one code block (same as --min-code-blocks 1)
+  --min-code-blocks <n>   Minimum number of code blocks required
+  --min-length <n>        Minimum markdown length in characters
+  --reference <file>      Compare against reference markdown file
+  --save-output <file>    Save markdown output to file
+  --verbose               Show detailed output
+  --help                  Show this help
+
+Examples:
+  # Quick test with text expectations
+  node scripts/validate-fetch.mjs https://example.com --expect-text "Hello,World"
+  
+  # Comprehensive validation
+  node scripts/validate-fetch.mjs https://example.com \\
+    --expect-text "Hello,World" \\
+    --min-code-blocks 5 \\
+    --min-length 10000 \\
+    --save-output .github/test-output.md
+  
+  # Run multiple tests from config
+  node scripts/validate-fetch.mjs --config test-config.json
+
+Config file format (JSON):
+{
+  "tests": [
+    {
+      "name": "Test Name",
+      "url": "https://example.com",
+      "validations": {
+        "expectText": ["text1", "text2"],
+        "minCodeBlocks": 10,
+        "minLength": 15000,
+        "expectStructure": ["headings", "code-blocks", "links"]
+      },
+      "saveOutput": "path/to/output.md"
+    }
+  ]
+}
+`);
+}
+
+function parseArgs(args) {
+  const parsed = {
+    url: null,
+    config: null,
+    validations: {},
+    saveOutput: null,
+    verbose: false,
+    help: false,
+  };
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+
+    if (arg === '--help') {
+      parsed.help = true;
+    } else if (arg === '--config') {
+      parsed.config = args[++i];
+    } else if (arg === '--expect-text') {
+      parsed.validations.expectText = args[++i].split(',').map((s) => s.trim());
+    } else if (arg === '--expect-code-blocks') {
+      parsed.validations.minCodeBlocks = 1;
+    } else if (arg === '--min-code-blocks') {
+      parsed.validations.minCodeBlocks = parseInt(args[++i], 10);
+    } else if (arg === '--min-length') {
+      parsed.validations.minLength = parseInt(args[++i], 10);
+    } else if (arg === '--reference') {
+      parsed.validations.reference = args[++i];
+    } else if (arg === '--save-output') {
+      parsed.saveOutput = args[++i];
+    } else if (arg === '--verbose') {
+      parsed.verbose = true;
+    } else if (!arg.startsWith('--')) {
+      parsed.url = arg;
+    }
+  }
+
+  return parsed;
+}
+
+async function main() {
+  const args = process.argv.slice(2);
+
+  if (args.length === 0 || args.includes('--help')) {
+    printHelp();
+    process.exit(0);
+  }
+
+  const parsed = parseArgs(args);
+
+  if (parsed.help) {
+    printHelp();
+    process.exit(0);
+  }
+
+  let tests = [];
+
+  // Load from config file
+  if (parsed.config) {
+    const configPath = resolve(projectRoot, parsed.config);
+    const configContent = await readFile(configPath, 'utf-8');
+    const config = JSON.parse(configContent);
+    tests = config.tests || [];
+    console.log(
+      `📁 Loaded ${tests.length} tests from config: ${parsed.config}`
+    );
+  }
+  // Create test from CLI args
+  else if (parsed.url) {
+    tests = [
+      {
+        name: parsed.url,
+        url: parsed.url,
+        validations: parsed.validations,
+        saveOutput: parsed.saveOutput,
+      },
+    ];
+  } else {
+    console.error('❌ Error: No URL or config file provided');
+    printHelp();
+    process.exit(1);
+  }
+
+  // Run tests
+  const results = [];
+  for (const test of tests) {
+    const result = await runTest(test, { verbose: parsed.verbose });
+    results.push(result);
+  }
+
+  // Final summary
+  console.log(`\n${'='.repeat(80)}`);
+  console.log(`📊 Final Summary`);
+  console.log(`${'='.repeat(80)}`);
+  console.log(`Total tests: ${results.length}`);
+  console.log(`Passed: ${results.filter((r) => r.passed).length}`);
+  console.log(`Failed: ${results.filter((r) => !r.passed).length}`);
+
+  if (results.some((r) => !r.passed)) {
+    console.log(`\n❌ Failed tests:`);
+    results
+      .filter((r) => !r.passed)
+      .forEach((r) => {
+        console.log(`   - ${r.testName}`);
+        if (r.error) {
+          console.log(`     Error: ${r.error}`);
+        }
+      });
+    process.exit(1);
+  } else {
+    console.log(`\n✅ All tests passed!`);
+    process.exit(0);
+  }
+}
+
+main().catch((error) => {
+  console.error('❌ Fatal error:', error);
+  process.exit(1);
+});

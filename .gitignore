@@ -55,4 +55,6 @@ coverage/
 .jscpd/
 reports/
 metrics/
-scripts/
+scripts/*
+!scripts/build.mjs
+!scripts/validate-fetch.mjs

@@ -20,9 +20,23 @@ import {
 } from './observability.js';
 import { isObject } from './type-guards.js';
 
+/* -------------------------------------------------------------------------------------------------
+ * Public types
+ * ------------------------------------------------------------------------------------------------- */
+
 export interface FetchOptions {
   signal?: AbortSignal;
 }
+
+export interface TransformResult {
+  readonly url: string;
+  readonly transformed: boolean;
+  readonly platform?: string;
+}
+
+/* -------------------------------------------------------------------------------------------------
+ * SSRF / IP blocking
+ * ------------------------------------------------------------------------------------------------- */
 
 type IpSegment = number | string;
 
@@ -44,10 +58,7 @@ const IPV6_FC00 = buildIpv6(['fc00', 0, 0, 0, 0, 0, 0, 0]);
 const IPV6_FE80 = buildIpv6(['fe80', 0, 0, 0, 0, 0, 0, 0]);
 const IPV6_FF00 = buildIpv6(['ff00', 0, 0, 0, 0, 0, 0, 0]);
 
-const BLOCKED_IPV4_SUBNETS: readonly {
-  subnet: string;
-  prefix: number;
-}[] = [
+const BLOCKED_IPV4_SUBNETS: readonly { subnet: string; prefix: number }[] = [
   { subnet: buildIpv4([0, 0, 0, 0]), prefix: 8 },
   { subnet: buildIpv4([10, 0, 0, 0]), prefix: 8 },
   { subnet: buildIpv4([100, 64, 0, 0]), prefix: 10 },
@@ -58,10 +69,8 @@ const BLOCKED_IPV4_SUBNETS: readonly {
   { subnet: buildIpv4([224, 0, 0, 0]), prefix: 4 },
   { subnet: buildIpv4([240, 0, 0, 0]), prefix: 4 },
 ];
-const BLOCKED_IPV6_SUBNETS: readonly {
-  subnet: string;
-  prefix: number;
-}[] = [
+
+const BLOCKED_IPV6_SUBNETS: readonly { subnet: string; prefix: number }[] = [
   { subnet: IPV6_ZERO, prefix: 128 },
   { subnet: IPV6_LOOPBACK, prefix: 128 },
   { subnet: IPV6_64_FF9B, prefix: 96 },
@@ -73,75 +82,57 @@ const BLOCKED_IPV6_SUBNETS: readonly {
   { subnet: IPV6_FF00, prefix: 8 },
 ];
 
-let cachedBlockList: BlockList | undefined;
+class IpBlocker {
+  private cachedBlockList: BlockList | undefined;
 
-function getBlockList(): BlockList {
-  if (!cachedBlockList) {
-    cachedBlockList = new BlockList();
-    for (const entry of BLOCKED_IPV4_SUBNETS) {
-      cachedBlockList.addSubnet(entry.subnet, entry.prefix, 'ipv4');
-    }
-    for (const entry of BLOCKED_IPV6_SUBNETS) {
-      cachedBlockList.addSubnet(entry.subnet, entry.prefix, 'ipv6');
-    }
+  isBlockedIp(candidate: string): boolean {
+    if (config.security.blockedHosts.has(candidate)) return true;
+
+    const ipType = this.resolveIpType(candidate);
+    if (!ipType) return false;
+
+    const normalized = candidate.toLowerCase();
+    if (this.isBlockedBySubnetList(normalized, ipType)) return true;
+
+    return (
+      config.security.blockedIpPattern.test(normalized) ||
+      config.security.blockedIpv4MappedPattern.test(normalized)
+    );
   }
-  return cachedBlockList;
+
+  private resolveIpType(ip: string): 4 | 6 | null {
+    const ipType = isIP(ip);
+    return ipType === 4 || ipType === 6 ? ipType : null;
+  }
+
+  private isBlockedBySubnetList(ip: string, ipType: 4 | 6): boolean {
+    const list = this.getBlockList();
+    return ipType === 4 ? list.check(ip, 'ipv4') : list.check(ip, 'ipv6');
+  }
+
+  private getBlockList(): BlockList {
+    if (!this.cachedBlockList) {
+      const list = new BlockList();
+      for (const entry of BLOCKED_IPV4_SUBNETS)
+        list.addSubnet(entry.subnet, entry.prefix, 'ipv4');
+      for (const entry of BLOCKED_IPV6_SUBNETS)
+        list.addSubnet(entry.subnet, entry.prefix, 'ipv6');
+      this.cachedBlockList = list;
+    }
+    return this.cachedBlockList;
+  }
 }
 
-function matchesBlockedIpPatterns(resolvedIp: string): boolean {
-  return (
-    config.security.blockedIpPattern.test(resolvedIp) ||
-    config.security.blockedIpv4MappedPattern.test(resolvedIp)
-  );
-}
+const ipBlocker = new IpBlocker();
 
+/** Backwards-compatible export */
 export function isBlockedIp(ip: string): boolean {
-  if (config.security.blockedHosts.has(ip)) {
-    return true;
-  }
-  const ipType = resolveIpType(ip);
-  if (!ipType) return false;
-  const normalizedIp = ip.toLowerCase();
-  if (isBlockedByList(normalizedIp, ipType)) return true;
-  return matchesBlockedIpPatterns(normalizedIp);
+  return ipBlocker.isBlockedIp(ip);
 }
 
-function resolveIpType(ip: string): 4 | 6 | null {
-  const ipType = isIP(ip);
-  return ipType === 4 || ipType === 6 ? ipType : null;
-}
-
-function isBlockedByList(ip: string, ipType: 4 | 6): boolean {
-  const blockList = getBlockList();
-  if (ipType === 4) {
-    return blockList.check(ip, 'ipv4');
-  }
-  return blockList.check(ip, 'ipv6');
-}
-
-export function normalizeUrl(urlString: string): {
-  normalizedUrl: string;
-  hostname: string;
-} {
-  const trimmedUrl = requireTrimmedUrl(urlString);
-  assertUrlLength(trimmedUrl);
-
-  const url = parseUrl(trimmedUrl);
-  assertHttpProtocol(url);
-  assertNoCredentials(url);
-
-  const hostname = normalizeHostname(url);
-  assertHostnameAllowed(hostname);
-
-  // Canonicalize hostname to avoid trailing-dot variants and keep url.href consistent.
-  url.hostname = hostname;
-
-  return { normalizedUrl: url.href, hostname };
-}
-
-export function validateAndNormalizeUrl(urlString: string): string {
-  return normalizeUrl(urlString).normalizedUrl;
-}
+/* -------------------------------------------------------------------------------------------------
+ * URL normalization & hostname policy
+ * ------------------------------------------------------------------------------------------------- */
 
 const VALIDATION_ERROR_CODE = 'VALIDATION_ERROR';
 
@@ -149,94 +140,123 @@ function createValidationError(message: string): Error {
   return createErrorWithCode(message, VALIDATION_ERROR_CODE);
 }
 
-function requireTrimmedUrl(urlString: string): string {
-  if (!urlString || typeof urlString !== 'string') {
-    throw createValidationError('URL is required');
-  }
-
-  const trimmedUrl = urlString.trim();
-  if (!trimmedUrl) {
-    throw createValidationError('URL cannot be empty');
-  }
-
-  return trimmedUrl;
-}
-
-function assertUrlLength(url: string): void {
-  if (url.length <= config.constants.maxUrlLength) return;
-  throw createValidationError(
-    `URL exceeds maximum length of ${config.constants.maxUrlLength} characters`
-  );
-}
-
-function parseUrl(urlString: string): URL {
-  if (!URL.canParse(urlString)) {
-    throw createValidationError('Invalid URL format');
-  }
-  return new URL(urlString);
-}
-
-function assertHttpProtocol(url: URL): void {
-  if (url.protocol === 'http:' || url.protocol === 'https:') return;
-  throw createValidationError(
-    `Invalid protocol: ${url.protocol}. Only http: and https: are allowed`
-  );
-}
-
-function assertNoCredentials(url: URL): void {
-  if (!url.username && !url.password) return;
-  throw createValidationError('URLs with embedded credentials are not allowed');
-}
-
-function normalizeHostname(url: URL): string {
-  let hostname = url.hostname.toLowerCase();
-  while (hostname.endsWith('.')) {
-    hostname = hostname.slice(0, -1);
-  }
-  if (!hostname) {
-    throw createValidationError('URL must have a valid hostname');
-  }
-  return hostname;
-}
-
 const BLOCKED_HOST_SUFFIXES: readonly string[] = ['.local', '.internal'];
 
-function assertHostnameAllowed(hostname: string): void {
-  assertNotBlockedHost(hostname);
-  assertNotBlockedIp(hostname);
-  assertNotBlockedHostnameSuffix(hostname);
+class UrlNormalizer {
+  normalize(urlString: string): { normalizedUrl: string; hostname: string } {
+    const trimmedUrl = this.requireTrimmedUrl(urlString);
+    this.assertUrlLength(trimmedUrl);
+
+    const url = this.parseUrl(trimmedUrl);
+    this.assertHttpProtocol(url);
+    this.assertNoCredentials(url);
+
+    const hostname = this.normalizeHostname(url);
+    this.assertHostnameAllowed(hostname);
+
+    // Canonicalize hostname to avoid trailing-dot variants and keep url.href consistent.
+    url.hostname = hostname;
+
+    return { normalizedUrl: url.href, hostname };
+  }
+
+  validateAndNormalize(urlString: string): string {
+    return this.normalize(urlString).normalizedUrl;
+  }
+
+  private requireTrimmedUrl(urlString: string): string {
+    if (!urlString || typeof urlString !== 'string') {
+      throw createValidationError('URL is required');
+    }
+
+    const trimmed = urlString.trim();
+    if (!trimmed) throw createValidationError('URL cannot be empty');
+    return trimmed;
+  }
+
+  private assertUrlLength(url: string): void {
+    if (url.length <= config.constants.maxUrlLength) return;
+    throw createValidationError(
+      `URL exceeds maximum length of ${config.constants.maxUrlLength} characters`
+    );
+  }
+
+  private parseUrl(urlString: string): URL {
+    if (!URL.canParse(urlString))
+      throw createValidationError('Invalid URL format');
+    return new URL(urlString);
+  }
+
+  private assertHttpProtocol(url: URL): void {
+    if (url.protocol === 'http:' || url.protocol === 'https:') return;
+    throw createValidationError(
+      `Invalid protocol: ${url.protocol}. Only http: and https: are allowed`
+    );
+  }
+
+  private assertNoCredentials(url: URL): void {
+    if (!url.username && !url.password) return;
+    throw createValidationError(
+      'URLs with embedded credentials are not allowed'
+    );
+  }
+
+  private normalizeHostname(url: URL): string {
+    let hostname = url.hostname.toLowerCase();
+    while (hostname.endsWith('.')) hostname = hostname.slice(0, -1);
+    if (!hostname)
+      throw createValidationError('URL must have a valid hostname');
+    return hostname;
+  }
+
+  private assertHostnameAllowed(hostname: string): void {
+    this.assertNotBlockedHost(hostname);
+    this.assertNotBlockedIp(hostname);
+    this.assertNotBlockedHostnameSuffix(hostname);
+  }
+
+  private assertNotBlockedHost(hostname: string): void {
+    if (!config.security.blockedHosts.has(hostname)) return;
+    throw createValidationError(
+      `Blocked host: ${hostname}. Internal hosts are not allowed`
+    );
+  }
+
+  private assertNotBlockedIp(hostname: string): void {
+    if (!ipBlocker.isBlockedIp(hostname)) return;
+    throw createValidationError(
+      `Blocked IP range: ${hostname}. Private IPs are not allowed`
+    );
+  }
+
+  private assertNotBlockedHostnameSuffix(hostname: string): void {
+    const blocked = BLOCKED_HOST_SUFFIXES.some((suffix) =>
+      hostname.endsWith(suffix)
+    );
+    if (!blocked) return;
+    throw createValidationError(
+      `Blocked hostname pattern: ${hostname}. Internal domain suffixes are not allowed`
+    );
+  }
 }
 
-function assertNotBlockedHost(hostname: string): void {
-  if (!config.security.blockedHosts.has(hostname)) return;
-  throw createValidationError(
-    `Blocked host: ${hostname}. Internal hosts are not allowed`
-  );
+const urlNormalizer = new UrlNormalizer();
+
+/** Backwards-compatible exports */
+export function normalizeUrl(urlString: string): {
+  normalizedUrl: string;
+  hostname: string;
+} {
+  return urlNormalizer.normalize(urlString);
 }
 
-function assertNotBlockedIp(hostname: string): void {
-  if (!isBlockedIp(hostname)) return;
-  throw createValidationError(
-    `Blocked IP range: ${hostname}. Private IPs are not allowed`
-  );
+export function validateAndNormalizeUrl(urlString: string): string {
+  return urlNormalizer.validateAndNormalize(urlString);
 }
 
-function assertNotBlockedHostnameSuffix(hostname: string): void {
-  if (!matchesBlockedSuffix(hostname)) return;
-  throw createValidationError(
-    `Blocked hostname pattern: ${hostname}. Internal domain suffixes are not allowed`
-  );
-}
-
-function matchesBlockedSuffix(hostname: string): boolean {
-  return BLOCKED_HOST_SUFFIXES.some((suffix) => hostname.endsWith(suffix));
-}
-
-export interface TransformResult {
-  readonly url: string;
-  readonly transformed: boolean;
-  readonly platform?: string;
-}
+/* -------------------------------------------------------------------------------------------------
+ * Raw URL transformation
+ * ------------------------------------------------------------------------------------------------- */
 
 interface TransformRule {
   readonly name: string;
@@ -305,83 +325,6 @@ const TRANSFORM_RULES: readonly TransformRule[] = [
 
 const BITBUCKET_RAW_RE = /bitbucket\.org\/[^/]+\/[^/]+\/raw\//;
 
-function isRawUrl(url: string): boolean {
-  const lowerUrl = url.toLowerCase();
-  return (
-    lowerUrl.includes('raw.githubusercontent.com') ||
-    lowerUrl.includes('gist.githubusercontent.com') ||
-    lowerUrl.includes('/-/raw/') ||
-    BITBUCKET_RAW_RE.test(lowerUrl)
-  );
-}
-
-function getUrlWithoutParams(url: string): {
-  base: string;
-  hash: string;
-} {
-  const hashIndex = url.indexOf('#');
-  const queryIndex = url.indexOf('?');
-  const endIndex = Math.min(
-    queryIndex === -1 ? url.length : queryIndex,
-    hashIndex === -1 ? url.length : hashIndex
-  );
-
-  const hash = hashIndex !== -1 ? url.slice(hashIndex) : '';
-
-  return {
-    base: url.slice(0, endIndex),
-    hash,
-  };
-}
-
-function resolveUrlToMatch(
-  rule: TransformRule,
-  base: string,
-  hash: string
-): string {
-  if (rule.name !== 'github-gist') return base;
-  if (!hash.startsWith('#file-')) return base;
-  return base + hash;
-}
-
-function applyTransformRules(
-  base: string,
-  hash: string
-): { url: string; platform: string } | null {
-  for (const rule of TRANSFORM_RULES) {
-    const urlToMatch = resolveUrlToMatch(rule, base, hash);
-
-    const match = rule.pattern.exec(urlToMatch);
-    if (match) {
-      return { url: rule.transform(match), platform: rule.name };
-    }
-  }
-
-  return null;
-}
-
-export function transformToRawUrl(url: string): TransformResult {
-  if (!url) return { url, transformed: false };
-  if (isRawUrl(url)) {
-    return { url, transformed: false };
-  }
-
-  const { base, hash } = getUrlWithoutParams(url);
-  const result = applyTransformRules(base, hash);
-  if (!result) return { url, transformed: false };
-
-  logDebug('URL transformed to raw content URL', {
-    platform: result.platform,
-    original: url.substring(0, 100),
-    transformed: result.url.substring(0, 100),
-  });
-  return {
-    url: result.url,
-    transformed: true,
-    platform: result.platform,
-  };
-}
-
 const RAW_TEXT_EXTENSIONS = new Set([
   '.md',
   '.markdown',
@@ -397,103 +340,88 @@ const RAW_TEXT_EXTENSIONS = new Set([
   '.org',
 ]);
 
+class RawUrlTransformer {
+  transformToRawUrl(url: string): TransformResult {
+    if (!url) return { url, transformed: false };
+    if (this.isRawUrl(url)) return { url, transformed: false };
+
+    const { base, hash } = this.splitParams(url);
+    const result = this.applyRules(base, hash);
+    if (!result) return { url, transformed: false };
+
+    logDebug('URL transformed to raw content URL', {
+      platform: result.platform,
+      original: url.substring(0, 100),
+      transformed: result.url.substring(0, 100),
+    });
+
+    return { url: result.url, transformed: true, platform: result.platform };
+  }
+
+  isRawTextContentUrl(url: string): boolean {
+    if (!url) return false;
+    if (this.isRawUrl(url)) return true;
+
+    const { base } = this.splitParams(url);
+    const lowerBase = base.toLowerCase();
+    const lastDot = lowerBase.lastIndexOf('.');
+    if (lastDot === -1) return false;
+
+    return RAW_TEXT_EXTENSIONS.has(lowerBase.slice(lastDot));
+  }
+
+  private isRawUrl(url: string): boolean {
+    const lower = url.toLowerCase();
+    return (
+      lower.includes('raw.githubusercontent.com') ||
+      lower.includes('gist.githubusercontent.com') ||
+      lower.includes('/-/raw/') ||
+      BITBUCKET_RAW_RE.test(lower)
+    );
+  }
+
+  private splitParams(url: string): { base: string; hash: string } {
+    const hashIndex = url.indexOf('#');
+    const queryIndex = url.indexOf('?');
+    const endIndex = Math.min(
+      queryIndex === -1 ? url.length : queryIndex,
+      hashIndex === -1 ? url.length : hashIndex
+    );
+
+    const hash = hashIndex !== -1 ? url.slice(hashIndex) : '';
+    return { base: url.slice(0, endIndex), hash };
+  }
+
+  private applyRules(
+    base: string,
+    hash: string
+  ): { url: string; platform: string } | null {
+    for (const rule of TRANSFORM_RULES) {
+      const urlToMatch =
+        rule.name === 'github-gist' && hash.startsWith('#file-')
+          ? base + hash
+          : base;
+      const match = rule.pattern.exec(urlToMatch);
+      if (match) return { url: rule.transform(match), platform: rule.name };
+    }
+    return null;
+  }
+}
+
+const rawUrlTransformer = new RawUrlTransformer();
+
+/** Backwards-compatible exports */
+export function transformToRawUrl(url: string): TransformResult {
+  return rawUrlTransformer.transformToRawUrl(url);
+}
+
 export function isRawTextContentUrl(url: string): boolean {
-  if (!url) return false;
-  if (isRawUrl(url)) return true;
-
-  const { base } = getUrlWithoutParams(url);
-  const lowerBase = base.toLowerCase();
-
-  return hasKnownRawTextExtension(lowerBase);
+  return rawUrlTransformer.isRawTextContentUrl(url);
 }
 
-function hasKnownRawTextExtension(urlBaseLower: string): boolean {
-  const lastDot = urlBaseLower.lastIndexOf('.');
-  if (lastDot === -1) return false;
-  const ext = urlBaseLower.slice(lastDot);
-  return RAW_TEXT_EXTENSIONS.has(ext);
-}
-
-const DNS_LOOKUP_TIMEOUT_MS = 5000;
-const SLOW_REQUEST_THRESHOLD_MS = 5000;
-
-function normalizeLookupResults(
-  addresses: string | dns.LookupAddress[],
-  family: number | undefined
-): dns.LookupAddress[] {
-  if (Array.isArray(addresses)) {
-    return addresses;
-  }
-
-  return [{ address: addresses, family: family ?? 4 }];
-}
-
-function createNoDnsResultsError(hostname: string): NodeJS.ErrnoException {
-  return createErrorWithCode(
-    `No DNS results returned for ${hostname}`,
-    'ENODATA'
-  );
-}
-
-function createEmptySelection(hostname: string): {
-  address: string | dns.LookupAddress[];
-  family?: number;
-  error?: NodeJS.ErrnoException;
-  fallback: dns.LookupAddress[];
-} {
-  return {
-    error: createNoDnsResultsError(hostname),
-    fallback: [],
-    address: [],
-  };
-}
-
-function selectLookupResult(
-  list: dns.LookupAddress[],
-  useAll: boolean,
-  hostname: string
-): {
-  address: string | dns.LookupAddress[];
-  family?: number;
-  error?: NodeJS.ErrnoException;
-  fallback: dns.LookupAddress[];
-} {
-  if (list.length === 0) return createEmptySelection(hostname);
-
-  if (useAll) return { address: list, fallback: list };
-
-  const first = list.at(0);
-  if (!first) return createEmptySelection(hostname);
-
-  return {
-    address: first.address,
-    family: first.family,
-    fallback: list,
-  };
-}
-
-function findLookupError(
-  list: dns.LookupAddress[],
-  hostname: string
-): NodeJS.ErrnoException | null {
-  for (const addr of list) {
-    const family = typeof addr === 'string' ? 0 : addr.family;
-    if (family !== 4 && family !== 6) {
-      return createErrorWithCode(
-        `Invalid address family returned for ${hostname}`,
-        'EINVAL'
-      );
-    }
-    const ip = typeof addr === 'string' ? addr : addr.address;
-    if (isBlockedIp(ip)) {
-      return createErrorWithCode(
-        `Blocked IP detected for ${hostname}`,
-        'EBLOCKED'
-      );
-    }
-  }
-  return null;
-}
+/* -------------------------------------------------------------------------------------------------
+ * Safe DNS lookup for undici Agent
+ * ------------------------------------------------------------------------------------------------- */
 
 type LookupCallback = (
   err: NodeJS.ErrnoException | null,
@@ -501,204 +429,204 @@ type LookupCallback = (
   family?: number
 ) => void;
 
-function normalizeAndValidateLookupResults(
-  addresses: string | dns.LookupAddress[],
-  resolvedFamily: number | undefined,
-  hostname: string
-): { list: dns.LookupAddress[]; error: NodeJS.ErrnoException | null } {
-  const list = normalizeLookupResults(addresses, resolvedFamily);
-  const error = findLookupError(list, hostname);
-  return { list, error };
-}
+const DNS_LOOKUP_TIMEOUT_MS = 5000;
 
-function respondLookupError(
-  callback: LookupCallback,
-  error: NodeJS.ErrnoException,
-  addresses: string | dns.LookupAddress[]
-): void {
-  callback(error, addresses);
-}
+class SafeDnsLookup {
+  lookup(
+    hostname: string,
+    options: dns.LookupOptions | number,
+    callback: LookupCallback
+  ): void {
+    const normalizedOptions = this.normalizeOptions(options);
+    const useAll = Boolean(normalizedOptions.all);
+    const resolvedFamily = this.resolveFamily(normalizedOptions.family);
 
-function respondLookupSelection(
-  callback: LookupCallback,
-  selection: ReturnType<typeof selectLookupResult>
-): void {
-  if (selection.error) {
-    callback(selection.error, selection.fallback);
-    return;
-  }
-  callback(null, selection.address, selection.family);
-}
+    const lookupOptions: dns.LookupOptions = {
+      family: normalizedOptions.family,
+      hints: normalizedOptions.hints,
+      all: true, // Always request all results; we select based on caller preference.
+      order: this.resolveOrder(normalizedOptions),
+    };
 
-function handleLookupResult(
-  error: NodeJS.ErrnoException | null,
-  addresses: string | dns.LookupAddress[],
-  hostname: string,
-  resolvedFamily: number | undefined,
-  useAll: boolean,
-  callback: LookupCallback
-): void {
-  if (error) {
-    respondLookupError(callback, error, addresses);
-    return;
+    const timeout = this.createTimeout(hostname, callback);
+    const safeCallback: LookupCallback = (err, address, family) => {
+      if (timeout.isDone()) return;
+      timeout.markDone();
+      callback(err, address, family);
+    };
+
+    dns.lookup(hostname, lookupOptions, (err, addresses) => {
+      this.handleLookupResult(
+        err,
+        addresses,
+        hostname,
+        resolvedFamily,
+        useAll,
+        safeCallback
+      );
+    });
   }
 
-  const { list, error: lookupError } = normalizeAndValidateLookupResults(
-    addresses,
-    resolvedFamily,
-    hostname
-  );
-  if (lookupError) {
-    respondLookupError(callback, lookupError, list);
-    return;
+  private normalizeOptions(
+    options: dns.LookupOptions | number
+  ): dns.LookupOptions {
+    return typeof options === 'number' ? { family: options } : options;
   }
 
-  respondLookupSelection(callback, selectLookupResult(list, useAll, hostname));
-}
-
-function resolveDns(
-  hostname: string,
-  options: dns.LookupOptions,
-  callback: LookupCallback
-): void {
-  const { normalizedOptions, useAll, resolvedFamily } =
-    buildLookupContext(options);
-  const lookupOptions = buildLookupOptions(normalizedOptions);
-
-  const timeout = createLookupTimeout(hostname, callback);
-  const safeCallback = wrapLookupCallback(callback, timeout);
-
-  dns.lookup(
-    hostname,
-    lookupOptions,
-    createLookupCallback(hostname, resolvedFamily, useAll, safeCallback)
-  );
-}
-
-function normalizeLookupOptions(
-  options: dns.LookupOptions | number
-): dns.LookupOptions {
-  return typeof options === 'number' ? { family: options } : options;
-}
-
-function buildLookupContext(options: dns.LookupOptions | number): {
-  normalizedOptions: dns.LookupOptions;
-  useAll: boolean;
-  resolvedFamily: number | undefined;
-} {
-  const normalizedOptions = normalizeLookupOptions(options);
-  return {
-    normalizedOptions,
-    useAll: Boolean(normalizedOptions.all),
-    resolvedFamily: resolveFamily(normalizedOptions.family),
-  };
-}
-
-const DEFAULT_DNS_ORDER: dns.LookupOptions['order'] = 'verbatim';
-
-function resolveResultOrder(
-  options: dns.LookupOptions
-): dns.LookupOptions['order'] {
-  if (options.order) return options.order;
-  const legacyVerbatim = getLegacyVerbatim(options);
-  if (legacyVerbatim !== undefined) {
-    return legacyVerbatim ? 'verbatim' : 'ipv4first';
+  private resolveFamily(
+    family: dns.LookupOptions['family']
+  ): number | undefined {
+    if (family === 'IPv4') return 4;
+    if (family === 'IPv6') return 6;
+    return family;
   }
-  return DEFAULT_DNS_ORDER;
-}
 
-function getLegacyVerbatim(options: dns.LookupOptions): boolean | undefined {
-  if (isObject(options)) {
-    const { verbatim } = options;
-    return typeof verbatim === 'boolean' ? verbatim : undefined;
+  private resolveOrder(options: dns.LookupOptions): dns.LookupOptions['order'] {
+    if (options.order) return options.order;
+
+    // legacy `verbatim` option support
+    if (isObject(options)) {
+      const legacy = (options as { verbatim?: unknown }).verbatim;
+      if (typeof legacy === 'boolean') return legacy ? 'verbatim' : 'ipv4first';
+    }
+
+    return 'verbatim';
   }
-  return undefined;
-}
 
-function buildLookupOptions(
-  normalizedOptions: dns.LookupOptions
-): dns.LookupOptions {
-  return {
-    family: normalizedOptions.family,
-    hints: normalizedOptions.hints,
-    all: true,
-    order: resolveResultOrder(normalizedOptions),
-  };
-}
+  private handleLookupResult(
+    error: NodeJS.ErrnoException | null,
+    addresses: string | dns.LookupAddress[],
+    hostname: string,
+    resolvedFamily: number | undefined,
+    useAll: boolean,
+    callback: LookupCallback
+  ): void {
+    if (error) {
+      callback(error, addresses);
+      return;
+    }
 
-function createLookupCallback(
-  hostname: string,
-  resolvedFamily: number | undefined,
-  useAll: boolean,
-  callback: LookupCallback
-): (
-  err: NodeJS.ErrnoException | null,
-  addresses: string | dns.LookupAddress[]
-) => void {
-  return (err, addresses) => {
-    handleLookupResult(
-      err,
-      addresses,
-      hostname,
-      resolvedFamily,
-      useAll,
-      callback
-    );
-  };
-}
+    const list = this.normalizeResults(addresses, resolvedFamily);
+    const validationError = this.validateResults(list, hostname);
+    if (validationError) {
+      callback(validationError, list);
+      return;
+    }
 
-function resolveFamily(
-  family: dns.LookupOptions['family']
-): number | undefined {
-  if (family === 'IPv4') return 4;
-  if (family === 'IPv6') return 6;
-  return family;
-}
+    const selection = this.selectResult(list, useAll, hostname);
+    if (selection.error) {
+      callback(selection.error, selection.fallback);
+      return;
+    }
 
-function createLookupTimeout(
-  hostname: string,
-  callback: (
-    err: NodeJS.ErrnoException | null,
-    address: string | dns.LookupAddress[],
-    family?: number
-  ) => void
-): {
-  isDone: () => boolean;
-  markDone: () => void;
-} {
-  let done = false;
-  const timer = setTimeout(() => {
-    if (done) return;
-    done = true;
-    callback(
-      createErrorWithCode(`DNS lookup timed out for ${hostname}`, 'ETIMEOUT'),
-      []
-    );
-  }, DNS_LOOKUP_TIMEOUT_MS);
-  timer.unref();
+    callback(null, selection.address, selection.family);
+  }
 
-  return {
-    isDone: (): boolean => done,
-    markDone: (): void => {
+  private normalizeResults(
+    addresses: string | dns.LookupAddress[],
+    family: number | undefined
+  ): dns.LookupAddress[] {
+    if (Array.isArray(addresses)) return addresses;
+    return [{ address: addresses, family: family ?? 4 }];
+  }
+
+  private validateResults(
+    list: dns.LookupAddress[],
+    hostname: string
+  ): NodeJS.ErrnoException | null {
+    if (list.length === 0) {
+      return createErrorWithCode(
+        `No DNS results returned for ${hostname}`,
+        'ENODATA'
+      );
+    }
+
+    for (const addr of list) {
+      if (addr.family !== 4 && addr.family !== 6) {
+        return createErrorWithCode(
+          `Invalid address family returned for ${hostname}`,
+          'EINVAL'
+        );
+      }
+      if (ipBlocker.isBlockedIp(addr.address)) {
+        return createErrorWithCode(
+          `Blocked IP detected for ${hostname}`,
+          'EBLOCKED'
+        );
+      }
+    }
+
+    return null;
+  }
+
+  private selectResult(
+    list: dns.LookupAddress[],
+    useAll: boolean,
+    hostname: string
+  ): {
+    address: string | dns.LookupAddress[];
+    family?: number;
+    error?: NodeJS.ErrnoException;
+    fallback: dns.LookupAddress[];
+  } {
+    if (list.length === 0) {
+      return {
+        error: createErrorWithCode(
+          `No DNS results returned for ${hostname}`,
+          'ENODATA'
+        ),
+        fallback: [],
+        address: [],
+      };
+    }
+
+    if (useAll) return { address: list, fallback: list };
+
+    const first = list.at(0);
+    if (!first) {
+      return {
+        error: createErrorWithCode(
+          `No DNS results returned for ${hostname}`,
+          'ENODATA'
+        ),
+        fallback: [],
+        address: [],
+      };
+    }
+
+    return { address: first.address, family: first.family, fallback: list };
+  }
+
+  private createTimeout(
+    hostname: string,
+    callback: LookupCallback
+  ): { isDone: () => boolean; markDone: () => void } {
+    let done = false;
+    const timer = setTimeout(() => {
+      if (done) return;
       done = true;
-      clearTimeout(timer);
-    },
-  };
+      callback(
+        createErrorWithCode(`DNS lookup timed out for ${hostname}`, 'ETIMEOUT'),
+        []
+      );
+    }, DNS_LOOKUP_TIMEOUT_MS);
+    timer.unref();
+
+    return {
+      isDone: () => done,
+      markDone: () => {
+        done = true;
+        clearTimeout(timer);
+      },
+    };
+  }
 }
 
-function wrapLookupCallback(
-  callback: LookupCallback,
-  timeout: {
-    isDone: () => boolean;
-    markDone: () => void;
-  }
-): LookupCallback {
-  return (err, address, family): void => {
-    if (timeout.isDone()) return;
-    timeout.markDone();
-    callback(err, address, family);
-  };
-}
+const safeDns = new SafeDnsLookup();
+
+/* -------------------------------------------------------------------------------------------------
+ * Dispatcher / Agent lifecycle
+ * ------------------------------------------------------------------------------------------------- */
 
 function getAgentOptions(): ConstructorParameters<typeof Agent>[0] {
   const cpuCount = os.availableParallelism();
@@ -706,7 +634,7 @@ function getAgentOptions(): ConstructorParameters<typeof Agent>[0] {
     keepAliveTimeout: 60000,
     connections: Math.max(cpuCount * 2, 25),
     pipelining: 1,
-    connect: { lookup: resolveDns },
+    connect: { lookup: safeDns.lookup.bind(safeDns) },
   };
 }
 
@@ -716,68 +644,69 @@ export function destroyAgents(): void {
   void dispatcher.close();
 }
 
+/* -------------------------------------------------------------------------------------------------
+ * Fetch error mapping (request-level)
+ * ------------------------------------------------------------------------------------------------- */
+
 function parseRetryAfter(header: string | null): number {
   if (!header) return 60;
-  const parsed = parseInt(header, 10);
+  const parsed = Number.parseInt(header, 10);
   return Number.isNaN(parsed) ? 60 : parsed;
 }
 
-function createCanceledError(url: string): FetchError {
-  return new FetchError('Request was canceled', url, 499, {
-    reason: 'aborted',
-  });
+class FetchErrorFactory {
+  canceled(url: string): FetchError {
+    return new FetchError('Request was canceled', url, 499, {
+      reason: 'aborted',
+    });
+  }
+
+  timeout(url: string, timeoutMs: number): FetchError {
+    return new FetchError(`Request timeout after ${timeoutMs}ms`, url, 504, {
+      timeout: timeoutMs,
+    });
+  }
+
+  rateLimited(url: string, retryAfterHeader: string | null): FetchError {
+    return new FetchError('Too many requests', url, 429, {
+      retryAfter: parseRetryAfter(retryAfterHeader),
+    });
+  }
+
+  http(url: string, status: number, statusText: string): FetchError {
+    return new FetchError(`HTTP ${status}: ${statusText}`, url, status);
+  }
+
+  tooManyRedirects(url: string): FetchError {
+    return new FetchError('Too many redirects', url);
+  }
+
+  missingRedirectLocation(url: string): FetchError {
+    return new FetchError('Redirect response missing Location header', url);
+  }
+
+  sizeLimit(url: string, maxBytes: number): FetchError {
+    return new FetchError(
+      `Response exceeds maximum size of ${maxBytes} bytes`,
+      url
+    );
+  }
+
+  network(url: string, message?: string): FetchError {
+    return new FetchError(
+      `Network error: Could not reach ${url}`,
+      url,
+      undefined,
+      message ? { message } : {}
+    );
+  }
+
+  unknown(url: string, message: string): FetchError {
+    return new FetchError(message, url);
+  }
 }
 
-function createTimeoutError(url: string, timeoutMs: number): FetchError {
-  return new FetchError(`Request timeout after ${timeoutMs}ms`, url, 504, {
-    timeout: timeoutMs,
-  });
-}
-
-function createRateLimitError(
-  url: string,
-  headerValue: string | null
-): FetchError {
-  const retryAfter = parseRetryAfter(headerValue);
-  return new FetchError('Too many requests', url, 429, { retryAfter });
-}
-
-function createHttpError(
-  url: string,
-  status: number,
-  statusText: string
-): FetchError {
-  return new FetchError(`HTTP ${status}: ${statusText}`, url, status);
-}
-
-function createTooManyRedirectsError(url: string): FetchError {
-  return new FetchError('Too many redirects', url);
-}
-
-function createMissingRedirectLocationError(url: string): FetchError {
-  return new FetchError('Redirect response missing Location header', url);
-}
-
-function createSizeLimitError(url: string, maxBytes: number): FetchError {
-  return new FetchError(
-    `Response exceeds maximum size of ${maxBytes} bytes`,
-    url
-  );
-}
-
-function createNetworkError(url: string, message?: string): FetchError {
-  const details = message ? { message } : undefined;
-  return new FetchError(
-    `Network error: Could not reach ${url}`,
-    url,
-    undefined,
-    details ?? {}
-  );
-}
-
-function createUnknownError(url: string, message: string): FetchError {
-  return new FetchError(message, url);
-}
+const fetchErrors = new FetchErrorFactory();
 
 function isAbortError(error: unknown): boolean {
   return (
@@ -790,36 +719,12 @@ function isTimeoutError(error: unknown): boolean {
   return error instanceof Error && error.name === 'TimeoutError';
 }
 
-function getRequestUrl(record: Record<string, unknown>): string | null {
-  const value = record.requestUrl;
-  return typeof value === 'string' ? value : null;
-}
-
 function resolveErrorUrl(error: unknown, fallback: string): string {
   if (error instanceof FetchError) return error.url;
   if (!isObject(error)) return fallback;
-  const requestUrl = getRequestUrl(error);
-  if (requestUrl) return requestUrl;
-  return fallback;
-}
 
-function resolveAbortFetchError(
-  error: unknown,
-  url: string,
-  timeoutMs: number
-): FetchError | null {
-  if (!isAbortError(error)) return null;
-  if (isTimeoutError(error)) {
-    return createTimeoutError(url, timeoutMs);
-  }
-  return createCanceledError(url);
-}
-
-function resolveUnexpectedFetchError(error: unknown, url: string): FetchError {
-  if (error instanceof Error) {
-    return createNetworkError(url, error.message);
-  }
-  return createUnknownError(url, 'Unexpected error');
+  const { requestUrl } = error as Record<string, unknown>;
+  return typeof requestUrl === 'string' ? requestUrl : fallback;
 }
 
 function mapFetchError(
@@ -830,10 +735,20 @@ function mapFetchError(
   if (error instanceof FetchError) return error;
 
   const url = resolveErrorUrl(error, fallbackUrl);
-  const abortError = resolveAbortFetchError(error, url, timeoutMs);
-  if (abortError) return abortError;
-  return resolveUnexpectedFetchError(error, url);
+
+  if (isAbortError(error)) {
+    return isTimeoutError(error)
+      ? fetchErrors.timeout(url, timeoutMs)
+      : fetchErrors.canceled(url);
+  }
+
+  if (error instanceof Error) return fetchErrors.network(url, error.message);
+  return fetchErrors.unknown(url, 'Unexpected error');
 }
+
+/* -------------------------------------------------------------------------------------------------
+ * Telemetry (diagnostics channel + logging)
+ * ------------------------------------------------------------------------------------------------- */
 
 type FetchChannelEvent =
   | {
@@ -869,16 +784,7 @@ type FetchChannelEvent =
 
 const fetchChannel = diagnosticsChannel.channel('superfetch.fetch');
 
-function publishFetchEvent(event: FetchChannelEvent): void {
-  if (!fetchChannel.hasSubscribers) return;
-  try {
-    fetchChannel.publish(event);
-  } catch {
-    // Avoid crashing the publisher if a subscriber throws.
-  }
-}
-
-interface FetchTelemetryContext {
+export interface FetchTelemetryContext {
   requestId: string;
   startTime: number;
   url: string;
@@ -887,131 +793,156 @@ interface FetchTelemetryContext {
   operationId?: string;
 }
 
-type FetchContextFields = Pick<
-  FetchTelemetryContext,
-  'contextRequestId' | 'operationId'
->;
+const SLOW_REQUEST_THRESHOLD_MS = 5000;
 
-function buildContextFields(
-  context: FetchContextFields
-): Partial<FetchContextFields> {
-  const fields: Partial<FetchContextFields> = {};
-  if (context.contextRequestId) {
-    fields.contextRequestId = context.contextRequestId;
-  }
-  if (context.operationId) {
-    fields.operationId = context.operationId;
-  }
-  return fields;
-}
+class FetchTelemetry {
+  start(url: string, method: string): FetchTelemetryContext {
+    const safeUrl = redactUrl(url);
+    const contextRequestId = getRequestId();
+    const operationId = getOperationId();
 
-function buildResponseMetadata(
-  response: Response,
-  contentSize?: number
-): {
-  contentType?: string;
-  size?: string;
-} {
-  const contentType = response.headers.get('content-type') ?? undefined;
-  const contentLengthHeader = response.headers.get('content-length');
-  const size =
-    contentLengthHeader ??
-    (contentSize === undefined ? undefined : String(contentSize));
+    const ctx: FetchTelemetryContext = {
+      requestId: randomUUID(),
+      startTime: performance.now(),
+      url: safeUrl,
+      method: method.toUpperCase(),
+      ...(contextRequestId ? { contextRequestId } : {}),
+      ...(operationId ? { operationId } : {}),
+    };
 
-  const metadata: { contentType?: string; size?: string } = {};
-  if (contentType) metadata.contentType = contentType;
-  if (size) metadata.size = size;
-  return metadata;
-}
+    this.publish({
+      v: 1,
+      type: 'start',
+      requestId: ctx.requestId,
+      method: ctx.method,
+      url: ctx.url,
+      ...(ctx.contextRequestId
+        ? { contextRequestId: ctx.contextRequestId }
+        : {}),
+      ...(ctx.operationId ? { operationId: ctx.operationId } : {}),
+    });
 
-function logSlowRequest(
-  context: FetchTelemetryContext,
-  duration: number,
-  durationLabel: string,
-  contextFields: Partial<FetchContextFields>
-): void {
-  if (duration <= SLOW_REQUEST_THRESHOLD_MS) return;
-  logWarn('Slow HTTP request detected', {
-    requestId: context.requestId,
-    url: context.url,
-    duration: durationLabel,
-    ...contextFields,
-  });
-}
+    logDebug('HTTP Request', {
+      requestId: ctx.requestId,
+      method: ctx.method,
+      url: ctx.url,
+      ...(ctx.contextRequestId
+        ? { contextRequestId: ctx.contextRequestId }
+        : {}),
+      ...(ctx.operationId ? { operationId: ctx.operationId } : {}),
+    });
 
-function resolveSystemErrorCode(error: Error): string | undefined {
-  return isSystemError(error) ? error.code : undefined;
-}
-
-function buildFetchErrorEvent(
-  context: FetchTelemetryContext,
-  err: Error,
-  duration: number,
-  contextFields: Partial<FetchContextFields>,
-  status?: number,
-  code?: string
-): FetchChannelEvent {
-  const event: FetchChannelEvent = {
-    v: 1,
-    type: 'error',
-    requestId: context.requestId,
-    url: context.url,
-    error: err.message,
-    duration,
-    ...contextFields,
-  };
-
-  if (code !== undefined) {
-    event.code = code;
-  }
-  if (status !== undefined) {
-    event.status = status;
+    return ctx;
   }
 
-  return event;
+  recordResponse(
+    context: FetchTelemetryContext,
+    response: Response,
+    contentSize?: number
+  ): void {
+    const duration = performance.now() - context.startTime;
+    const durationLabel = `${Math.round(duration)}ms`;
+
+    this.publish({
+      v: 1,
+      type: 'end',
+      requestId: context.requestId,
+      status: response.status,
+      duration,
+      ...(context.contextRequestId
+        ? { contextRequestId: context.contextRequestId }
+        : {}),
+      ...(context.operationId ? { operationId: context.operationId } : {}),
+    });
+
+    const contentType = response.headers.get('content-type') ?? undefined;
+    const contentLengthHeader = response.headers.get('content-length');
+    const size =
+      contentLengthHeader ??
+      (contentSize === undefined ? undefined : String(contentSize));
+
+    logDebug('HTTP Response', {
+      requestId: context.requestId,
+      status: response.status,
+      url: context.url,
+      duration: durationLabel,
+      ...(context.contextRequestId
+        ? { contextRequestId: context.contextRequestId }
+        : {}),
+      ...(context.operationId ? { operationId: context.operationId } : {}),
+      ...(contentType ? { contentType } : {}),
+      ...(size ? { size } : {}),
+    });
+
+    if (duration > SLOW_REQUEST_THRESHOLD_MS) {
+      logWarn('Slow HTTP request detected', {
+        requestId: context.requestId,
+        url: context.url,
+        duration: durationLabel,
+        ...(context.contextRequestId
+          ? { contextRequestId: context.contextRequestId }
+          : {}),
+        ...(context.operationId ? { operationId: context.operationId } : {}),
+      });
+    }
+  }
+
+  recordError(
+    context: FetchTelemetryContext,
+    error: unknown,
+    status?: number
+  ): void {
+    const duration = performance.now() - context.startTime;
+    const err = error instanceof Error ? error : new Error(String(error));
+    const code = isSystemError(err) ? err.code : undefined;
+
+    this.publish({
+      v: 1,
+      type: 'error',
+      requestId: context.requestId,
+      url: context.url,
+      error: err.message,
+      duration,
+      ...(code !== undefined ? { code } : {}),
+      ...(status !== undefined ? { status } : {}),
+      ...(context.contextRequestId
+        ? { contextRequestId: context.contextRequestId }
+        : {}),
+      ...(context.operationId ? { operationId: context.operationId } : {}),
+    });
+
+    const log = status === 429 ? logWarn : logError;
+    log('HTTP Request Error', {
+      requestId: context.requestId,
+      url: context.url,
+      status,
+      code,
+      error: err.message,
+      ...(context.contextRequestId
+        ? { contextRequestId: context.contextRequestId }
+        : {}),
+      ...(context.operationId ? { operationId: context.operationId } : {}),
+    });
+  }
+
+  private publish(event: FetchChannelEvent): void {
+    if (!fetchChannel.hasSubscribers) return;
+    try {
+      fetchChannel.publish(event);
+    } catch {
+      // Best-effort; subscriber failures must not crash request path.
+    }
+  }
 }
 
-function createTelemetryContext(
-  url: string,
-  method: string
-): FetchTelemetryContext {
-  const safeUrl = redactUrl(url);
-  const contextRequestId = getRequestId();
-  const operationId = getOperationId();
-  return {
-    requestId: randomUUID(),
-    startTime: performance.now(),
-    url: safeUrl,
-    method: method.toUpperCase(),
-    ...(contextRequestId ? { contextRequestId } : {}),
-    ...(operationId ? { operationId } : {}),
-  };
-}
+const telemetry = new FetchTelemetry();
 
+/** Backwards-compatible exports */
 export function startFetchTelemetry(
   url: string,
   method: string
 ): FetchTelemetryContext {
-  const context = createTelemetryContext(url, method);
-  const contextFields = buildContextFields(context);
-
-  publishFetchEvent({
-    v: 1,
-    type: 'start',
-    requestId: context.requestId,
-    method: context.method,
-    url: context.url,
-    ...contextFields,
-  });
-
-  logDebug('HTTP Request', {
-    requestId: context.requestId,
-    method: context.method,
-    url: context.url,
-    ...contextFields,
-  });
-
-  return context;
+  return telemetry.start(url, method);
 }
 
 export function recordFetchResponse(
@@ -1019,29 +950,7 @@ export function recordFetchResponse(
   response: Response,
   contentSize?: number
 ): void {
-  const duration = performance.now() - context.startTime;
-  const durationLabel = `${Math.round(duration)}ms`;
-  const contextFields = buildContextFields(context);
-  const responseMetadata = buildResponseMetadata(response, contentSize);
-  publishFetchEvent({
-    v: 1,
-    type: 'end',
-    requestId: context.requestId,
-    status: response.status,
-    duration,
-    ...contextFields,
-  });
-
-  logDebug('HTTP Response', {
-    requestId: context.requestId,
-    status: response.status,
-    url: context.url,
-    duration: durationLabel,
-    ...contextFields,
-    ...responseMetadata,
-  });
-
-  logSlowRequest(context, duration, durationLabel, contextFields);
+  telemetry.recordResponse(context, response, contentSize);
 }
 
 export function recordFetchError(
@@ -1049,24 +958,12 @@ export function recordFetchError(
   error: unknown,
   status?: number
 ): void {
-  const duration = performance.now() - context.startTime;
-  const err = error instanceof Error ? error : new Error(String(error));
-  const contextFields = buildContextFields(context);
-  const code = resolveSystemErrorCode(err);
-  publishFetchEvent(
-    buildFetchErrorEvent(context, err, duration, contextFields, status, code)
-  );
-
-  const log = status === 429 ? logWarn : logError;
-  log('HTTP Request Error', {
-    requestId: context.requestId,
-    url: context.url,
-    status,
-    code,
-    error: err.message,
-    ...contextFields,
-  });
+  telemetry.recordError(context, error, status);
 }
+
+/* -------------------------------------------------------------------------------------------------
+ * Redirect handling
+ * ------------------------------------------------------------------------------------------------- */
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
@@ -1076,276 +973,248 @@ function isRedirectStatus(status: number): boolean {
 
 function cancelResponseBody(response: Response): void {
   const cancelPromise = response.body?.cancel();
-  if (cancelPromise) {
+  if (cancelPromise)
     cancelPromise.catch(() => {
-      // Best-effort cancellation; ignore failures.
+      /* ignore */
     });
-  }
 }
 
-interface FetchCycleResult {
-  response: Response;
-  nextUrl?: string;
-}
+class RedirectFollower {
+  async fetchWithRedirects(
+    url: string,
+    init: RequestInit,
+    maxRedirects: number
+  ): Promise<{ response: Response; url: string }> {
+    let currentUrl = url;
+    const redirectLimit = Math.max(0, maxRedirects);
 
-async function performFetchCycle(
-  currentUrl: string,
-  init: RequestInit,
-  redirectLimit: number,
-  redirectCount: number
-): Promise<FetchCycleResult> {
-  const response = await fetch(currentUrl, { ...init, redirect: 'manual' });
+    for (
+      let redirectCount = 0;
+      redirectCount <= redirectLimit;
+      redirectCount += 1
+    ) {
+      const { response, nextUrl } = await this.withRedirectErrorContext(
+        currentUrl,
+        async () =>
+          this.performFetchCycle(currentUrl, init, redirectLimit, redirectCount)
+      );
 
-  if (!isRedirectStatus(response.status)) {
-    return { response };
-  }
+      if (!nextUrl) return { response, url: currentUrl };
+      currentUrl = nextUrl;
+    }
 
-  assertRedirectWithinLimit(response, currentUrl, redirectLimit, redirectCount);
-  const location = getRedirectLocation(response, currentUrl);
-
-  cancelResponseBody(response);
-  return {
-    response,
-    nextUrl: resolveRedirectTarget(currentUrl, location),
-  };
-}
-
-function assertRedirectWithinLimit(
-  response: Response,
-  currentUrl: string,
-  redirectLimit: number,
-  redirectCount: number
-): void {
-  if (redirectCount < redirectLimit) return;
-  cancelResponseBody(response);
-  throw createTooManyRedirectsError(currentUrl);
-}
-
-function getRedirectLocation(response: Response, currentUrl: string): string {
-  const location = response.headers.get('location');
-  if (location) return location;
-
-  cancelResponseBody(response);
-  throw createMissingRedirectLocationError(currentUrl);
-}
-
-function annotateRedirectError(error: unknown, url: string): void {
-  if (!isObject(error)) return;
-  error.requestUrl = url;
-}
-
-function resolveRedirectTarget(baseUrl: string, location: string): string {
-  if (!URL.canParse(location, baseUrl)) {
-    throw createErrorWithCode('Invalid redirect target', 'EBADREDIRECT');
+    throw fetchErrors.tooManyRedirects(currentUrl);
   }
 
-  const resolved = new URL(location, baseUrl);
-  if (resolved.username || resolved.password) {
-    throw createErrorWithCode(
-      'Redirect target includes credentials',
-      'EBADREDIRECT'
+  private async performFetchCycle(
+    currentUrl: string,
+    init: RequestInit,
+    redirectLimit: number,
+    redirectCount: number
+  ): Promise<{ response: Response; nextUrl?: string }> {
+    const response = await fetch(currentUrl, { ...init, redirect: 'manual' });
+
+    if (!isRedirectStatus(response.status)) return { response };
+
+    this.assertRedirectWithinLimit(
+      response,
+      currentUrl,
+      redirectLimit,
+      redirectCount
     );
+    const location = this.getRedirectLocation(response, currentUrl);
+
+    cancelResponseBody(response);
+    return {
+      response,
+      nextUrl: this.resolveRedirectTarget(currentUrl, location),
+    };
   }
 
-  return validateAndNormalizeUrl(resolved.href);
-}
+  private assertRedirectWithinLimit(
+    response: Response,
+    currentUrl: string,
+    redirectLimit: number,
+    redirectCount: number
+  ): void {
+    if (redirectCount < redirectLimit) return;
+    cancelResponseBody(response);
+    throw fetchErrors.tooManyRedirects(currentUrl);
+  }
 
-async function withRedirectErrorContext<T>(
-  url: string,
-  fn: () => Promise<T>
-): Promise<T> {
-  try {
-    return await fn();
-  } catch (error: unknown) {
-    annotateRedirectError(error, url);
-    throw error;
+  private getRedirectLocation(response: Response, currentUrl: string): string {
+    const location = response.headers.get('location');
+    if (location) return location;
+
+    cancelResponseBody(response);
+    throw fetchErrors.missingRedirectLocation(currentUrl);
+  }
+
+  private resolveRedirectTarget(baseUrl: string, location: string): string {
+    if (!URL.canParse(location, baseUrl))
+      throw createErrorWithCode('Invalid redirect target', 'EBADREDIRECT');
+
+    const resolved = new URL(location, baseUrl);
+    if (resolved.username || resolved.password) {
+      throw createErrorWithCode(
+        'Redirect target includes credentials',
+        'EBADREDIRECT'
+      );
+    }
+
+    return validateAndNormalizeUrl(resolved.href);
+  }
+
+  private annotateRedirectError(error: unknown, url: string): void {
+    if (!isObject(error)) return;
+    (error as Record<string, unknown>).requestUrl = url;
+  }
+
+  private async withRedirectErrorContext<T>(
+    url: string,
+    fn: () => Promise<T>
+  ): Promise<T> {
+    try {
+      return await fn();
+    } catch (error: unknown) {
+      this.annotateRedirectError(error, url);
+      throw error;
+    }
   }
 }
 
+const redirectFollower = new RedirectFollower();
+
+/** Backwards-compatible export */
 export async function fetchWithRedirects(
   url: string,
   init: RequestInit,
   maxRedirects: number
 ): Promise<{ response: Response; url: string }> {
-  let currentUrl = url;
-  const redirectLimit = Math.max(0, maxRedirects);
-
-  for (
-    let redirectCount = 0;
-    redirectCount <= redirectLimit;
-    redirectCount += 1
-  ) {
-    const { response, nextUrl } = await withRedirectErrorContext(
-      currentUrl,
-      () => performFetchCycle(currentUrl, init, redirectLimit, redirectCount)
-    );
-
-    if (!nextUrl) {
-      return { response, url: currentUrl };
-    }
-
-    currentUrl = nextUrl;
-  }
-
-  throw createTooManyRedirectsError(currentUrl);
+  return redirectFollower.fetchWithRedirects(url, init, maxRedirects);
 }
+
+/* -------------------------------------------------------------------------------------------------
+ * Response reading (max size + abort-aware streaming)
+ * ------------------------------------------------------------------------------------------------- */
 
 function assertContentLengthWithinLimit(
   response: Response,
   url: string,
   maxBytes: number
 ): void {
-  const contentLengthHeader = response.headers.get('content-length');
-  if (!contentLengthHeader) return;
-  const contentLength = Number.parseInt(contentLengthHeader, 10);
-  if (Number.isNaN(contentLength) || contentLength <= maxBytes) {
-    return;
-  }
+  const header = response.headers.get('content-length');
+  if (!header) return;
+
+  const contentLength = Number.parseInt(header, 10);
+  if (Number.isNaN(contentLength) || contentLength <= maxBytes) return;
 
   cancelResponseBody(response);
-
-  throw createSizeLimitError(url, maxBytes);
+  throw fetchErrors.sizeLimit(url, maxBytes);
 }
 
-interface StreamReadState {
-  decoder: TextDecoder;
-  parts: string[];
-  total: number;
-}
+class ResponseTextReader {
+  async read(
+    response: Response,
+    url: string,
+    maxBytes: number,
+    signal?: AbortSignal
+  ): Promise<{ text: string; size: number }> {
+    assertContentLengthWithinLimit(response, url, maxBytes);
 
-function createReadState(): StreamReadState {
-  return {
-    decoder: new TextDecoder(),
-    parts: [],
-    total: 0,
-  };
-}
+    if (!response.body) {
+      const text = await response.text();
+      const size = Buffer.byteLength(text);
+      if (size > maxBytes) throw fetchErrors.sizeLimit(url, maxBytes);
+      return { text, size };
+    }
 
-function appendChunk(
-  state: StreamReadState,
-  chunk: Uint8Array,
-  maxBytes: number,
-  url: string
-): void {
-  state.total += chunk.byteLength;
-  if (state.total > maxBytes) {
-    throw createSizeLimitError(url, maxBytes);
+    return this.readStreamWithLimit(response.body, url, maxBytes, signal);
   }
 
-  const decoded = state.decoder.decode(chunk, { stream: true });
-  if (decoded) state.parts.push(decoded);
-}
+  private async readStreamWithLimit(
+    stream: ReadableStream<Uint8Array>,
+    url: string,
+    maxBytes: number,
+    signal?: AbortSignal
+  ): Promise<{ text: string; size: number }> {
+    const decoder = new TextDecoder();
+    const parts: string[] = [];
+    let total = 0;
 
-function finalizeRead(state: StreamReadState): void {
-  const decoded = state.decoder.decode();
-  if (decoded) state.parts.push(decoded);
-}
+    const reader = stream.getReader();
+    try {
+      await this.throwIfAborted(signal, url, reader);
 
-function createAbortError(url: string): FetchError {
-  return new FetchError('Request was aborted during response read', url, 499, {
-    reason: 'aborted',
-  });
-}
+      let result = await reader.read();
+      while (!result.done) {
+        total += result.value.byteLength;
+        if (total > maxBytes) throw fetchErrors.sizeLimit(url, maxBytes);
 
-async function cancelReaderQuietly(
-  reader: ReadableStreamDefaultReader<Uint8Array>
-): Promise<void> {
-  try {
-    await reader.cancel();
-  } catch {
-    // Ignore cancel errors; we're already failing this read.
+        const decoded = decoder.decode(result.value, { stream: true });
+        if (decoded) parts.push(decoded);
+
+        await this.throwIfAborted(signal, url, reader);
+        result = await reader.read();
+      }
+    } catch (error: unknown) {
+      await this.cancelReaderQuietly(reader);
+      if (signal?.aborted)
+        throw new FetchError(
+          'Request was aborted during response read',
+          url,
+          499,
+          { reason: 'aborted' }
+        );
+      throw error;
+    } finally {
+      reader.releaseLock();
+    }
+
+    const final = decoder.decode();
+    if (final) parts.push(final);
+
+    return { text: parts.join(''), size: total };
   }
-}
 
-async function throwIfAborted(
-  signal: AbortSignal | undefined,
-  url: string,
-  reader: ReadableStreamDefaultReader<Uint8Array>
-): Promise<void> {
-  if (!signal?.aborted) return;
-  await cancelReaderQuietly(reader);
-  throw createAbortError(url);
-}
-
-async function handleReadFailure(
-  error: unknown,
-  signal: AbortSignal | undefined,
-  url: string,
-  reader: ReadableStreamDefaultReader<Uint8Array>
-): Promise<never> {
-  const aborted = signal?.aborted ?? false;
-  await cancelReaderQuietly(reader);
-  if (aborted) {
-    throw createAbortError(url);
+  private async throwIfAborted(
+    signal: AbortSignal | undefined,
+    url: string,
+    reader: ReadableStreamDefaultReader<Uint8Array>
+  ): Promise<void> {
+    if (!signal?.aborted) return;
+    await this.cancelReaderQuietly(reader);
+    throw new FetchError('Request was aborted during response read', url, 499, {
+      reason: 'aborted',
+    });
   }
-  throw error;
-}
 
-async function readAllChunks(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-  state: StreamReadState,
-  url: string,
-  maxBytes: number,
-  signal?: AbortSignal
-): Promise<void> {
-  await throwIfAborted(signal, url, reader);
-
-  let result = await reader.read();
-  while (!result.done) {
-    appendChunk(state, result.value, maxBytes, url);
-    await throwIfAborted(signal, url, reader);
-    result = await reader.read();
+  private async cancelReaderQuietly(
+    reader: ReadableStreamDefaultReader<Uint8Array>
+  ): Promise<void> {
+    try {
+      await reader.cancel();
+    } catch {
+      // ignore
+    }
   }
 }
 
-async function readStreamWithLimit(
-  stream: ReadableStream<Uint8Array>,
-  url: string,
-  maxBytes: number,
-  signal?: AbortSignal
-): Promise<{ text: string; size: number }> {
-  const state = createReadState();
-  const reader = stream.getReader();
+const responseReader = new ResponseTextReader();
 
-  try {
-    await readAllChunks(reader, state, url, maxBytes, signal);
-  } catch (error: unknown) {
-    await handleReadFailure(error, signal, url, reader);
-  } finally {
-    reader.releaseLock();
-  }
-
-  finalizeRead(state);
-  return { text: state.parts.join(''), size: state.total };
-}
-
-async function readResponseTextFallback(
-  response: Response,
-  url: string,
-  maxBytes: number
-): Promise<{ text: string; size: number }> {
-  const text = await response.text();
-  const size = Buffer.byteLength(text);
-  if (size > maxBytes) {
-    throw createSizeLimitError(url, maxBytes);
-  }
-  return { text, size };
-}
-
+/** Backwards-compatible export */
 export async function readResponseText(
   response: Response,
   url: string,
   maxBytes: number,
   signal?: AbortSignal
 ): Promise<{ text: string; size: number }> {
-  assertContentLengthWithinLimit(response, url, maxBytes);
-
-  if (!response.body) {
-    return readResponseTextFallback(response, url, maxBytes);
-  }
-
-  return readStreamWithLimit(response.body, url, maxBytes, signal);
+  return responseReader.read(response, url, maxBytes, signal);
 }
+
+/* -------------------------------------------------------------------------------------------------
+ * HTTP fetcher (headers, signals, response handling)
+ * ------------------------------------------------------------------------------------------------- */
 
 const DEFAULT_HEADERS = {
   'User-Agent': config.fetcher.userAgent,
@@ -1365,54 +1234,35 @@ function buildRequestSignal(
   external?: AbortSignal
 ): AbortSignal {
   const timeoutSignal = AbortSignal.timeout(timeoutMs);
-  if (!external) return timeoutSignal;
-  return AbortSignal.any([external, timeoutSignal]);
+  return external ? AbortSignal.any([external, timeoutSignal]) : timeoutSignal;
 }
 
 function buildRequestInit(
   headers: HeadersInit,
   signal: AbortSignal
 ): RequestInit & { dispatcher: Dispatcher } {
-  return {
-    method: 'GET',
-    headers,
-    signal,
-    dispatcher,
-  };
+  return { method: 'GET', headers, signal, dispatcher };
 }
 
 function resolveResponseError(
   response: Response,
   finalUrl: string
 ): FetchError | null {
-  return (
-    resolveRateLimitError(response, finalUrl) ??
-    resolveHttpError(response, finalUrl)
-  );
-}
-
-function resolveRateLimitError(
-  response: Response,
-  finalUrl: string
-): FetchError | null {
-  return response.status === 429
-    ? createRateLimitError(finalUrl, response.headers.get('retry-after'))
-    : null;
-}
-
-function resolveHttpError(
-  response: Response,
-  finalUrl: string
-): FetchError | null {
+  if (response.status === 429) {
+    return fetchErrors.rateLimited(
+      finalUrl,
+      response.headers.get('retry-after')
+    );
+  }
   return response.ok
     ? null
-    : createHttpError(finalUrl, response.status, response.statusText);
+    : fetchErrors.http(finalUrl, response.status, response.statusText);
 }
 
 async function handleFetchResponse(
   response: Response,
   finalUrl: string,
-  telemetry: FetchTelemetryContext,
+  ctx: FetchTelemetryContext,
   signal?: AbortSignal
 ): Promise<string> {
   const responseError = resolveResponseError(response, finalUrl);
@@ -1421,60 +1271,58 @@ async function handleFetchResponse(
     throw responseError;
   }
 
-  const { text, size } = await readResponseText(
+  const { text, size } = await responseReader.read(
     response,
     finalUrl,
     config.fetcher.maxContentLength,
     signal
   );
-  recordFetchResponse(telemetry, response, size);
+  telemetry.recordResponse(ctx, response, size);
   return text;
 }
 
-async function fetchWithTelemetry(
-  normalizedUrl: string,
-  requestInit: RequestInit,
-  timeoutMs: number
-): Promise<string> {
-  const telemetry = startFetchTelemetry(normalizedUrl, 'GET');
+class HttpFetcher {
+  async fetchNormalizedUrl(
+    normalizedUrl: string,
+    options?: FetchOptions
+  ): Promise<string> {
+    const timeoutMs = config.fetcher.timeout;
+    const headers = buildHeaders();
+    const signal = buildRequestSignal(timeoutMs, options?.signal);
+    const init = buildRequestInit(headers, signal);
 
-  try {
-    return await fetchAndHandle(normalizedUrl, requestInit, telemetry);
-  } catch (error: unknown) {
-    const mapped = mapFetchError(error, normalizedUrl, timeoutMs);
-    telemetry.url = mapped.url;
-    recordFetchError(telemetry, mapped, mapped.statusCode);
-    throw mapped;
+    const ctx = telemetry.start(normalizedUrl, 'GET');
+
+    try {
+      const { response, url: finalUrl } =
+        await redirectFollower.fetchWithRedirects(
+          normalizedUrl,
+          init,
+          config.fetcher.maxRedirects
+        );
+
+      ctx.url = finalUrl;
+      return await handleFetchResponse(
+        response,
+        finalUrl,
+        ctx,
+        init.signal ?? undefined
+      );
+    } catch (error: unknown) {
+      const mapped = mapFetchError(error, normalizedUrl, timeoutMs);
+      ctx.url = mapped.url;
+      telemetry.recordError(ctx, mapped, mapped.statusCode);
+      throw mapped;
+    }
   }
 }
 
-async function fetchAndHandle(
-  normalizedUrl: string,
-  requestInit: RequestInit,
-  telemetry: FetchTelemetryContext
-): Promise<string> {
-  const { response, url: finalUrl } = await fetchWithRedirects(
-    normalizedUrl,
-    requestInit,
-    config.fetcher.maxRedirects
-  );
+const httpFetcher = new HttpFetcher();
 
-  telemetry.url = finalUrl;
-  return handleFetchResponse(
-    response,
-    finalUrl,
-    telemetry,
-    requestInit.signal ?? undefined
-  );
-}
-
+/** Backwards-compatible export */
 export async function fetchNormalizedUrl(
   normalizedUrl: string,
   options?: FetchOptions
 ): Promise<string> {
-  const timeoutMs = config.fetcher.timeout;
-  const headers = buildHeaders();
-  const signal = buildRequestSignal(timeoutMs, options?.signal);
-  const requestInit = buildRequestInit(headers, signal);
-  return fetchWithTelemetry(normalizedUrl, requestInit, timeoutMs);
+  return httpFetcher.fetchNormalizedUrl(normalizedUrl, options);
 }

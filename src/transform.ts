@@ -50,39 +50,13 @@ import type {
 } from './transform-types.js';
 import { isObject } from './type-guards.js';
 
+/* -------------------------------------------------------------------------------------------------
+ * Contracts
+ * ------------------------------------------------------------------------------------------------- */
+
 interface ExtractionContext extends ExtractionResult {
   document: Document;
   truncated?: boolean;
-}
-
-function getAbortReason(signal: AbortSignal): unknown {
-  if (!isObject(signal)) return undefined;
-  return 'reason' in signal ? signal.reason : undefined;
-}
-
-// DOM accessor helpers moved to ./dom-noise-removal.ts
-
-const CODE_BLOCK = {
-  fence: '```',
-  format: (code: string, language = ''): string => {
-    return `\`\`\`${language}\n${code}\n\`\`\``;
-  },
-};
-
-const transformChannel = diagnosticsChannel.channel('superfetch.transform');
-const LOG_URL_MAX = 80;
-
-function truncateUrlForLog(url: string): string {
-  return url.substring(0, LOG_URL_MAX);
-}
-
-function publishTransformEvent(event: TransformStageEvent): void {
-  if (!transformChannel.hasSubscribers) return;
-  try {
-    transformChannel.publish(event);
-  } catch {
-    /* empty */
-  }
 }
 
 export interface StageBudget {
@@ -90,138 +64,208 @@ export interface StageBudget {
   elapsedMs: number;
 }
 
+/* -------------------------------------------------------------------------------------------------
+ * Abort policy (single source of truth)
+ * ------------------------------------------------------------------------------------------------- */
+
+class AbortPolicy {
+  private getAbortReason(signal: AbortSignal): unknown {
+    if (!isObject(signal)) return undefined;
+    return 'reason' in signal
+      ? (signal as Record<string, unknown>).reason
+      : undefined;
+  }
+
+  private isTimeoutReason(reason: unknown): boolean {
+    return reason instanceof Error && reason.name === 'TimeoutError';
+  }
+
+  throwIfAborted(
+    signal: AbortSignal | undefined,
+    url: string,
+    stage: string
+  ): void {
+    if (!signal?.aborted) return;
+
+    const reason = this.getAbortReason(signal);
+    if (this.isTimeoutReason(reason)) {
+      throw new FetchError('Request timeout', url, 504, {
+        reason: 'timeout',
+        stage,
+      });
+    }
+
+    throw new FetchError('Request was canceled', url, 499, {
+      reason: 'aborted',
+      stage,
+    });
+  }
+
+  createAbortError(url: string, stage: string): FetchError {
+    return new FetchError('Request was canceled', url, 499, {
+      reason: 'aborted',
+      stage,
+    });
+  }
+}
+
+const abortPolicy = new AbortPolicy();
+
+/* -------------------------------------------------------------------------------------------------
+ * Stage tracking & diagnostics
+ * ------------------------------------------------------------------------------------------------- */
+
+class StageTracker {
+  private readonly channel = diagnosticsChannel.channel('superfetch.transform');
+
+  start(
+    url: string,
+    stage: string,
+    budget?: StageBudget
+  ): TransformStageContext | null {
+    if (!this.channel.hasSubscribers && !budget) return null;
+
+    const remainingBudgetMs = budget
+      ? budget.totalBudgetMs - budget.elapsedMs
+      : undefined;
+
+    const base: TransformStageContext = {
+      stage,
+      startTime: performance.now(),
+      url: redactUrl(url),
+    };
+
+    if (remainingBudgetMs !== undefined && budget) {
+      return {
+        ...base,
+        budgetMs: remainingBudgetMs,
+        totalBudgetMs: budget.totalBudgetMs,
+      };
+    }
+
+    return base;
+  }
+
+  end(
+    context: TransformStageContext | null,
+    options?: { truncated?: boolean }
+  ): number {
+    if (!context) return 0;
+
+    const durationMs = performance.now() - context.startTime;
+    const requestId = getRequestId();
+    const operationId = getOperationId();
+
+    if (context.totalBudgetMs !== undefined) {
+      const warnThresholdMs =
+        context.totalBudgetMs * config.transform.stageWarnRatio;
+      if (durationMs > warnThresholdMs) {
+        logWarn('Transform stage exceeded warning threshold', {
+          stage: context.stage,
+          durationMs: Math.round(durationMs),
+          thresholdMs: Math.round(warnThresholdMs),
+          url: context.url,
+        });
+      }
+    }
+
+    const event: TransformStageEvent = {
+      v: 1,
+      type: 'stage',
+      stage: context.stage,
+      durationMs,
+      url: context.url,
+      ...(requestId ? { requestId } : {}),
+      ...(operationId ? { operationId } : {}),
+      ...(options?.truncated !== undefined
+        ? { truncated: options.truncated }
+        : {}),
+    };
+
+    this.publish(event);
+    return durationMs;
+  }
+
+  run<T>(url: string, stage: string, fn: () => T, budget?: StageBudget): T {
+    if (budget && budget.elapsedMs >= budget.totalBudgetMs) {
+      throw new FetchError('Transform budget exhausted', url, 504, {
+        reason: 'timeout',
+        stage: `${stage}:budget_exhausted`,
+        elapsedMs: budget.elapsedMs,
+        totalBudgetMs: budget.totalBudgetMs,
+      });
+    }
+
+    const ctx = this.start(url, stage, budget);
+    try {
+      return fn();
+    } finally {
+      this.end(ctx);
+    }
+  }
+
+  async runAsync<T>(
+    url: string,
+    stage: string,
+    fn: () => Promise<T>
+  ): Promise<T> {
+    const ctx = this.start(url, stage);
+    try {
+      return await fn();
+    } finally {
+      this.end(ctx);
+    }
+  }
+
+  private publish(event: TransformStageEvent): void {
+    if (!this.channel.hasSubscribers) return;
+    try {
+      this.channel.publish(event);
+    } catch {
+      // Intentionally ignore diagnostics failures
+    }
+  }
+}
+
+const stageTracker = new StageTracker();
+
+/** Backwards-compatible exports */
 export function startTransformStage(
   url: string,
   stage: string,
   budget?: StageBudget
 ): TransformStageContext | null {
-  if (!transformChannel.hasSubscribers && !budget) return null;
-
-  const remainingBudgetMs = budget
-    ? budget.totalBudgetMs - budget.elapsedMs
-    : undefined;
-
-  const base = {
-    stage,
-    startTime: performance.now(),
-    url: redactUrl(url),
-  };
-
-  if (remainingBudgetMs !== undefined && budget) {
-    return {
-      ...base,
-      budgetMs: remainingBudgetMs,
-      totalBudgetMs: budget.totalBudgetMs,
-    };
-  }
-
-  return base;
+  return stageTracker.start(url, stage, budget);
 }
 
 export function endTransformStage(
   context: TransformStageContext | null,
   options?: { truncated?: boolean }
 ): number {
-  if (!context) return 0;
-
-  const durationMs = performance.now() - context.startTime;
-  const requestId = getRequestId();
-  const operationId = getOperationId();
-
-  if (context.totalBudgetMs !== undefined) {
-    const warnThresholdMs =
-      context.totalBudgetMs * config.transform.stageWarnRatio;
-    if (durationMs > warnThresholdMs) {
-      logWarn('Transform stage exceeded warning threshold', {
-        stage: context.stage,
-        durationMs: Math.round(durationMs),
-        thresholdMs: Math.round(warnThresholdMs),
-        url: context.url,
-      });
-    }
-  }
-
-  const event: TransformStageEvent = {
-    v: 1,
-    type: 'stage',
-    stage: context.stage,
-    durationMs,
-    url: context.url,
-    ...(requestId ? { requestId } : {}),
-    ...(operationId ? { operationId } : {}),
-    ...(options?.truncated !== undefined
-      ? { truncated: options.truncated }
-      : {}),
-  };
-
-  publishTransformEvent(event);
-  return durationMs;
+  return stageTracker.end(context, options);
 }
 
-function runTransformStage<T>(
-  url: string,
-  stage: string,
-  fn: () => T,
-  budget?: StageBudget
-): T {
-  if (budget && budget.elapsedMs >= budget.totalBudgetMs) {
-    throw new FetchError('Transform budget exhausted', url, 504, {
-      reason: 'timeout',
-      stage: `${stage}:budget_exhausted`,
-      elapsedMs: budget.elapsedMs,
-      totalBudgetMs: budget.totalBudgetMs,
-    });
-  }
+/* -------------------------------------------------------------------------------------------------
+ * HTML size guard
+ * ------------------------------------------------------------------------------------------------- */
 
-  const context = startTransformStage(url, stage, budget);
-  try {
-    return fn();
-  } finally {
-    endTransformStage(context);
-  }
-}
-
-function isTimeoutReason(reason: unknown): boolean {
-  return reason instanceof Error && reason.name === 'TimeoutError';
-}
-
-function throwIfAborted(
-  signal: AbortSignal | undefined,
-  url: string,
-  stage: string
-): void {
-  if (!signal) return;
-  const { aborted } = signal;
-  if (!aborted) return;
-
-  const reason = getAbortReason(signal);
-  if (isTimeoutReason(reason)) {
-    throw new FetchError('Request timeout', url, 504, {
-      reason: 'timeout',
-      stage,
-    });
-  }
-
-  throw new FetchError('Request was canceled', url, 499, {
-    reason: 'aborted',
-    stage,
-  });
-}
-
-function truncateHtml(html: string): string {
+function truncateHtml(html: string): { html: string; truncated: boolean } {
   const maxSize = config.constants.maxHtmlSize;
 
   if (html.length <= maxSize) {
-    return html;
+    return { html, truncated: false };
   }
 
   logWarn('HTML content exceeds maximum size, truncating', {
     size: html.length,
     maxSize,
   });
-
-  return html.substring(0, maxSize);
+  return { html: html.substring(0, maxSize), truncated: true };
 }
+
+/* -------------------------------------------------------------------------------------------------
+ * Metadata extraction
+ * ------------------------------------------------------------------------------------------------- */
 
 interface MetaContext {
   title: { og?: string; twitter?: string; standard?: string };
@@ -298,200 +342,120 @@ const META_NAME_HANDLERS = new Map<
   ],
 ]);
 
-function extractMetadata(document: Document): ExtractedMetadata {
-  const ctx: MetaContext = {
-    title: {},
-    description: {},
-  };
+class MetadataExtractor {
+  extract(document: Document): ExtractedMetadata {
+    const ctx: MetaContext = { title: {}, description: {} };
 
-  for (const tag of document.querySelectorAll('meta')) {
-    const content = tag.getAttribute('content')?.trim();
-    if (!content) continue;
+    for (const tag of document.querySelectorAll('meta')) {
+      const content = tag.getAttribute('content')?.trim();
+      if (!content) continue;
 
-    const property = tag.getAttribute('property');
-    if (property) {
-      META_PROPERTY_HANDLERS.get(property)?.(ctx, content);
+      const property = tag.getAttribute('property');
+      if (property) META_PROPERTY_HANDLERS.get(property)?.(ctx, content);
+
+      const name = tag.getAttribute('name');
+      if (name) META_NAME_HANDLERS.get(name)?.(ctx, content);
     }
 
-    const name = tag.getAttribute('name');
-    if (name) {
-      META_NAME_HANDLERS.get(name)?.(ctx, content);
+    const titleEl = document.querySelector('title');
+    if (!ctx.title.standard && titleEl?.textContent) {
+      ctx.title.standard = titleEl.textContent.trim();
     }
+
+    const resolvedTitle =
+      ctx.title.og ?? ctx.title.twitter ?? ctx.title.standard;
+    const resolvedDesc =
+      ctx.description.og ?? ctx.description.twitter ?? ctx.description.standard;
+
+    const metadata: ExtractedMetadata = {};
+    if (resolvedTitle) metadata.title = resolvedTitle;
+    if (resolvedDesc) metadata.description = resolvedDesc;
+    if (ctx.author) metadata.author = ctx.author;
+    if (ctx.image) metadata.image = ctx.image;
+    if (ctx.publishedAt) metadata.publishedAt = ctx.publishedAt;
+    if (ctx.modifiedAt) metadata.modifiedAt = ctx.modifiedAt;
+
+    return metadata;
   }
-
-  const titleEl = document.querySelector('title');
-  if (!ctx.title.standard && titleEl?.textContent) {
-    ctx.title.standard = titleEl.textContent.trim();
-  }
-
-  const resolvedTitle = ctx.title.og ?? ctx.title.twitter ?? ctx.title.standard;
-  const resolvedDesc =
-    ctx.description.og ?? ctx.description.twitter ?? ctx.description.standard;
-
-  const metadata: ExtractedMetadata = {};
-  if (resolvedTitle) metadata.title = resolvedTitle;
-  if (resolvedDesc) metadata.description = resolvedDesc;
-  if (ctx.author) metadata.author = ctx.author;
-  if (ctx.image) metadata.image = ctx.image;
-  if (ctx.publishedAt) metadata.publishedAt = ctx.publishedAt;
-  if (ctx.modifiedAt) metadata.modifiedAt = ctx.modifiedAt;
-
-  return metadata;
 }
+
+const metadataExtractor = new MetadataExtractor();
+
+/* -------------------------------------------------------------------------------------------------
+ * Article extraction (Readability)
+ * ------------------------------------------------------------------------------------------------- */
 
 function isReadabilityCompatible(doc: unknown): doc is Document {
   if (!isObject(doc)) return false;
-  return hasDocumentElement(doc) && hasQuerySelectors(doc);
-}
-
-function hasDocumentElement(record: Record<string, unknown>): boolean {
-  return 'documentElement' in record;
-}
-
-function hasQuerySelectors(record: Record<string, unknown>): boolean {
+  const record = doc as Record<string, unknown>;
   return (
-    typeof record.querySelectorAll === 'function' &&
-    typeof record.querySelector === 'function'
+    'documentElement' in record &&
+    typeof (record as { querySelectorAll?: unknown }).querySelectorAll ===
+      'function' &&
+    typeof (record as { querySelector?: unknown }).querySelector === 'function'
   );
 }
 
-function extractArticle(document: unknown): ExtractedArticle | null {
-  if (!isReadabilityCompatible(document)) {
-    logWarn('Document not compatible with Readability');
-    return null;
-  }
-
-  try {
-    const doc = document;
-    const rawText =
-      doc.querySelector('body')?.textContent ?? doc.documentElement.textContent;
-    const textLength = rawText.replace(/\s+/g, ' ').trim().length;
-
-    if (textLength < 100) {
-      logWarn(
-        'Very minimal server-rendered content detected (< 100 chars). ' +
-          'This might be a client-side rendered (SPA) application. ' +
-          'Content extraction may be incomplete.',
-        { textLength }
-      );
-    }
-
-    if (textLength >= 400 && !isProbablyReaderable(doc)) {
+class ArticleExtractor {
+  extract(document: unknown): ExtractedArticle | null {
+    if (!isReadabilityCompatible(document)) {
+      logWarn('Document not compatible with Readability');
       return null;
     }
-    const reader = new Readability(doc, { maxElemsToParse: 20_000 });
-    const parsed = reader.parse();
-    if (!parsed) return null;
 
-    return {
-      content: parsed.content ?? '',
-      textContent: parsed.textContent ?? '',
-      ...(parsed.title != null && { title: parsed.title }),
-      ...(parsed.byline != null && { byline: parsed.byline }),
-      ...(parsed.excerpt != null && { excerpt: parsed.excerpt }),
-      ...(parsed.siteName != null && { siteName: parsed.siteName }),
-    };
-  } catch (error: unknown) {
-    logError(
-      'Failed to extract article with Readability',
-      error instanceof Error ? error : undefined
-    );
-    return null;
+    try {
+      const doc = document;
+
+      const rawText =
+        doc.querySelector('body')?.textContent ??
+        doc.documentElement.textContent;
+      const textLength = rawText.replace(/\s+/g, ' ').trim().length;
+
+      if (textLength < 100) {
+        logWarn(
+          'Very minimal server-rendered content detected (< 100 chars). ' +
+            'This might be a client-side rendered (SPA) application. ' +
+            'Content extraction may be incomplete.',
+          { textLength }
+        );
+      }
+
+      if (textLength >= 400 && !isProbablyReaderable(doc)) {
+        return null;
+      }
+
+      const reader = new Readability(doc, { maxElemsToParse: 20_000 });
+      const parsed = reader.parse();
+      if (!parsed) return null;
+
+      return {
+        content: parsed.content ?? '',
+        textContent: parsed.textContent ?? '',
+        ...(parsed.title != null && { title: parsed.title }),
+        ...(parsed.byline != null && { byline: parsed.byline }),
+        ...(parsed.excerpt != null && { excerpt: parsed.excerpt }),
+        ...(parsed.siteName != null && { siteName: parsed.siteName }),
+      };
+    } catch (error: unknown) {
+      logError(
+        'Failed to extract article with Readability',
+        error instanceof Error ? error : undefined
+      );
+      return null;
+    }
   }
 }
 
-export function extractContent(
-  html: string,
-  url: string,
-  options: { extractArticle?: boolean; signal?: AbortSignal } = {
-    extractArticle: true,
-  }
-): ExtractionResult {
-  const result = extractContentWithDocument(html, url, options);
-  return { article: result.article, metadata: result.metadata };
-}
+const articleExtractor = new ArticleExtractor();
 
-function extractContentWithDocument(
-  html: string,
-  url: string,
-  options: { extractArticle?: boolean; signal?: AbortSignal }
-): ExtractionContext {
-  if (!isValidInput(html, url)) {
-    const { document } = parseHTML('<html></html>');
-    return { article: null, metadata: {}, document };
-  }
+/* -------------------------------------------------------------------------------------------------
+ * Content extraction orchestration
+ * ------------------------------------------------------------------------------------------------- */
 
-  return tryExtractContent(html, url, options);
-}
-
-function extractArticleWithStage(
-  document: Document,
-  url: string,
-  shouldExtract: boolean | undefined
-): ExtractedArticle | null {
-  if (!shouldExtract) return null;
-  return runTransformStage(url, 'extract:article', () =>
-    resolveArticleExtraction(document, shouldExtract)
-  );
-}
-
-function handleExtractionFailure(
-  error: unknown,
-  url: string,
-  signal: AbortSignal | undefined
-): ExtractionContext {
-  if (error instanceof FetchError) {
-    throw error;
-  }
-  throwIfAborted(signal, url, 'extract:error');
-  logError(
-    'Failed to extract content',
-    error instanceof Error ? error : undefined
-  );
-  const { document } = parseHTML('<html></html>');
-  return { article: null, metadata: {}, document };
-}
-
-function extractContentStages(
-  html: string,
-  url: string,
-  options: { extractArticle?: boolean; signal?: AbortSignal }
-): ExtractionContext {
-  throwIfAborted(options.signal, url, 'extract:begin');
-  const truncatedHtml = truncateHtml(html);
-  const { document } = runTransformStage(url, 'extract:parse', () =>
-    parseHTML(truncatedHtml)
-  );
-  throwIfAborted(options.signal, url, 'extract:parsed');
-  applyBaseUri(document, url);
-  const metadata = runTransformStage(url, 'extract:metadata', () =>
-    extractMetadata(document)
-  );
-  throwIfAborted(options.signal, url, 'extract:metadata');
-  const article = extractArticleWithStage(
-    document,
-    url,
-    options.extractArticle
-  );
-  throwIfAborted(options.signal, url, 'extract:article');
-  return {
-    article,
-    metadata,
-    document,
-    ...(truncatedHtml.length !== html.length ? { truncated: true } : {}),
-  };
-}
-
-function tryExtractContent(
-  html: string,
-  url: string,
-  options: { extractArticle?: boolean; signal?: AbortSignal }
-): ExtractionContext {
-  try {
-    return extractContentStages(html, url, options);
-  } catch (error: unknown) {
-    return handleExtractionFailure(error, url, options.signal);
-  }
+function validateRequiredString(value: unknown, message: string): boolean {
+  if (typeof value === 'string' && value.length > 0) return true;
+  logWarn(message);
+  return false;
 }
 
 function isValidInput(html: string, url: string): boolean {
@@ -503,25 +467,9 @@ function isValidInput(html: string, url: string): boolean {
   );
 }
 
-function validateRequiredString(value: unknown, message: string): boolean {
-  if (typeof value === 'string' && value.length > 0) return true;
-  logWarn(message);
-  return false;
-}
-
-function resolveArticleExtraction(
-  document: Document,
-  shouldExtract: boolean | undefined
-): ExtractedArticle | null {
-  return shouldExtract ? extractArticle(document) : null;
-}
-
 function applyBaseUri(document: Document, url: string): void {
   try {
-    Object.defineProperty(document, 'baseURI', {
-      value: url,
-      writable: true,
-    });
+    Object.defineProperty(document, 'baseURI', { value: url, writable: true });
   } catch (error: unknown) {
     logInfo('Failed to set baseURI (non-critical)', {
       url: url.substring(0, 100),
@@ -530,13 +478,94 @@ function applyBaseUri(document: Document, url: string): void {
   }
 }
 
+class ContentExtractor {
+  extract(
+    html: string,
+    url: string,
+    options: { extractArticle?: boolean; signal?: AbortSignal }
+  ): ExtractionContext {
+    if (!isValidInput(html, url)) {
+      const { document } = parseHTML('<html></html>');
+      return { article: null, metadata: {}, document };
+    }
+
+    try {
+      abortPolicy.throwIfAborted(options.signal, url, 'extract:begin');
+
+      const { html: limitedHtml, truncated } = truncateHtml(html);
+
+      const { document } = stageTracker.run(url, 'extract:parse', () =>
+        parseHTML(limitedHtml)
+      );
+      abortPolicy.throwIfAborted(options.signal, url, 'extract:parsed');
+
+      applyBaseUri(document, url);
+
+      const metadata = stageTracker.run(url, 'extract:metadata', () =>
+        metadataExtractor.extract(document)
+      );
+      abortPolicy.throwIfAborted(options.signal, url, 'extract:metadata');
+
+      const article = options.extractArticle
+        ? stageTracker.run(url, 'extract:article', () =>
+            articleExtractor.extract(document)
+          )
+        : null;
+
+      abortPolicy.throwIfAborted(options.signal, url, 'extract:article');
+
+      return {
+        article,
+        metadata,
+        document,
+        ...(truncated ? { truncated: true } : {}),
+      };
+    } catch (error: unknown) {
+      if (error instanceof FetchError) throw error;
+
+      abortPolicy.throwIfAborted(options.signal, url, 'extract:error');
+
+      logError(
+        'Failed to extract content',
+        error instanceof Error ? error : undefined
+      );
+      const { document } = parseHTML('<html></html>');
+      return { article: null, metadata: {}, document };
+    }
+  }
+}
+
+const contentExtractor = new ContentExtractor();
+
+/** Backwards-compatible export */
+export function extractContent(
+  html: string,
+  url: string,
+  options: { extractArticle?: boolean; signal?: AbortSignal } = {
+    extractArticle: true,
+  }
+): ExtractionResult {
+  const result = contentExtractor.extract(html, url, options);
+  return { article: result.article, metadata: result.metadata };
+}
+
+/* -------------------------------------------------------------------------------------------------
+ * Markdown conversion
+ * ------------------------------------------------------------------------------------------------- */
+
+const CODE_BLOCK = {
+  fence: '```',
+  format: (code: string, language = ''): string =>
+    `\`\`\`${language}\n${code}\n\`\`\``,
+};
+
 function buildInlineCode(content: string): string {
   let maxBackticks = 0;
   let currentRun = 0;
+
   for (const char of content) {
-    if (char === '`') {
-      currentRun++;
-    } else {
+    if (char === '`') currentRun += 1;
+    else {
       if (currentRun > maxBackticks) maxBackticks = currentRun;
       currentRun = 0;
     }
@@ -545,7 +574,6 @@ function buildInlineCode(content: string): string {
 
   const delimiter = '`'.repeat(maxBackticks + 1);
   const padding = content.startsWith('`') || content.endsWith('`') ? ' ' : '';
-
   return `${delimiter}${padding}${content}${padding}${delimiter}`;
 }
 
@@ -556,7 +584,6 @@ function deriveAltFromImageUrl(src: string): string {
     const pathname = src.startsWith('http')
       ? new URL(src).pathname
       : (src.split('?')[0] ?? '');
-
     const segments = pathname.split('/');
     const filename = segments.pop() ?? '';
     if (!filename) return '';
@@ -570,27 +597,33 @@ function deriveAltFromImageUrl(src: string): string {
   }
 }
 
+function hasGetAttribute(
+  value: unknown
+): value is { getAttribute: (name: string) => string | null } {
+  return (
+    isObject(value) &&
+    typeof (value as { getAttribute?: unknown }).getAttribute === 'function'
+  );
+}
+
 function isCodeBlock(
   parent: unknown
 ): parent is { tagName?: string; childNodes?: unknown[] } {
   if (!isObject(parent)) return false;
   const tagName =
-    typeof parent.tagName === 'string' ? parent.tagName.toUpperCase() : '';
+    typeof (parent as { tagName?: unknown }).tagName === 'string'
+      ? (parent as { tagName: string }).tagName.toUpperCase()
+      : '';
   return ['PRE', 'WRAPPED-PRE'].includes(tagName);
 }
 
-function hasGetAttribute(
-  value: unknown
-): value is { getAttribute: (name: string) => string | null } {
-  return isObject(value) && typeof value.getAttribute === 'function';
-}
-
-function buildInlineCodeTranslator(): TranslatorConfig {
-  return {
-    spaceIfRepeatingChar: true,
-    noEscape: true,
-    postprocess: ({ content }: { content: string }) => buildInlineCode(content),
-  };
+function isAnchor(node: unknown): node is { tagName?: string } {
+  if (!isObject(node)) return false;
+  const tagName =
+    typeof (node as { tagName?: unknown }).tagName === 'string'
+      ? (node as { tagName: string }).tagName.toUpperCase()
+      : '';
+  return tagName === 'A';
 }
 
 function resolveAttributeLanguage(node: unknown): string | undefined {
@@ -602,53 +635,24 @@ function resolveAttributeLanguage(node: unknown): string | undefined {
   return resolveLanguageFromAttributes(className, dataLanguage);
 }
 
-function buildCodeTranslator(ctx: unknown): TranslatorConfig {
-  if (!isObject(ctx)) return buildInlineCodeTranslator();
-
-  const { parent } = ctx;
-
-  if (!isCodeBlock(parent)) return buildInlineCodeTranslator();
-
-  return {
-    noEscape: true,
-    preserveWhitespace: true,
-  };
-}
-
-function buildImageTranslator(ctx: unknown): TranslatorConfig {
-  if (!isObject(ctx)) return { content: '' };
-
-  const { node } = ctx;
-  const getAttribute = hasGetAttribute(node)
-    ? node.getAttribute.bind(node)
-    : undefined;
-
-  const src = getAttribute?.('src') ?? '';
-  const existingAlt = getAttribute?.('alt') ?? '';
-
-  const alt = existingAlt.trim() || deriveAltFromImageUrl(src);
-
-  return {
-    content: `![${alt}](${src})`,
-  };
-}
-
 function findLanguageFromCodeChild(node: unknown): string | undefined {
   if (!isObject(node)) return undefined;
 
-  const { childNodes } = node;
-  if (!Array.isArray(childNodes)) return undefined;
+  const childNodes = Array.isArray(
+    (node as { childNodes?: unknown }).childNodes
+  )
+    ? (node as { childNodes: unknown[] }).childNodes
+    : [];
 
   for (const child of childNodes) {
     if (!isObject(child)) continue;
+
     const tagName =
-      typeof child.rawTagName === 'string'
-        ? child.rawTagName.toUpperCase()
+      typeof (child as { rawTagName?: unknown }).rawTagName === 'string'
+        ? (child as { rawTagName: string }).rawTagName.toUpperCase()
         : '';
 
-    if (tagName === 'CODE') {
-      return resolveAttributeLanguage(child);
-    }
+    if (tagName === 'CODE') return resolveAttributeLanguage(child);
   }
 
   return undefined;
@@ -665,11 +669,47 @@ function createCodeBlockPostprocessor(
   };
 }
 
+function buildInlineCodeTranslator(): TranslatorConfig {
+  return {
+    spaceIfRepeatingChar: true,
+    noEscape: true,
+    postprocess: ({ content }: { content: string }) => buildInlineCode(content),
+  };
+}
+
+function buildCodeTranslator(ctx: unknown): TranslatorConfig {
+  if (!isObject(ctx)) return buildInlineCodeTranslator();
+  const { parent } = ctx as { parent?: unknown };
+  if (!isCodeBlock(parent)) return buildInlineCodeTranslator();
+
+  return { noEscape: true, preserveWhitespace: true };
+}
+
+function buildImageTranslator(ctx: unknown): TranslatorConfig {
+  if (!isObject(ctx)) return { content: '' };
+
+  const { node, parent } = ctx as { node?: unknown; parent?: unknown };
+  const getAttribute = hasGetAttribute(node)
+    ? node.getAttribute.bind(node)
+    : undefined;
+
+  const src = getAttribute?.('src') ?? '';
+  const existingAlt = getAttribute?.('alt') ?? '';
+  const alt = existingAlt.trim() || deriveAltFromImageUrl(src);
+
+  const markdown = `![${alt}](${src})`;
+
+  if (isAnchor(parent)) {
+    return { content: markdown };
+  }
+
+  return { content: `\n\n${markdown}\n\n` };
+}
+
 function buildPreTranslator(ctx: unknown): TranslatorConfig {
   if (!isObject(ctx)) return {};
 
-  const { node } = ctx;
-
+  const { node } = ctx as { node?: unknown };
   const attributeLanguage =
     resolveAttributeLanguage(node) ?? findLanguageFromCodeChild(node);
 
@@ -685,10 +725,9 @@ function createCustomTranslators(): TranslatorConfigObject {
     code: (ctx: unknown) => buildCodeTranslator(ctx),
     img: (ctx: unknown) => buildImageTranslator(ctx),
     dl: (ctx: unknown) => {
-      if (!isObject(ctx) || !isObject(ctx.node)) {
+      if (!isObject(ctx) || !isObject((ctx as { node?: unknown }).node))
         return { content: '' };
-      }
-      const node = ctx.node as { childNodes?: unknown[] };
+      const { node } = ctx as { node: { childNodes?: unknown[] } };
       const childNodes = Array.isArray(node.childNodes) ? node.childNodes : [];
 
       const items = childNodes
@@ -696,12 +735,13 @@ function createCustomTranslators(): TranslatorConfigObject {
           if (!isObject(child)) return '';
 
           const nodeName =
-            typeof child.nodeName === 'string'
-              ? child.nodeName.toUpperCase()
+            typeof (child as { nodeName?: unknown }).nodeName === 'string'
+              ? (child as { nodeName: string }).nodeName.toUpperCase()
               : '';
+
           const textContent =
-            typeof child.textContent === 'string'
-              ? child.textContent.trim()
+            typeof (child as { textContent?: unknown }).textContent === 'string'
+              ? (child as { textContent: string }).textContent.trim()
               : '';
 
           if (nodeName === 'DT') return `**${textContent}**`;
@@ -714,19 +754,18 @@ function createCustomTranslators(): TranslatorConfigObject {
       return { content: items ? `\n${items}\n\n` : '' };
     },
     div: (ctx: unknown) => {
-      if (!isObject(ctx) || !isObject(ctx.node)) {
+      if (!isObject(ctx) || !isObject((ctx as { node?: unknown }).node))
         return {};
-      }
-
-      const { node } = ctx;
+      const { node } = ctx as { node: unknown };
       const getAttribute = hasGetAttribute(node)
-        ? node.getAttribute.bind(node)
+        ? (
+            node as { getAttribute: (n: string) => string | null }
+          ).getAttribute.bind(node)
         : undefined;
       const className = getAttribute?.('class') ?? '';
 
-      if (!className.includes('type')) {
-        return {};
-      }
+      if (!className.includes('type')) return {};
+
       return {
         postprocess: ({ content }: { content: string }) => {
           const lines = content.split('\n');
@@ -735,7 +774,9 @@ function createCustomTranslators(): TranslatorConfigObject {
           for (let i = 0; i < lines.length; i++) {
             const line = lines[i] ?? '';
             const nextLine = i < lines.length - 1 ? (lines[i + 1] ?? '') : '';
+
             separated.push(line);
+
             if (
               line.trim() &&
               nextLine.trim() &&
@@ -771,59 +812,64 @@ function createCustomTranslators(): TranslatorConfigObject {
   };
 }
 
-let markdownInstance: NodeHtmlMarkdown | null = null;
+class MarkdownConverter {
+  private instance: NodeHtmlMarkdown | null = null;
 
-function createMarkdownInstance(): NodeHtmlMarkdown {
-  return new NodeHtmlMarkdown(
-    {
-      codeFence: CODE_BLOCK.fence,
-      codeBlockStyle: 'fenced',
-      emDelimiter: '_',
-      bulletMarker: '-',
-    },
-    createCustomTranslators()
-  );
+  translate(html: string): string {
+    return this.get().translate(html).trim();
+  }
+
+  private get(): NodeHtmlMarkdown {
+    this.instance ??= new NodeHtmlMarkdown(
+      {
+        codeFence: CODE_BLOCK.fence,
+        codeBlockStyle: 'fenced',
+        emDelimiter: '_',
+        bulletMarker: '-',
+      },
+      createCustomTranslators()
+    );
+    return this.instance;
+  }
 }
 
-function getMarkdownConverter(): NodeHtmlMarkdown {
-  markdownInstance ??= createMarkdownInstance();
-  return markdownInstance;
-}
+const markdownConverter = new MarkdownConverter();
 
 function preprocessPropertySections(html: string): string {
-  const result = html.replace(
+  return html.replace(
     /<\/section>\s*(<section[^>]*class="[^"]*tsd-member[^"]*"[^>]*>)/g,
     '</section><p>&nbsp;</p>$1'
   );
-  return result;
 }
 
-function translateHtmlToMarkdown(
-  html: string,
-  url: string,
-  signal?: AbortSignal,
-  document?: Document,
-  skipNoiseRemoval?: boolean
-): string {
-  throwIfAborted(signal, url, 'markdown:begin');
+function translateHtmlToMarkdown(params: {
+  html: string;
+  url: string;
+  signal?: AbortSignal | undefined;
+  document?: Document | undefined;
+  skipNoiseRemoval?: boolean | undefined;
+}): string {
+  const { html, url, signal, document, skipNoiseRemoval } = params;
+
+  abortPolicy.throwIfAborted(signal, url, 'markdown:begin');
 
   const cleanedHtml = skipNoiseRemoval
     ? html
-    : runTransformStage(url, 'markdown:noise', () =>
+    : stageTracker.run(url, 'markdown:noise', () =>
         removeNoiseFromHtml(html, document, url)
       );
 
-  throwIfAborted(signal, url, 'markdown:cleaned');
+  abortPolicy.throwIfAborted(signal, url, 'markdown:cleaned');
 
-  const preprocessedHtml = runTransformStage(url, 'markdown:preprocess', () =>
+  const preprocessedHtml = stageTracker.run(url, 'markdown:preprocess', () =>
     preprocessPropertySections(cleanedHtml)
   );
 
-  const content = runTransformStage(url, 'markdown:translate', () =>
-    getMarkdownConverter().translate(preprocessedHtml).trim()
+  const content = stageTracker.run(url, 'markdown:translate', () =>
+    markdownConverter.translate(preprocessedHtml)
   );
 
-  throwIfAborted(signal, url, 'markdown:translated');
+  abortPolicy.throwIfAborted(signal, url, 'markdown:translated');
 
   return cleanupMarkdownArtifacts(content);
 }
@@ -851,103 +897,80 @@ export function htmlToMarkdown(
   if (!html) return buildMetadataFooter(metadata, url);
 
   try {
-    const content = translateHtmlToMarkdown(
+    const content = translateHtmlToMarkdown({
       html,
       url,
-      options?.signal,
-      options?.document,
-      options?.skipNoiseRemoval
-    );
+      signal: options?.signal,
+      document: options?.document,
+      skipNoiseRemoval: options?.skipNoiseRemoval,
+    });
+
     return appendMetadataFooter(content, metadata, url);
   } catch (error: unknown) {
-    if (error instanceof FetchError) {
-      throw error;
-    }
+    if (error instanceof FetchError) throw error;
 
     logError(
       'Failed to convert HTML to markdown',
       error instanceof Error ? error : undefined
     );
-
     return buildMetadataFooter(metadata, url);
   }
 }
 
+/* -------------------------------------------------------------------------------------------------
+ * Raw content shortcut
+ * ------------------------------------------------------------------------------------------------- */
+
 function shouldPreserveRawContent(url: string, content: string): boolean {
-  if (isRawTextContentUrl(url)) {
-    return !isLikelyHtmlContent(content);
-  }
+  if (isRawTextContentUrl(url)) return !isLikelyHtmlContent(content);
   return isRawTextContent(content);
 }
 
-function buildRawMarkdownPayload({
-  rawContent,
-  url,
-  includeMetadata,
-}: {
+function buildRawMarkdownPayload(params: {
   rawContent: string;
   url: string;
   includeMetadata: boolean;
 }): { content: string; title: string | undefined } {
-  const title = extractTitleFromRawMarkdown(rawContent);
-  const content = includeMetadata
-    ? addSourceToMarkdown(rawContent, url)
-    : rawContent;
+  const title = extractTitleFromRawMarkdown(params.rawContent);
+  const content = params.includeMetadata
+    ? addSourceToMarkdown(params.rawContent, params.url)
+    : params.rawContent;
 
   return { content, title };
 }
 
-function buildRawMarkdownResult({
-  rawContent,
-  url,
-  includeMetadata,
-}: {
-  rawContent: string;
-  url: string;
-  includeMetadata: boolean;
-}): MarkdownTransformResult {
-  const { content, title } = buildRawMarkdownPayload({
-    rawContent,
-    url,
-    includeMetadata,
-  });
-  return {
-    markdown: content,
-    title,
-    truncated: false,
-  };
-}
-
-function tryTransformRawContent({
-  html,
-  url,
-  includeMetadata,
-}: {
+function tryTransformRawContent(params: {
   html: string;
   url: string;
   includeMetadata: boolean;
 }): MarkdownTransformResult | null {
-  if (!shouldPreserveRawContent(url, html)) {
-    return null;
-  }
+  if (!shouldPreserveRawContent(params.url, params.html)) return null;
 
-  logDebug('Preserving raw markdown content', { url: truncateUrlForLog(url) });
-  return buildRawMarkdownResult({
-    rawContent: html,
-    url,
-    includeMetadata,
+  logDebug('Preserving raw markdown content', {
+    url: params.url.substring(0, 80),
   });
+
+  const { content, title } = buildRawMarkdownPayload({
+    rawContent: params.html,
+    url: params.url,
+    includeMetadata: params.includeMetadata,
+  });
+
+  return { markdown: content, title, truncated: false };
 }
+
+/* -------------------------------------------------------------------------------------------------
+ * Quality gates + content source resolution
+ * ------------------------------------------------------------------------------------------------- */
 
 const MIN_CONTENT_RATIO = 0.3;
 const MIN_HTML_LENGTH_FOR_GATE = 100;
 const MIN_HEADING_RETENTION_RATIO = 0.7;
 const MIN_CODE_BLOCK_RETENTION_RATIO = 0.5;
 
-/**
- * Check if HTML string needs document wrapper for proper parsing.
- * Fragments without doctype/html/body tags need wrapping.
- */
+const MIN_LINE_LENGTH_FOR_TRUNCATION_CHECK = 20;
+const MAX_TRUNCATED_LINE_RATIO = 0.5;
+
 function needsDocumentWrapper(html: string): boolean {
   const trimmed = html.trim().toLowerCase();
   return (
@@ -957,17 +980,12 @@ function needsDocumentWrapper(html: string): boolean {
   );
 }
 
-/**
- * Wrap HTML fragment in minimal document structure for proper parsing.
- */
 function wrapHtmlFragment(html: string): string {
   return `<!DOCTYPE html><html><body>${html}</body></html>`;
 }
 
 function resolveHtmlDocument(htmlOrDocument: string | Document): Document {
-  if (typeof htmlOrDocument !== 'string') {
-    return htmlOrDocument;
-  }
+  if (typeof htmlOrDocument !== 'string') return htmlOrDocument;
 
   const htmlToParse = needsDocumentWrapper(htmlOrDocument)
     ? wrapHtmlFragment(htmlOrDocument)
@@ -983,10 +1001,6 @@ function countDomSelector(
   return resolveHtmlDocument(htmlOrDocument).querySelectorAll(selector).length;
 }
 
-/**
- * Count headings using DOM querySelectorAll.
- * Handles nested content like <h2><span>Text</span></h2> correctly.
- */
 function countHeadingsDom(htmlOrDocument: string | Document): number {
   return countDomSelector(htmlOrDocument, 'h1,h2,h3,h4,h5,h6');
 }
@@ -995,35 +1009,22 @@ function countCodeBlocksDom(htmlOrDocument: string | Document): number {
   return countDomSelector(htmlOrDocument, 'pre');
 }
 
-function cloneDocumentIfNeeded(
-  htmlOrDocument: string | Document,
-  doc: Document
-): Document {
-  return typeof htmlOrDocument === 'string'
-    ? doc
-    : (doc.cloneNode(true) as Document);
-}
-
 function stripNonVisibleNodes(doc: Document): void {
-  for (const el of doc.querySelectorAll('script,style,noscript')) {
-    el.remove();
-  }
+  for (const el of doc.querySelectorAll('script,style,noscript')) el.remove();
 }
 
 function resolveDocumentText(doc: Document): string {
-  // Note: linkedom may return null for body on HTML fragments despite types
   const body = doc.body as HTMLElement | null;
   const docElement = doc.documentElement as HTMLElement | null;
   return body?.textContent ?? docElement?.textContent ?? '';
 }
 
-/**
- * Get visible text length from HTML, excluding script/style/noscript content.
- * Fixes the bug where stripHtmlTagsForLength() counted JS/CSS as visible text.
- */
 function getVisibleTextLength(htmlOrDocument: string | Document): number {
   const doc = resolveHtmlDocument(htmlOrDocument);
-  const workDoc = cloneDocumentIfNeeded(htmlOrDocument, doc);
+  const workDoc =
+    typeof htmlOrDocument === 'string'
+      ? doc
+      : (doc.cloneNode(true) as Document);
 
   stripNonVisibleNodes(workDoc);
   const text = resolveDocumentText(workDoc);
@@ -1038,35 +1039,22 @@ export function isExtractionSufficient(
   if (!article) return false;
 
   const articleLength = article.textContent.length;
-  // Use DOM-based visible text length to exclude script/style content
   const originalLength = getVisibleTextLength(originalHtmlOrDocument);
 
   if (originalLength < MIN_HTML_LENGTH_FOR_GATE) return true;
-
   return articleLength / originalLength >= MIN_CONTENT_RATIO;
 }
 
-const MIN_LINE_LENGTH_FOR_TRUNCATION_CHECK = 20;
-const MAX_TRUNCATED_LINE_RATIO = 0.5;
-
-/**
- * Detect if extracted text has many truncated/incomplete sentences.
- * Lines longer than 20 chars that don't end with sentence punctuation
- * are considered potentially truncated.
- */
 function hasTruncatedSentences(text: string): boolean {
   const lines = text
     .split('\n')
     .filter(
       (line) => line.trim().length > MIN_LINE_LENGTH_FOR_TRUNCATION_CHECK
     );
+
   if (lines.length < 3) return false;
 
-  const incompleteLines = lines.filter((line) => {
-    const trimmed = line.trim();
-    return !/[.!?:;]$/.test(trimmed);
-  });
-
+  const incompleteLines = lines.filter((line) => !/[.!?:;]$/.test(line.trim()));
   return incompleteLines.length / lines.length > MAX_TRUNCATED_LINE_RATIO;
 }
 
@@ -1096,12 +1084,10 @@ export function createContentMetadataBlock(
     if (article.byline !== undefined) metadata.author = article.byline;
   } else {
     if (extractedMeta.title !== undefined) metadata.title = extractedMeta.title;
-    if (extractedMeta.description !== undefined) {
+    if (extractedMeta.description !== undefined)
       metadata.description = extractedMeta.description;
-    }
-    if (extractedMeta.author !== undefined) {
+    if (extractedMeta.author !== undefined)
       metadata.author = extractedMeta.author;
-    }
   }
 
   return metadata;
@@ -1115,10 +1101,6 @@ interface ContentSource {
   readonly skipNoiseRemoval?: boolean;
 }
 
-/**
- * Content root selectors in priority order.
- * These identify the main content area on a page.
- */
 const CONTENT_ROOT_SELECTORS = [
   'main',
   'article',
@@ -1136,109 +1118,19 @@ const CONTENT_ROOT_SELECTORS = [
   '.article-body',
 ] as const;
 
-/**
- * Find the main content root element in a document.
- * Returns the innerHTML if found, undefined otherwise.
- */
 function findContentRoot(document: Document): string | undefined {
   for (const selector of CONTENT_ROOT_SELECTORS) {
     const element = document.querySelector(selector);
     if (!element) continue;
 
-    // Check if element has meaningful content
     const innerHTML =
       typeof (element as HTMLElement).innerHTML === 'string'
         ? (element as HTMLElement).innerHTML
         : undefined;
 
-    if (innerHTML && innerHTML.trim().length > 100) {
-      return innerHTML;
-    }
+    if (innerHTML && innerHTML.trim().length > 100) return innerHTML;
   }
   return undefined;
-}
-
-function buildContentSource({
-  html,
-  url,
-  article,
-  extractedMeta,
-  includeMetadata,
-  useArticleContent,
-  document,
-}: {
-  html: string;
-  url: string;
-  article: ExtractedArticle | null;
-  extractedMeta: ExtractedMetadata;
-  includeMetadata: boolean;
-  useArticleContent: boolean;
-  document?: Document;
-}): ContentSource {
-  const metadata = createContentMetadataBlock(
-    url,
-    article,
-    extractedMeta,
-    useArticleContent,
-    includeMetadata
-  );
-
-  // If using article content, return it directly
-  if (useArticleContent && article) {
-    return {
-      sourceHtml: article.content,
-      title: article.title,
-      metadata,
-    };
-  }
-
-  // Try content root fallback before using full HTML
-  if (document) {
-    // Apply noise removal to HTML first (without passing document) to get cleaned HTML,
-    // then parse and find content root. This prevents the aggressive DOM stripping that
-    // happens when noise removal is given the original parsed document.
-    const cleanedHtml = removeNoiseFromHtml(html, undefined, url);
-    const { document: cleanedDoc } = parseHTML(cleanedHtml);
-
-    const contentRoot = findContentRoot(cleanedDoc);
-    if (contentRoot) {
-      logDebug('Using content root fallback instead of full HTML', {
-        url: truncateUrlForLog(url),
-        contentLength: contentRoot.length,
-      });
-      return {
-        sourceHtml: contentRoot,
-        title: extractedMeta.title,
-        metadata,
-        // Skip noise removal - this HTML is already from a cleaned document
-        skipNoiseRemoval: true,
-      };
-    }
-  }
-
-  // Fall back to full HTML
-  return {
-    sourceHtml: html,
-    title: extractedMeta.title,
-    metadata,
-    ...(document ? { document } : {}),
-  };
-}
-
-function logQualityGateFallback({
-  safeUrl,
-  articleLength,
-}: {
-  safeUrl: string;
-  articleLength: number;
-}): void {
-  logDebug(
-    'Quality gate: Readability extraction below threshold, using full HTML',
-    {
-      url: safeUrl,
-      articleLength,
-    }
-  );
 }
 
 function shouldUseArticleContent(
@@ -1248,7 +1140,7 @@ function shouldUseArticleContent(
 ): boolean {
   const articleLength = article.textContent.length;
   const originalLength = getVisibleTextLength(originalHtmlOrDocument);
-  const safeUrl = truncateUrlForLog(url);
+  const safeUrl = url.substring(0, 80);
 
   let articleDocument: Document | null = null;
   const getArticleDocument = (): Document => {
@@ -1257,16 +1149,20 @@ function shouldUseArticleContent(
     return articleDocument;
   };
 
-  // If the document is tiny, don't gate too aggressively.
   if (originalLength >= MIN_HTML_LENGTH_FOR_GATE) {
     const ratio = articleLength / originalLength;
     if (ratio < MIN_CONTENT_RATIO) {
-      logQualityGateFallback({ safeUrl, articleLength });
+      logDebug(
+        'Quality gate: Readability extraction below threshold, using full HTML',
+        {
+          url: safeUrl,
+          articleLength,
+        }
+      );
       return false;
     }
   }
 
-  // Heading structure retention (compute counts once to avoid repeated DOM queries/parses).
   const originalHeadings = countHeadingsDom(originalHtmlOrDocument);
   if (originalHeadings > 0) {
     const articleHeadings = countHeadingsDom(getArticleDocument());
@@ -1290,7 +1186,6 @@ function shouldUseArticleContent(
     const articleCodeBlocks = countCodeBlocksDom(getArticleDocument());
     const codeRetentionRatio = articleCodeBlocks / originalCodeBlocks;
 
-    // Always log code block counts for debugging
     logDebug('Code block retention check', {
       url: safeUrl,
       originalCodeBlocks,
@@ -1311,11 +1206,12 @@ function shouldUseArticleContent(
     }
   }
 
-  // Layout extraction issue: truncated/fragmented lines.
   if (hasTruncatedSentences(article.textContent)) {
     logDebug(
       'Quality gate: Extracted text has many truncated sentences, using full HTML',
-      { url: safeUrl }
+      {
+        url: safeUrl,
+      }
     );
     return false;
   }
@@ -1323,12 +1219,66 @@ function shouldUseArticleContent(
   return true;
 }
 
-function resolveContentSource({
-  html,
-  url,
-  includeMetadata,
-  signal,
-}: {
+function buildContentSource(params: {
+  html: string;
+  url: string;
+  article: ExtractedArticle | null;
+  extractedMeta: ExtractedMetadata;
+  includeMetadata: boolean;
+  useArticleContent: boolean;
+  document?: Document;
+}): ContentSource {
+  const {
+    html,
+    url,
+    article,
+    extractedMeta,
+    includeMetadata,
+    useArticleContent,
+    document,
+  } = params;
+
+  const metadata = createContentMetadataBlock(
+    url,
+    article,
+    extractedMeta,
+    useArticleContent,
+    includeMetadata
+  );
+
+  if (useArticleContent && article) {
+    return { sourceHtml: article.content, title: article.title, metadata };
+  }
+
+  if (document) {
+    const cleanedHtml = removeNoiseFromHtml(html, undefined, url);
+    const { document: cleanedDoc } = parseHTML(cleanedHtml);
+
+    const contentRoot = findContentRoot(cleanedDoc);
+    if (contentRoot) {
+      logDebug('Using content root fallback instead of full HTML', {
+        url: url.substring(0, 80),
+        contentLength: contentRoot.length,
+      });
+
+      return {
+        sourceHtml: contentRoot,
+        title: extractedMeta.title,
+        metadata,
+        skipNoiseRemoval: true,
+      };
+    }
+  }
+
+  return {
+    sourceHtml: html,
+    title: extractedMeta.title,
+    metadata,
+    ...(document ? { document } : {}),
+  };
+}
+
+function resolveContentSource(params: {
   html: string;
   url: string;
   includeMetadata: boolean;
@@ -1338,64 +1288,36 @@ function resolveContentSource({
     article,
     metadata: extractedMeta,
     document,
-  } = extractContentWithDocument(html, url, {
+  } = contentExtractor.extract(params.html, params.url, {
     extractArticle: true,
-    ...(signal ? { signal } : {}),
+    ...(params.signal ? { signal: params.signal } : {}),
   });
 
-  const originalDocument = document;
-
   const useArticleContent = article
-    ? shouldUseArticleContent(article, originalDocument, url)
+    ? shouldUseArticleContent(article, document, params.url)
     : false;
 
   return buildContentSource({
-    html,
-    url,
+    html: params.html,
+    url: params.url,
     article,
     extractedMeta,
-    includeMetadata,
+    includeMetadata: params.includeMetadata,
     useArticleContent,
     document,
   });
 }
 
-function tryTransformRawStage(
-  html: string,
-  url: string,
-  includeMetadata: boolean
-): MarkdownTransformResult | null {
-  return runTransformStage(url, 'transform:raw', () =>
-    tryTransformRawContent({
-      html,
-      url,
-      includeMetadata,
-    })
-  );
-}
-
-function resolveContentSourceStage(
-  html: string,
-  url: string,
-  includeMetadata: boolean,
-  signal?: AbortSignal
-): ContentSource {
-  return runTransformStage(url, 'transform:extract', () =>
-    resolveContentSource({
-      html,
-      url,
-      includeMetadata,
-      ...(signal ? { signal } : {}),
-    })
-  );
-}
+/* -------------------------------------------------------------------------------------------------
+ * In-process transform pipeline (public)
+ * ------------------------------------------------------------------------------------------------- */
 
 function buildMarkdownFromContext(
   context: ContentSource,
   url: string,
   signal?: AbortSignal
 ): MarkdownTransformResult {
-  const content = runTransformStage(url, 'transform:markdown', () =>
+  const content = stageTracker.run(url, 'transform:markdown', () =>
     htmlToMarkdown(context.sourceHtml, context.metadata, {
       url,
       ...(signal ? { signal } : {}),
@@ -1403,48 +1325,8 @@ function buildMarkdownFromContext(
       ...(context.skipNoiseRemoval ? { skipNoiseRemoval: true } : {}),
     })
   );
-  return {
-    markdown: content,
-    title: context.title,
-    truncated: false,
-  };
-}
 
-function runTotalTransformStage<T>(url: string, fn: () => T): T {
-  const totalStage = startTransformStage(url, 'transform:total');
-  let success = false;
-
-  try {
-    const result = fn();
-    success = true;
-    return result;
-  } finally {
-    finalizeTotalTransformStage(totalStage, success);
-  }
-}
-
-function finalizeTotalTransformStage(
-  stage: TransformStageContext | null,
-  success: boolean
-): void {
-  if (!success) return;
-  endTransformStage(stage, { truncated: false });
-}
-
-async function runTotalTransformStageAsync<T>(
-  url: string,
-  fn: () => Promise<T>
-): Promise<T> {
-  const totalStage = startTransformStage(url, 'transform:total');
-  let success = false;
-
-  try {
-    const result = await fn();
-    success = true;
-    return result;
-  } finally {
-    finalizeTotalTransformStage(totalStage, success);
-  }
+  return { markdown: content, title: context.title, truncated: false };
 }
 
 export function transformHtmlToMarkdownInProcess(
@@ -1452,24 +1334,44 @@ export function transformHtmlToMarkdownInProcess(
   url: string,
   options: TransformOptions
 ): MarkdownTransformResult {
-  return runTotalTransformStage(url, () => {
-    throwIfAborted(options.signal, url, 'transform:begin');
+  const totalStage = stageTracker.start(url, 'transform:total');
+  let success = false;
 
-    const raw = tryTransformRawStage(html, url, options.includeMetadata);
+  try {
+    abortPolicy.throwIfAborted(options.signal, url, 'transform:begin');
+
+    const raw = stageTracker.run(url, 'transform:raw', () =>
+      tryTransformRawContent({
+        html,
+        url,
+        includeMetadata: options.includeMetadata,
+      })
+    );
     if (raw) {
+      success = true;
       return raw;
     }
 
-    const context = resolveContentSourceStage(
-      html,
-      url,
-      options.includeMetadata,
-      options.signal
+    const context = stageTracker.run(url, 'transform:extract', () =>
+      resolveContentSource({
+        html,
+        url,
+        includeMetadata: options.includeMetadata,
+        ...(options.signal ? { signal: options.signal } : {}),
+      })
     );
 
-    return buildMarkdownFromContext(context, url, options.signal);
-  });
+    const result = buildMarkdownFromContext(context, url, options.signal);
+    success = true;
+    return result;
+  } finally {
+    if (success) stageTracker.end(totalStage, { truncated: false });
+  }
 }
+
+/* -------------------------------------------------------------------------------------------------
+ * Worker pool
+ * ------------------------------------------------------------------------------------------------- */
 
 const workerMessageSchema = z.discriminatedUnion('type', [
   z.object({
@@ -1527,195 +1429,32 @@ interface TransformWorkerPool {
     options: { includeMetadata: boolean; signal?: AbortSignal }
   ): Promise<MarkdownTransformResult>;
   close(): Promise<void>;
+  getQueueDepth(): number;
+  getActiveWorkers(): number;
+  getCapacity(): number;
 }
-
-let pool: WorkerPool | null = null;
 
 const POOL_MIN_WORKERS = 2;
 const POOL_MAX_WORKERS = 4;
 const POOL_SCALE_THRESHOLD = 0.5;
 
-function resolveDefaultWorkerCount(): number {
-  return POOL_MIN_WORKERS;
-}
-
 const DEFAULT_TIMEOUT_MS = config.transform.timeoutMs;
-
-function getOrCreateTransformWorkerPool(): TransformWorkerPool {
-  pool ??= new WorkerPool(resolveDefaultWorkerCount(), DEFAULT_TIMEOUT_MS);
-  return pool;
-}
-
-export async function shutdownTransformWorkerPool(): Promise<void> {
-  if (!pool) return;
-  await pool.close();
-  pool = null;
-}
-
-export interface TransformPoolStats {
-  queueDepth: number;
-  activeWorkers: number;
-  capacity: number;
-}
-
-export function getTransformPoolStats(): TransformPoolStats | null {
-  if (!pool) return null;
-  return {
-    queueDepth: pool.getQueueDepth(),
-    activeWorkers: pool.getActiveWorkers(),
-    capacity: pool.getCapacity(),
-  };
-}
 
 class WorkerPool implements TransformWorkerPool {
   private readonly workers: (WorkerSlot | undefined)[] = [];
   private capacity: number;
-  private readonly minCapacity: number;
-  private readonly maxCapacity: number;
+  private readonly minCapacity = POOL_MIN_WORKERS;
+  private readonly maxCapacity = POOL_MAX_WORKERS;
+
   private readonly queue: PendingTask[] = [];
   private readonly inflight = new Map<string, InflightTask>();
+
   private readonly timeoutMs: number;
   private readonly queueMax: number;
+
   private closed = false;
 
-  private createAbortError(url: string, stage: string): FetchError {
-    return new FetchError('Request was canceled', url, 499, {
-      reason: 'aborted',
-      stage,
-    });
-  }
-
-  private ensureOpen(): void {
-    if (this.closed) {
-      throw new Error('Transform worker pool closed');
-    }
-  }
-
-  private ensureNotAborted(
-    signal: AbortSignal | undefined,
-    url: string,
-    stage: string
-  ): void {
-    if (!signal?.aborted) return;
-    throw this.createAbortError(url, stage);
-  }
-
-  private ensureQueueCapacity(url: string): void {
-    if (this.queue.length < this.queueMax) return;
-    throw new FetchError('Transform worker queue is full', url, 503, {
-      reason: 'queue_full',
-      stage: 'transform:enqueue',
-    });
-  }
-
-  private clearAbortListener(
-    signal: AbortSignal | undefined,
-    listener: (() => void) | undefined
-  ): void {
-    if (!signal || !listener) return;
-    try {
-      signal.removeEventListener('abort', listener);
-    } catch {
-      /* empty */
-    }
-  }
-
-  private markSlotIdle(workerIndex: number): void {
-    const slot = this.workers[workerIndex];
-    if (!slot) return;
-    slot.busy = false;
-    slot.currentTaskId = null;
-  }
-
-  private takeInflight(id: string): InflightTask | null {
-    const inflight = this.inflight.get(id);
-    if (!inflight) return null;
-
-    clearTimeout(inflight.timer);
-    this.clearAbortListener(inflight.signal, inflight.abortListener);
-    this.inflight.delete(id);
-
-    return inflight;
-  }
-
-  private cancelWorkerTask(slot: WorkerSlot | undefined, id: string): void {
-    if (!slot) return;
-    try {
-      slot.worker.postMessage({ type: 'cancel', id });
-    } catch {
-      /* empty */
-    }
-  }
-
-  private restartWorker(workerIndex: number, slot?: WorkerSlot): void {
-    if (this.closed) return;
-    const target = slot ?? this.workers[workerIndex];
-    if (target) {
-      void target.worker.terminate();
-    }
-    this.workers[workerIndex] = this.spawnWorker(workerIndex);
-    this.drainQueue();
-  }
-
-  private rejectIfClosed(reject: (error: unknown) => void): boolean {
-    if (!this.closed) return false;
-    reject(new Error('Transform worker pool closed'));
-    return true;
-  }
-
-  private abortInflightTask(
-    id: string,
-    url: string,
-    workerIndex: number
-  ): void {
-    const slot = this.workers[workerIndex];
-    this.cancelWorkerTask(slot, id);
-    this.failTask(id, this.createAbortError(url, 'transform:signal-abort'));
-    if (slot) {
-      this.restartWorker(workerIndex, slot);
-    }
-  }
-
-  private abortQueuedTask(
-    id: string,
-    url: string,
-    reject: (error: unknown) => void
-  ): void {
-    const queuedIndex = this.queue.findIndex((task) => task.id === id);
-    if (queuedIndex === -1) return;
-    this.queue.splice(queuedIndex, 1);
-    reject(this.createAbortError(url, 'transform:queued-abort'));
-  }
-
-  private createWorkerSlot(worker: Worker): WorkerSlot {
-    return {
-      worker,
-      busy: false,
-      currentTaskId: null,
-    };
-  }
-
-  private registerWorkerHandlers(workerIndex: number, worker: Worker): void {
-    worker.on('message', (raw: unknown) => {
-      this.onWorkerMessage(workerIndex, raw);
-    });
-    worker.on('error', (error: unknown) => {
-      this.onWorkerBroken(
-        workerIndex,
-        `Transform worker error: ${getErrorMessage(error)}`
-      );
-    });
-    worker.on('exit', (code: number) => {
-      this.onWorkerBroken(
-        workerIndex,
-        `Transform worker exited (code ${code})`
-      );
-    });
-  }
-
   constructor(size: number, timeoutMs: number) {
-    this.minCapacity = POOL_MIN_WORKERS;
-    this.maxCapacity = POOL_MAX_WORKERS;
     this.capacity = Math.max(
       this.minCapacity,
       Math.min(size, this.maxCapacity)
@@ -1724,299 +1463,27 @@ class WorkerPool implements TransformWorkerPool {
     this.queueMax = this.maxCapacity * 32;
   }
 
-  private spawnWorker(workerIndex: number): WorkerSlot {
-    const worker = new Worker(
-      new URL('./workers/transform-worker.js', import.meta.url)
-    );
-
-    worker.unref();
-
-    const slot = this.createWorkerSlot(worker);
-    this.registerWorkerHandlers(workerIndex, worker);
-    return slot;
-  }
-
-  private onWorkerBroken(workerIndex: number, message: string): void {
-    if (this.closed) return;
-
-    const slot = this.workers[workerIndex];
-    if (!slot) return;
-
-    if (slot.busy && slot.currentTaskId) {
-      this.failTask(slot.currentTaskId, new Error(message));
-    }
-    this.restartWorker(workerIndex, slot);
-  }
-
-  private resolveWorkerResult(
-    inflight: InflightTask,
-    result: { markdown: string; title?: string | undefined; truncated: boolean }
-  ): void {
-    inflight.resolve({
-      markdown: result.markdown,
-      truncated: result.truncated,
-      title: result.title,
-    });
-  }
-
-  private rejectWorkerError(
-    inflight: InflightTask,
-    error: {
-      name: string;
-      message: string;
-      url: string;
-      statusCode?: number | undefined;
-      details?: Record<string, unknown> | undefined;
-    }
-  ): void {
-    if (error.name === 'FetchError') {
-      inflight.reject(
-        new FetchError(
-          error.message,
-          error.url,
-          error.statusCode,
-          error.details ?? {}
-        )
-      );
-      return;
-    }
-    inflight.reject(new Error(error.message));
-  }
-
-  private onWorkerMessage(workerIndex: number, raw: unknown): void {
-    const parsed = workerMessageSchema.safeParse(raw);
-    if (!parsed.success) return;
-
-    const message = parsed.data;
-    const inflight = this.takeInflight(message.id);
-    if (!inflight) return;
-
-    this.markSlotIdle(workerIndex);
-
-    if (message.type === 'result') {
-      this.resolveWorkerResult(inflight, message.result);
-    } else {
-      this.rejectWorkerError(inflight, message.error);
-    }
-
-    this.drainQueue();
-  }
-
-  private failTask(id: string, error: unknown): void {
-    const inflight = this.takeInflight(id);
-    if (!inflight) return;
-
-    inflight.reject(error);
-    this.markSlotIdle(inflight.workerIndex);
-  }
-
-  private handleAbortSignal(
-    id: string,
-    url: string,
-    reject: (error: unknown) => void
-  ): void {
-    if (this.rejectIfClosed(reject)) return;
-
-    const inflight = this.inflight.get(id);
-    if (inflight) {
-      this.abortInflightTask(id, url, inflight.workerIndex);
-      return;
-    }
-
-    this.abortQueuedTask(id, url, reject);
-  }
-
-  private createPendingTask(
-    html: string,
-    url: string,
-    options: { includeMetadata: boolean; signal?: AbortSignal },
-    resolve: (result: MarkdownTransformResult) => void,
-    reject: (error: unknown) => void
-  ): PendingTask {
-    const id = randomUUID();
-
-    let abortListener: (() => void) | undefined;
-    if (options.signal) {
-      abortListener = () => {
-        this.handleAbortSignal(id, url, reject);
-      };
-      options.signal.addEventListener('abort', abortListener, { once: true });
-    }
-
-    return {
-      id,
-      html,
-      url,
-      includeMetadata: options.includeMetadata,
-      signal: options.signal,
-      abortListener,
-      resolve,
-      reject,
-    };
-  }
-
   async transform(
     html: string,
     url: string,
     options: { includeMetadata: boolean; signal?: AbortSignal }
   ): Promise<MarkdownTransformResult> {
     this.ensureOpen();
-    this.ensureNotAborted(options.signal, url, 'transform:enqueue');
-    this.ensureQueueCapacity(url);
+    if (options.signal?.aborted)
+      throw abortPolicy.createAbortError(url, 'transform:enqueue');
+
+    if (this.queue.length >= this.queueMax) {
+      throw new FetchError('Transform worker queue is full', url, 503, {
+        reason: 'queue_full',
+        stage: 'transform:enqueue',
+      });
+    }
 
     return new Promise<MarkdownTransformResult>((resolve, reject) => {
       const task = this.createPendingTask(html, url, options, resolve, reject);
       this.queue.push(task);
-
       this.drainQueue();
     });
-  }
-
-  /** Scale capacity up if queue pressure exceeds threshold. */
-  private maybeScaleUp(): void {
-    if (
-      this.queue.length > this.capacity * POOL_SCALE_THRESHOLD &&
-      this.capacity < this.maxCapacity
-    ) {
-      this.capacity += 1;
-    }
-  }
-
-  private drainQueue(): void {
-    if (this.closed) return;
-    if (this.queue.length === 0) return;
-
-    this.maybeScaleUp();
-
-    // First pass: try to find an idle existing worker
-    for (
-      let workerIndex = 0;
-      workerIndex < this.workers.length;
-      workerIndex += 1
-    ) {
-      const slot = this.workers[workerIndex];
-      if (slot && !slot.busy) {
-        this.dispatchQueueTask(workerIndex, slot);
-        if (this.queue.length === 0) return;
-      }
-    }
-
-    if (this.workers.length < this.capacity && this.queue.length > 0) {
-      const workerIndex = this.workers.length;
-      const slot = this.spawnWorker(workerIndex);
-      this.workers.push(slot);
-      this.dispatchQueueTask(workerIndex, slot);
-      if (this.workers.length < this.capacity && this.queue.length > 0) {
-        setImmediate(() => {
-          this.drainQueue();
-        });
-      }
-    }
-  }
-
-  private dispatchQueueTask(workerIndex: number, slot: WorkerSlot): void {
-    const task = this.queue.shift();
-    if (!task) return;
-    this.dispatch(workerIndex, slot, task);
-  }
-
-  private dispatch(
-    workerIndex: number,
-    slot: WorkerSlot,
-    task: PendingTask
-  ): void {
-    if (this.rejectIfAborted(task)) return;
-
-    this.markSlotBusy(slot, task);
-    const timer = this.startTaskTimer(workerIndex, slot, task);
-    this.registerInflightTask(task, timer, workerIndex);
-
-    try {
-      this.sendTransformMessage(slot, task);
-    } catch (error: unknown) {
-      this.handleDispatchFailure(workerIndex, slot, task, timer, error);
-    }
-  }
-
-  private rejectIfAborted(task: PendingTask): boolean {
-    if (!task.signal?.aborted) return false;
-    this.clearAbortListener(task.signal, task.abortListener);
-    task.reject(this.createAbortError(task.url, 'transform:dispatch'));
-    return true;
-  }
-
-  private markSlotBusy(slot: WorkerSlot, task: PendingTask): void {
-    slot.busy = true;
-    slot.currentTaskId = task.id;
-  }
-
-  private startTaskTimer(
-    workerIndex: number,
-    slot: WorkerSlot,
-    task: PendingTask
-  ): NodeJS.Timeout {
-    const timer = setTimeout(() => {
-      this.cancelWorkerTask(slot, task.id);
-      const inflight = this.takeInflight(task.id);
-      if (!inflight) return;
-
-      inflight.reject(
-        new FetchError('Request timeout', task.url, 504, {
-          reason: 'timeout',
-          stage: 'transform:worker-timeout',
-        })
-      );
-
-      this.restartWorker(workerIndex, slot);
-    }, this.timeoutMs);
-    timer.unref();
-    return timer;
-  }
-
-  private registerInflightTask(
-    task: PendingTask,
-    timer: NodeJS.Timeout,
-    workerIndex: number
-  ): void {
-    this.inflight.set(task.id, {
-      resolve: task.resolve,
-      reject: task.reject,
-      timer,
-      signal: task.signal,
-      abortListener: task.abortListener,
-      workerIndex,
-    });
-  }
-
-  private sendTransformMessage(slot: WorkerSlot, task: PendingTask): void {
-    slot.worker.postMessage({
-      type: 'transform',
-      id: task.id,
-      html: task.html,
-      url: task.url,
-      includeMetadata: task.includeMetadata,
-    });
-  }
-
-  private handleDispatchFailure(
-    workerIndex: number,
-    slot: WorkerSlot,
-    task: PendingTask,
-    timer: NodeJS.Timeout,
-    error: unknown
-  ): void {
-    clearTimeout(timer);
-    this.clearAbortListener(task.signal, task.abortListener);
-    this.inflight.delete(task.id);
-    this.markSlotIdle(workerIndex);
-
-    const message =
-      error instanceof Error
-        ? error
-        : new Error('Failed to dispatch transform worker message');
-    task.reject(message);
-
-    this.restartWorker(workerIndex, slot);
   }
 
   getQueueDepth(): number {
@@ -2038,6 +1505,7 @@ class WorkerPool implements TransformWorkerPool {
     const terminations = this.workers
       .map((slot) => slot?.worker.terminate())
       .filter((p): p is Promise<number> => p !== undefined);
+
     this.workers.fill(undefined);
     this.workers.length = 0;
 
@@ -2048,13 +1516,356 @@ class WorkerPool implements TransformWorkerPool {
       this.inflight.delete(id);
     }
 
-    for (const task of this.queue) {
+    for (const task of this.queue)
       task.reject(new Error('Transform worker pool closed'));
-    }
     this.queue.length = 0;
 
     await Promise.allSettled(terminations);
   }
+
+  private ensureOpen(): void {
+    if (this.closed) throw new Error('Transform worker pool closed');
+  }
+
+  private createPendingTask(
+    html: string,
+    url: string,
+    options: { includeMetadata: boolean; signal?: AbortSignal },
+    resolve: (result: MarkdownTransformResult) => void,
+    reject: (error: unknown) => void
+  ): PendingTask {
+    const id = randomUUID();
+
+    let abortListener: (() => void) | undefined;
+    if (options.signal) {
+      abortListener = () => {
+        this.onAbortSignal(id, url, reject);
+      };
+      options.signal.addEventListener('abort', abortListener, { once: true });
+    }
+
+    return {
+      id,
+      html,
+      url,
+      includeMetadata: options.includeMetadata,
+      signal: options.signal,
+      abortListener,
+      resolve,
+      reject,
+    };
+  }
+
+  private onAbortSignal(
+    id: string,
+    url: string,
+    reject: (error: unknown) => void
+  ): void {
+    if (this.closed) {
+      reject(new Error('Transform worker pool closed'));
+      return;
+    }
+
+    const inflight = this.inflight.get(id);
+    if (inflight) {
+      this.abortInflight(id, url, inflight.workerIndex);
+      return;
+    }
+
+    const queuedIndex = this.queue.findIndex((t) => t.id === id);
+    if (queuedIndex !== -1) {
+      this.queue.splice(queuedIndex, 1);
+      reject(abortPolicy.createAbortError(url, 'transform:queued-abort'));
+    }
+  }
+
+  private abortInflight(id: string, url: string, workerIndex: number): void {
+    const slot = this.workers[workerIndex];
+    if (slot) {
+      try {
+        slot.worker.postMessage({ type: 'cancel', id });
+      } catch {
+        /* ignore */
+      }
+    }
+    this.failTask(
+      id,
+      abortPolicy.createAbortError(url, 'transform:signal-abort')
+    );
+    if (slot) this.restartWorker(workerIndex, slot);
+  }
+
+  private clearAbortListener(
+    signal: AbortSignal | undefined,
+    listener: (() => void) | undefined
+  ): void {
+    if (!signal || !listener) return;
+    try {
+      signal.removeEventListener('abort', listener);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  private spawnWorker(workerIndex: number): WorkerSlot {
+    const worker = new Worker(
+      new URL('./workers/transform-worker.js', import.meta.url)
+    );
+    worker.unref();
+
+    worker.on('message', (raw: unknown) => {
+      this.onWorkerMessage(workerIndex, raw);
+    });
+    worker.on('error', (error: unknown) => {
+      this.onWorkerBroken(
+        workerIndex,
+        `Transform worker error: ${getErrorMessage(error)}`
+      );
+    });
+    worker.on('exit', (code: number) => {
+      this.onWorkerBroken(
+        workerIndex,
+        `Transform worker exited (code ${code})`
+      );
+    });
+
+    return { worker, busy: false, currentTaskId: null };
+  }
+
+  private onWorkerBroken(workerIndex: number, message: string): void {
+    if (this.closed) return;
+
+    const slot = this.workers[workerIndex];
+    if (!slot) return;
+
+    if (slot.busy && slot.currentTaskId) {
+      this.failTask(slot.currentTaskId, new Error(message));
+    }
+
+    this.restartWorker(workerIndex, slot);
+  }
+
+  private restartWorker(workerIndex: number, slot?: WorkerSlot): void {
+    if (this.closed) return;
+
+    const target = slot ?? this.workers[workerIndex];
+    if (target) void target.worker.terminate();
+
+    this.workers[workerIndex] = this.spawnWorker(workerIndex);
+    this.drainQueue();
+  }
+
+  private onWorkerMessage(workerIndex: number, raw: unknown): void {
+    const parsed = workerMessageSchema.safeParse(raw);
+    if (!parsed.success) return;
+
+    const message = parsed.data;
+    const inflight = this.takeInflight(message.id);
+    if (!inflight) return;
+
+    this.markIdle(workerIndex);
+
+    if (message.type === 'result') {
+      inflight.resolve({
+        markdown: message.result.markdown,
+        truncated: message.result.truncated,
+        title: message.result.title,
+      });
+    } else {
+      const err = message.error;
+      if (err.name === 'FetchError') {
+        inflight.reject(
+          new FetchError(
+            err.message,
+            err.url,
+            err.statusCode,
+            err.details ?? {}
+          )
+        );
+      } else {
+        inflight.reject(new Error(err.message));
+      }
+    }
+
+    this.drainQueue();
+  }
+
+  private takeInflight(id: string): InflightTask | null {
+    const inflight = this.inflight.get(id);
+    if (!inflight) return null;
+
+    clearTimeout(inflight.timer);
+    this.clearAbortListener(inflight.signal, inflight.abortListener);
+    this.inflight.delete(id);
+
+    return inflight;
+  }
+
+  private markIdle(workerIndex: number): void {
+    const slot = this.workers[workerIndex];
+    if (!slot) return;
+    slot.busy = false;
+    slot.currentTaskId = null;
+  }
+
+  private failTask(id: string, error: unknown): void {
+    const inflight = this.takeInflight(id);
+    if (!inflight) return;
+
+    inflight.reject(error);
+    this.markIdle(inflight.workerIndex);
+  }
+
+  private maybeScaleUp(): void {
+    if (
+      this.queue.length > this.capacity * POOL_SCALE_THRESHOLD &&
+      this.capacity < this.maxCapacity
+    ) {
+      this.capacity += 1;
+    }
+  }
+
+  private drainQueue(): void {
+    if (this.closed || this.queue.length === 0) return;
+
+    this.maybeScaleUp();
+
+    for (let i = 0; i < this.workers.length; i += 1) {
+      const slot = this.workers[i];
+      if (slot && !slot.busy) {
+        this.dispatchFromQueue(i, slot);
+        if (this.queue.length === 0) return;
+      }
+    }
+
+    if (this.workers.length < this.capacity && this.queue.length > 0) {
+      const workerIndex = this.workers.length;
+      const slot = this.spawnWorker(workerIndex);
+      this.workers.push(slot);
+      this.dispatchFromQueue(workerIndex, slot);
+
+      if (this.workers.length < this.capacity && this.queue.length > 0) {
+        setImmediate(() => {
+          this.drainQueue();
+        });
+      }
+    }
+  }
+
+  private dispatchFromQueue(workerIndex: number, slot: WorkerSlot): void {
+    const task = this.queue.shift();
+    if (!task) return;
+
+    if (this.closed) {
+      task.reject(new Error('Transform worker pool closed'));
+      return;
+    }
+
+    if (task.signal?.aborted) {
+      this.clearAbortListener(task.signal, task.abortListener);
+      task.reject(abortPolicy.createAbortError(task.url, 'transform:dispatch'));
+      return;
+    }
+
+    slot.busy = true;
+    slot.currentTaskId = task.id;
+
+    const timer = setTimeout(() => {
+      try {
+        slot.worker.postMessage({ type: 'cancel', id: task.id });
+      } catch {
+        /* ignore */
+      }
+
+      const inflight = this.takeInflight(task.id);
+      if (!inflight) return;
+
+      inflight.reject(
+        new FetchError('Request timeout', task.url, 504, {
+          reason: 'timeout',
+          stage: 'transform:worker-timeout',
+        })
+      );
+
+      this.restartWorker(workerIndex, slot);
+    }, this.timeoutMs);
+    timer.unref();
+
+    this.inflight.set(task.id, {
+      resolve: task.resolve,
+      reject: task.reject,
+      timer,
+      signal: task.signal,
+      abortListener: task.abortListener,
+      workerIndex,
+    });
+
+    try {
+      slot.worker.postMessage({
+        type: 'transform',
+        id: task.id,
+        html: task.html,
+        url: task.url,
+        includeMetadata: task.includeMetadata,
+      });
+    } catch (error: unknown) {
+      clearTimeout(timer);
+      this.clearAbortListener(task.signal, task.abortListener);
+      this.inflight.delete(task.id);
+      this.markIdle(workerIndex);
+
+      task.reject(
+        error instanceof Error
+          ? error
+          : new Error('Failed to dispatch transform worker message')
+      );
+      this.restartWorker(workerIndex, slot);
+    }
+  }
+}
+
+class TransformWorkerPoolManager {
+  private pool: WorkerPool | null = null;
+
+  getOrCreate(): WorkerPool {
+    this.pool ??= new WorkerPool(POOL_MIN_WORKERS, DEFAULT_TIMEOUT_MS);
+    return this.pool;
+  }
+
+  getStats(): {
+    queueDepth: number;
+    activeWorkers: number;
+    capacity: number;
+  } | null {
+    if (!this.pool) return null;
+    return {
+      queueDepth: this.pool.getQueueDepth(),
+      activeWorkers: this.pool.getActiveWorkers(),
+      capacity: this.pool.getCapacity(),
+    };
+  }
+
+  async shutdown(): Promise<void> {
+    if (!this.pool) return;
+    await this.pool.close();
+    this.pool = null;
+  }
+}
+
+const poolManager = new TransformWorkerPoolManager();
+
+export interface TransformPoolStats {
+  queueDepth: number;
+  activeWorkers: number;
+  capacity: number;
+}
+
+export function getTransformPoolStats(): TransformPoolStats | null {
+  return poolManager.getStats();
+}
+
+export async function shutdownTransformWorkerPool(): Promise<void> {
+  await poolManager.shutdown();
 }
 
 function buildWorkerTransformOptions(options: TransformOptions): {
@@ -2072,8 +1883,8 @@ async function transformWithWorkerPool(
   url: string,
   options: TransformOptions
 ): Promise<MarkdownTransformResult> {
-  const poolRef = getOrCreateTransformWorkerPool();
-  return poolRef.transform(html, url, buildWorkerTransformOptions(options));
+  const pool = poolManager.getOrCreate();
+  return pool.transform(html, url, buildWorkerTransformOptions(options));
 }
 
 function resolveWorkerFallback(
@@ -2082,11 +1893,8 @@ function resolveWorkerFallback(
   url: string,
   options: TransformOptions
 ): MarkdownTransformResult {
-  if (error instanceof FetchError) {
-    throw error;
-  }
-
-  throwIfAborted(options.signal, url, 'transform:worker-fallback');
+  if (error instanceof FetchError) throw error;
+  abortPolicy.throwIfAborted(options.signal, url, 'transform:worker-fallback');
   return transformHtmlToMarkdownInProcess(html, url, options);
 }
 
@@ -2095,18 +1903,25 @@ export async function transformHtmlToMarkdown(
   url: string,
   options: TransformOptions
 ): Promise<MarkdownTransformResult> {
-  return runTotalTransformStageAsync(url, async () => {
-    throwIfAborted(options.signal, url, 'transform:begin');
+  const totalStage = stageTracker.start(url, 'transform:total');
+  let success = false;
 
-    const workerStage = startTransformStage(url, 'transform:worker');
+  try {
+    abortPolicy.throwIfAborted(options.signal, url, 'transform:begin');
+
+    const workerStage = stageTracker.start(url, 'transform:worker');
     try {
       const result = await transformWithWorkerPool(html, url, options);
+      success = true;
       return result;
     } catch (error: unknown) {
       const fallback = resolveWorkerFallback(error, html, url, options);
+      success = true;
       return fallback;
     } finally {
-      endTransformStage(workerStage);
+      stageTracker.end(workerStage);
     }
-  });
+  } finally {
+    if (success) stageTracker.end(totalStage, { truncated: false });
+  }
 }
