@@ -99,8 +99,9 @@ export function createMcpServer(): McpServer {
   });
 
   setMcpServer(server);
-  registerTools(server, getLocalIconData());
-  registerCachedContentResource(server);
+  const localIcon = getLocalIconData();
+  registerTools(server, localIcon);
+  registerCachedContentResource(server, localIcon);
   registerInstructionsResource(server, instructions);
 
   return server;

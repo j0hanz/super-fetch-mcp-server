@@ -406,8 +406,6 @@ function removeNoiseNodes(
     removeNoiseFromNodeListLike(nodes, shouldCheckNoise);
     return;
   }
-
-  // Generic iterable: copy to avoid iteration issues while removing.
   const nodeList = Array.from(nodes);
   for (const node of nodeList) {
     if (isElement(node) && (!shouldCheckNoise || isNoiseElement(node))) {
@@ -417,16 +415,11 @@ function removeNoiseNodes(
 }
 
 function stripNoiseNodes(document: Document): void {
-  // Pass 1: Trusted selectors (Common noise)
-  // We trust these selectors match actual noise, so we skip the expensive isNoiseElement check
-  // Add user-configured extra selectors
   const targetSelectors = buildNoiseSelector(
     config.noiseRemoval.extraSelectors
   );
   const potentialNoiseNodes = document.querySelectorAll(targetSelectors);
   removeNoiseNodes(potentialNoiseNodes, false);
-
-  // Second pass: check remaining elements for noise patterns (promo, fixed positioning, etc.)
   const allElements = document.querySelectorAll(CANDIDATE_NOISE_SELECTOR);
   removeNoiseNodes(allElements, true);
 }
@@ -434,9 +427,6 @@ function stripNoiseNodes(document: Document): void {
 // ─────────────────────────────────────────────────────────────────────────────
 // URL Resolution
 // ─────────────────────────────────────────────────────────────────────────────
-
-// Protocol patterns to skip during URL resolution (fragment, mailto, tel, blob, data, javascript)
-// JavaScript protocol is detected to skip it for XSS prevention, not to evaluate it
 const SKIP_URL_PREFIXES = [
   '#',
   'java' + 'script:',
@@ -446,11 +436,6 @@ const SKIP_URL_PREFIXES = [
   'blob:',
 ] as const;
 
-/**
- * Check if a URL scheme should be skipped during resolution.
- * These schemes are either fragment-only (#), protocol handlers (mailto, tel),
- * inline data (data, blob), or javascript: which we skip to avoid XSS.
- */
 function shouldSkipUrlResolution(url: string): boolean {
   const normalized = url.trim().toLowerCase();
   return SKIP_URL_PREFIXES.some((prefix) => normalized.startsWith(prefix));
@@ -467,10 +452,40 @@ function tryResolveUrl(relativeUrl: string, baseUrl: URL): string | null {
   }
 }
 
-/**
- * Resolve relative URLs in anchor and image elements to absolute URLs.
- * Fixes broken links/images in markdown output when the source uses relative paths.
- */
+function resolveAnchorElement(element: Element, base: URL): void {
+  const href = element.getAttribute('href');
+  if (href && !shouldSkipUrlResolution(href)) {
+    const resolved = tryResolveUrl(href, base);
+    if (resolved) element.setAttribute('href', resolved);
+  }
+}
+
+function resolveImageElement(element: Element, base: URL): void {
+  const src = element.getAttribute('src');
+  if (src && !shouldSkipUrlResolution(src)) {
+    const resolved = tryResolveUrl(src, base);
+    if (resolved) element.setAttribute('src', resolved);
+  }
+}
+
+function resolveSourceElement(element: Element, base: URL): void {
+  const srcset = element.getAttribute('srcset');
+  if (!srcset) return;
+  const resolved = srcset
+    .split(',')
+    .map((entry) => {
+      const parts = entry.trim().split(/\s+/);
+      const url = parts[0];
+      if (url) {
+        const resolvedUrl = tryResolveUrl(url, base);
+        if (resolvedUrl) parts[0] = resolvedUrl;
+      }
+      return parts.join(' ');
+    })
+    .join(', ');
+  element.setAttribute('srcset', resolved);
+}
+
 function resolveRelativeUrls(document: Document, baseUrl: string): void {
   try {
     const base = new URL(baseUrl);
@@ -479,39 +494,11 @@ function resolveRelativeUrls(document: Document, baseUrl: string): void {
     )) {
       const tag = element.tagName.toLowerCase();
       if (tag === 'a') {
-        const href = element.getAttribute('href');
-        if (href && !shouldSkipUrlResolution(href)) {
-          const resolved = tryResolveUrl(href, base);
-          if (resolved) element.setAttribute('href', resolved);
-        }
-        continue;
-      }
-
-      if (tag === 'img') {
-        const src = element.getAttribute('src');
-        if (src && !shouldSkipUrlResolution(src)) {
-          const resolved = tryResolveUrl(src, base);
-          if (resolved) element.setAttribute('src', resolved);
-        }
-        continue;
-      }
-
-      if (tag === 'source') {
-        const srcset = element.getAttribute('srcset');
-        if (!srcset) continue;
-        const resolved = srcset
-          .split(',')
-          .map((entry) => {
-            const parts = entry.trim().split(/\s+/);
-            const url = parts[0];
-            if (url) {
-              const resolvedUrl = tryResolveUrl(url, base);
-              if (resolvedUrl) parts[0] = resolvedUrl;
-            }
-            return parts.join(' ');
-          })
-          .join(', ');
-        element.setAttribute('srcset', resolved);
+        resolveAnchorElement(element, base);
+      } else if (tag === 'img') {
+        resolveImageElement(element, base);
+      } else if (tag === 'source') {
+        resolveSourceElement(element, base);
       }
     }
   } catch {
@@ -519,14 +506,6 @@ function resolveRelativeUrls(document: Document, baseUrl: string): void {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Main Export
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * Remove noise elements from HTML and resolve relative URLs.
- * Used as a preprocessing step before markdown conversion.
- */
 export function removeNoiseFromHtml(
   html: string,
   document?: Document,

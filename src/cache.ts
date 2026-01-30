@@ -540,10 +540,13 @@ function notifyResourceUpdate(
   });
 }
 
-export function registerCachedContentResource(server: McpServer): void {
+export function registerCachedContentResource(
+  server: McpServer,
+  serverIcon?: string
+): void {
   const isInitialized = attachInitializedGate(server);
   const subscriptions = registerResourceSubscriptionHandlers(server);
-  registerCacheContentResource(server);
+  registerCacheContentResource(server, serverIcon);
   registerCacheUpdateSubscription(server, subscriptions, isInitialized);
 }
 
@@ -555,7 +558,10 @@ function buildCachedContentResponse(
   return buildMarkdownContentResponse(uri, cached.content);
 }
 
-function registerCacheContentResource(server: McpServer): void {
+function registerCacheContentResource(
+  server: McpServer,
+  serverIcon?: string
+): void {
   server.registerResource(
     'cached-content',
     new ResourceTemplate('superfetch://cache/{namespace}/{urlHash}', {
@@ -566,6 +572,17 @@ function registerCacheContentResource(server: McpServer): void {
       description:
         'Access previously fetched web content from cache. Namespace: markdown. UrlHash: SHA-256 hash of the URL.',
       mimeType: 'text/markdown',
+      ...(serverIcon
+        ? {
+            icons: [
+              {
+                src: serverIcon,
+                mimeType: 'image/svg+xml',
+                sizes: ['any'],
+              },
+            ],
+          }
+        : {}),
     },
     (uri, params) => {
       const { namespace, urlHash } = resolveCacheParams(params);
