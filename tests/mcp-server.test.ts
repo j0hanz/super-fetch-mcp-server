@@ -5,8 +5,8 @@ import { createMcpServer } from '../dist/mcp.js';
 
 describe('MCP Server', () => {
   describe('createMcpServer', () => {
-    it('creates a server instance', () => {
-      const server = createMcpServer();
+    it('creates a server instance', async () => {
+      const server = await createMcpServer();
       assert.ok(server, 'Server should be created');
       assert.ok(server.server, 'Server should have underlying server');
       assert.strictEqual(
@@ -16,8 +16,8 @@ describe('MCP Server', () => {
       );
     });
 
-    it('can set error handler on server', () => {
-      const server = createMcpServer();
+    it('can set error handler on server', async () => {
+      const server = await createMcpServer();
       let errorCaught: Error | null = null;
 
       server.server.onerror = (error) => {
@@ -45,14 +45,14 @@ describe('MCP Server', () => {
 
   describe('Server lifecycle', () => {
     it('can close server cleanly', async () => {
-      const server = createMcpServer();
+      const server = await createMcpServer();
       await server.close();
       assert.ok(true, 'Server should close without errors');
     });
 
     it('can create and close multiple servers', async () => {
-      const server1 = createMcpServer();
-      const server2 = createMcpServer();
+      const server1 = await createMcpServer();
+      const server2 = await createMcpServer();
 
       await server1.close();
       await server2.close();
@@ -61,7 +61,7 @@ describe('MCP Server', () => {
     });
 
     it('handles close() called twice gracefully', async () => {
-      const server = createMcpServer();
+      const server = await createMcpServer();
       await server.close();
       await server.close(); // Should not throw
       assert.ok(true, 'Closing twice should be safe');
@@ -69,8 +69,8 @@ describe('MCP Server', () => {
   });
 
   describe('Server error handling', () => {
-    it('error handler does not throw when error is passed', () => {
-      const server = createMcpServer();
+    it('error handler does not throw when error is passed', async () => {
+      const server = await createMcpServer();
       const error = new Error('Test error');
 
       // Should not throw when error handler is invoked
@@ -81,8 +81,8 @@ describe('MCP Server', () => {
       }, 'Error handler should not throw');
     });
 
-    it('error handler handles non-Error objects', () => {
-      const server = createMcpServer();
+    it('error handler handles non-Error objects', async () => {
+      const server = await createMcpServer();
 
       // Should handle string errors
       assert.doesNotThrow(() => {
@@ -102,7 +102,7 @@ describe('MCP Server', () => {
 
   describe('Resources', () => {
     it('registers and handles internal://config resource', async () => {
-      const server = createMcpServer();
+      const server = await createMcpServer();
       const resourceName = 'config';
       // Access private property for testing
       // @ts-ignore

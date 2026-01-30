@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 
 import { z } from 'zod';
 
@@ -29,10 +29,10 @@ import {
 import { shutdownTransformWorkerPool } from './transform.js';
 import { isObject } from './type-guards.js';
 
-function getLocalIcons(): McpIcon[] | undefined {
+async function getLocalIcons(): Promise<McpIcon[] | undefined> {
   try {
     const iconPath = new URL('../assets/logo.svg', import.meta.url);
-    const buffer = readFileSync(iconPath);
+    const buffer = await readFile(iconPath);
     return [
       {
         src: `data:image/svg+xml;base64,${buffer.toString('base64')}`,
@@ -45,12 +45,12 @@ function getLocalIcons(): McpIcon[] | undefined {
   }
 }
 
-function createServerInfo(): {
+async function createServerInfo(): Promise<{
   name: string;
   version: string;
   icons?: McpIcon[];
-} {
-  const localIcons = getLocalIcons();
+}> {
+  const localIcons = await getLocalIcons();
 
   return {
     name: config.server.name,
@@ -91,9 +91,11 @@ function createServerCapabilities(): {
   };
 }
 
-function createServerInstructions(serverVersion: string): string {
+async function createServerInstructions(
+  serverVersion: string
+): Promise<string> {
   try {
-    const raw = readFileSync(
+    const raw = await readFile(
       new URL('./instructions.md', import.meta.url),
       'utf8'
     );
@@ -531,15 +533,16 @@ function registerPrompts(server: McpServer): void {
   }
 }
 
-export function createMcpServer(): McpServer {
-  const instructions = createServerInstructions(config.server.version);
-  const server = new McpServer(createServerInfo(), {
+export async function createMcpServer(): Promise<McpServer> {
+  const instructions = await createServerInstructions(config.server.version);
+  const serverInfo = await createServerInfo();
+  const server = new McpServer(serverInfo, {
     capabilities: createServerCapabilities(),
     instructions,
   });
 
   setMcpServer(server);
-  const localIcons = getLocalIcons();
+  const localIcons = await getLocalIcons();
   registerTools(server);
   registerCachedContentResource(server, localIcons);
   registerInstructionsResource(server, instructions);
@@ -620,7 +623,7 @@ async function connectStdioServer(
 }
 
 export async function startStdioServer(): Promise<void> {
-  const server = createMcpServer();
+  const server = await createMcpServer();
   const transport = new StdioServerTransport();
 
   attachServerErrorHandler(server);

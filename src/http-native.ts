@@ -978,7 +978,7 @@ export async function startHttpServer(): Promise<{
   assertHttpModeConfiguration();
   enableHttpMode();
 
-  const mcpServer = createMcpServer();
+  const mcpServer = await createMcpServer();
   const rateLimiter = createRateLimitManagerImpl(config.rateLimit);
 
   const sessionStore = createSessionStore(config.server.sessionTtlMs);
