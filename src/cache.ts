@@ -154,6 +154,7 @@ class NativeLruCache<K, V> {
   private readonly max: number;
   private readonly ttlMs: number;
   private readonly entries = new Map<K, { value: V; expiresAtMs: number }>();
+  private nextPurgeAtMs = 0;
 
   constructor({ max, ttlMs }: { max: number; ttlMs: number }) {
     this.max = max;
@@ -175,12 +176,13 @@ class NativeLruCache<K, V> {
 
   set(key: K, value: V): void {
     if (this.max <= 0 || this.ttlMs <= 0) return;
+    const now = Date.now();
     this.entries.delete(key);
     this.entries.set(key, {
       value,
-      expiresAtMs: Date.now() + this.ttlMs,
+      expiresAtMs: now + this.ttlMs,
     });
-    this.purgeExpired(Date.now());
+    this.maybePurge(now);
     while (this.entries.size > this.max) {
       const oldestKey = this.entries.keys().next().value;
       if (oldestKey === undefined) break;
@@ -189,8 +191,15 @@ class NativeLruCache<K, V> {
   }
 
   keys(): readonly K[] {
-    this.purgeExpired(Date.now());
+    this.maybePurge(Date.now());
     return [...this.entries.keys()];
+  }
+
+  private maybePurge(now: number): void {
+    if (this.entries.size > this.max || now >= this.nextPurgeAtMs) {
+      this.purgeExpired(now);
+      this.nextPurgeAtMs = now + this.ttlMs;
+    }
   }
 
   private purgeExpired(now: number): void {

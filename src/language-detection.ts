@@ -79,7 +79,7 @@ interface LanguagePattern {
   wordBoundary?: readonly string[];
   regex?: RegExp;
   startsWith?: readonly string[];
-  custom?: (code: string, lower: string) => boolean;
+  custom?: (code: string, lower: string, lines: string[]) => boolean;
 }
 
 // Bash detection constants
@@ -120,8 +120,8 @@ function matchesPackageManagerVerb(line: string): boolean {
   return false;
 }
 
-function detectBashIndicators(code: string): boolean {
-  for (const line of code.split('\n')) {
+function detectBashIndicators(lines: string[]): boolean {
+  for (const line of lines) {
     const trimmed = line.trimStart();
     if (
       trimmed &&
@@ -135,8 +135,8 @@ function detectBashIndicators(code: string): boolean {
   return false;
 }
 
-function detectCssStructure(code: string): boolean {
-  for (const line of code.split('\n')) {
+function detectCssStructure(lines: string[]): boolean {
+  for (const line of lines) {
     const trimmed = line.trimStart();
     if (!trimmed) continue;
     const hasSelector =
@@ -149,8 +149,8 @@ function detectCssStructure(code: string): boolean {
   return false;
 }
 
-function detectYamlStructure(code: string): boolean {
-  for (const line of code.split('\n')) {
+function detectYamlStructure(lines: string[]): boolean {
+  for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed) continue;
     const colonIdx = trimmed.indexOf(':');
@@ -223,14 +223,14 @@ const LANGUAGE_PATTERNS: readonly {
   {
     language: 'bash',
     pattern: {
-      custom: (code) => detectBashIndicators(code),
+      custom: (_code, _lower, lines) => detectBashIndicators(lines),
     },
   },
   {
     language: 'css',
     pattern: {
       regex: /@media|@import|@keyframes/,
-      custom: (code) => detectCssStructure(code),
+      custom: (_code, _lower, lines) => detectCssStructure(lines),
     },
   },
   {
@@ -259,7 +259,7 @@ const LANGUAGE_PATTERNS: readonly {
   {
     language: 'yaml',
     pattern: {
-      custom: (code) => detectYamlStructure(code),
+      custom: (_code, _lower, lines) => detectYamlStructure(lines),
     },
   },
   {
@@ -288,6 +288,7 @@ const LANGUAGE_PATTERNS: readonly {
 function matchesLanguagePattern(
   code: string,
   lower: string,
+  lines: string[],
   pattern: LanguagePattern
 ): boolean {
   if (pattern.keywords?.some((kw) => lower.includes(kw))) return true;
@@ -298,7 +299,7 @@ function matchesLanguagePattern(
     if (pattern.startsWith.some((prefix) => trimmed.startsWith(prefix)))
       return true;
   }
-  if (pattern.custom?.(code, lower)) return true;
+  if (pattern.custom?.(code, lower, lines)) return true;
   return false;
 }
 
@@ -307,8 +308,9 @@ function matchesLanguagePattern(
  */
 export function detectLanguageFromCode(code: string): string | undefined {
   const lower = code.toLowerCase();
+  const lines = code.split('\n');
   for (const { language, pattern } of LANGUAGE_PATTERNS) {
-    if (matchesLanguagePattern(code, lower, pattern)) return language;
+    if (matchesLanguagePattern(code, lower, lines, pattern)) return language;
   }
   return undefined;
 }

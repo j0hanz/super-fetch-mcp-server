@@ -468,66 +468,52 @@ function tryResolveUrl(relativeUrl: string, baseUrl: URL): string | null {
 }
 
 /**
- * Resolve anchor hrefs to absolute URLs.
- */
-function resolveAnchorUrls(document: Document, baseUrl: URL): void {
-  for (const anchor of document.querySelectorAll('a[href]')) {
-    const href = anchor.getAttribute('href');
-    if (href && !shouldSkipUrlResolution(href)) {
-      const resolved = tryResolveUrl(href, baseUrl);
-      if (resolved) anchor.setAttribute('href', resolved);
-    }
-  }
-}
-
-/**
- * Resolve image srcs to absolute URLs.
- */
-function resolveImageUrls(document: Document, baseUrl: URL): void {
-  for (const img of document.querySelectorAll('img[src]')) {
-    const src = img.getAttribute('src');
-    if (src && !shouldSkipUrlResolution(src)) {
-      const resolved = tryResolveUrl(src, baseUrl);
-      if (resolved) img.setAttribute('src', resolved);
-    }
-  }
-}
-
-/**
- * Resolve source srcset to absolute URLs (for picture elements).
- */
-function resolveSrcsetUrls(document: Document, baseUrl: URL): void {
-  for (const source of document.querySelectorAll('source[srcset]')) {
-    const srcset = source.getAttribute('srcset');
-    if (!srcset) continue;
-
-    // srcset can have multiple URLs with descriptors like "url 1x, url 2x"
-    const resolved = srcset
-      .split(',')
-      .map((entry) => {
-        const parts = entry.trim().split(/\s+/);
-        const url = parts[0];
-        if (url) {
-          const resolvedUrl = tryResolveUrl(url, baseUrl);
-          if (resolvedUrl) parts[0] = resolvedUrl;
-        }
-        return parts.join(' ');
-      })
-      .join(', ');
-    source.setAttribute('srcset', resolved);
-  }
-}
-
-/**
  * Resolve relative URLs in anchor and image elements to absolute URLs.
  * Fixes broken links/images in markdown output when the source uses relative paths.
  */
 function resolveRelativeUrls(document: Document, baseUrl: string): void {
   try {
     const base = new URL(baseUrl);
-    resolveAnchorUrls(document, base);
-    resolveImageUrls(document, base);
-    resolveSrcsetUrls(document, base);
+    for (const element of document.querySelectorAll(
+      'a[href], img[src], source[srcset]'
+    )) {
+      const tag = element.tagName.toLowerCase();
+      if (tag === 'a') {
+        const href = element.getAttribute('href');
+        if (href && !shouldSkipUrlResolution(href)) {
+          const resolved = tryResolveUrl(href, base);
+          if (resolved) element.setAttribute('href', resolved);
+        }
+        continue;
+      }
+
+      if (tag === 'img') {
+        const src = element.getAttribute('src');
+        if (src && !shouldSkipUrlResolution(src)) {
+          const resolved = tryResolveUrl(src, base);
+          if (resolved) element.setAttribute('src', resolved);
+        }
+        continue;
+      }
+
+      if (tag === 'source') {
+        const srcset = element.getAttribute('srcset');
+        if (!srcset) continue;
+        const resolved = srcset
+          .split(',')
+          .map((entry) => {
+            const parts = entry.trim().split(/\s+/);
+            const url = parts[0];
+            if (url) {
+              const resolvedUrl = tryResolveUrl(url, base);
+              if (resolvedUrl) parts[0] = resolvedUrl;
+            }
+            return parts.join(' ');
+          })
+          .join(', ');
+        element.setAttribute('srcset', resolved);
+      }
+    }
   } catch {
     /* invalid base URL - skip resolution */
   }

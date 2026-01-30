@@ -2,9 +2,13 @@ import { randomUUID } from 'node:crypto';
 
 import { z } from 'zod';
 
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type {
+  McpServer,
+  ToolCallback,
+} from '@modelcontextprotocol/sdk/server/mcp.js';
 import type {
   CallToolResult,
+  ContentBlock,
   ToolAnnotations,
 } from '@modelcontextprotocol/sdk/types.js';
 
@@ -54,25 +58,17 @@ export interface ToolContentResourceBlock {
   };
 }
 
-export type ToolContentBlockUnion =
-  | ToolContentBlock
-  | ToolContentResourceLinkBlock
-  | ToolContentResourceBlock;
+export type ToolContentBlockUnion = ContentBlock;
 
-export interface ToolErrorResponse {
-  content: ToolContentBlockUnion[];
+export type ToolErrorResponse = CallToolResult & {
   structuredContent: {
     error: string;
     url: string;
   };
   isError: true;
-}
+};
 
-export interface ToolResponseBase {
-  content: ToolContentBlockUnion[];
-  structuredContent?: Record<string, unknown>;
-  isError?: boolean;
-}
+export type ToolResponseBase = CallToolResult;
 
 export interface FetchPipelineOptions<T> {
   /** URL to fetch */
@@ -831,6 +827,8 @@ export async function fetchUrlToolHandler(
   });
 }
 
+type FetchUrlToolHandler = ToolCallback<typeof fetchUrlInputSchema>;
+
 const TOOL_DEFINITION = {
   name: FETCH_URL_TOOL_NAME,
   title: 'Fetch URL',
@@ -844,6 +842,14 @@ const TOOL_DEFINITION = {
     idempotentHint: true,
     openWorldHint: true,
   } satisfies ToolAnnotations,
+} satisfies {
+  name: string;
+  title: string;
+  description: string;
+  inputSchema: typeof fetchUrlInputSchema;
+  outputSchema: typeof fetchUrlOutputSchema;
+  annotations: ToolAnnotations;
+  handler: FetchUrlToolHandler;
 };
 
 export function withRequestContextIfMissing<TParams, TResult, TExtra = unknown>(
@@ -892,11 +898,6 @@ export function registerTools(server: McpServer, serverIcon?: string): void {
           }
         : {}),
     },
-    withRequestContextIfMissing(
-      TOOL_DEFINITION.handler as unknown as (
-        params: FetchUrlInput,
-        extra?: ToolHandlerExtra
-      ) => Promise<CallToolResult>
-    )
+    withRequestContextIfMissing(TOOL_DEFINITION.handler)
   );
 }
