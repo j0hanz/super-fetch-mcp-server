@@ -59,7 +59,7 @@ function removeNodes(
     return;
   }
 
-  for (const node of Array.from(nodes)) {
+  for (const node of nodes) {
     if (shouldRemove(node)) node.remove();
   }
 }
@@ -278,7 +278,7 @@ class PromoDetector {
   private getRegex(): RegExp {
     if (this.regexCache) return this.regexCache;
 
-    const tokens = Array.from(this.getTokens());
+    const tokens = [...this.getTokens()];
     const escaped = tokens.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
     const pattern = `(?:^|[^a-z0-9])(?:${escaped.join('|')})(?:$|[^a-z0-9])`;
 

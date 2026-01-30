@@ -11,13 +11,14 @@ const ALLOWED_HASH_ALGORITHMS: ReadonlySet<AllowedHashAlgorithm> = new Set([
 
 function byteLength(input: string | Uint8Array): number {
   return typeof input === 'string'
-    ? Buffer.byteLength(input, 'utf8')
+    ? new TextEncoder().encode(input).length
     : input.byteLength;
 }
 
 export function timingSafeEqualUtf8(a: string, b: string): boolean {
-  const aBuffer = Buffer.from(a, 'utf8');
-  const bBuffer = Buffer.from(b, 'utf8');
+  const encoder = new TextEncoder();
+  const aBuffer = encoder.encode(a);
+  const bBuffer = encoder.encode(b);
   if (aBuffer.length !== bBuffer.length) return false;
   return timingSafeEqual(aBuffer, bBuffer);
 }

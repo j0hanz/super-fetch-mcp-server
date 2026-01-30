@@ -455,15 +455,32 @@ class SafeDnsLookup {
       callback(err, address, family);
     };
 
-    dns.lookup(hostname, lookupOptions, (err, addresses) => {
-      this.handleLookupResult(
-        err,
-        addresses,
-        hostname,
-        resolvedFamily,
-        useAll,
-        safeCallback
-      );
+    (async () => {
+      try {
+        const result = await dns.promises.lookup(hostname, lookupOptions);
+        const addresses = Array.isArray(result) ? result : [result];
+        this.handleLookupResult(
+          null,
+          addresses,
+          hostname,
+          resolvedFamily,
+          useAll,
+          safeCallback
+        );
+      } catch (error: unknown) {
+        this.handleLookupResult(
+          error as NodeJS.ErrnoException,
+          [],
+          hostname,
+          resolvedFamily,
+          useAll,
+          safeCallback
+        );
+      }
+    })().catch((error: unknown) => {
+      if (!timeout.isDone()) {
+        safeCallback(error as NodeJS.ErrnoException, []);
+      }
     });
   }
 
