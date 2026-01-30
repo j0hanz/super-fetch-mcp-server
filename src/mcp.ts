@@ -7,7 +7,10 @@ import {
   ResourceTemplate,
 } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import {
+  CallToolRequestSchema,
+  type Result,
+} from '@modelcontextprotocol/sdk/types.js';
 
 import { type McpIcon, registerCachedContentResource } from './cache.js';
 import { config } from './config.js';
@@ -289,14 +292,14 @@ function registerTaskHandlers(server: McpServer): void {
     if (task.status === 'cancelled') {
       throw new Error('Task was cancelled');
     }
-    return Promise.resolve(
-      task.result ?? {
-        content: [],
-        _meta: {
-          'io.modelcontextprotocol/related-task': { taskId: task.taskId },
-        },
-      }
-    );
+    const result = (task.result ?? { content: [] }) as Result;
+    return Promise.resolve({
+      ...result,
+      _meta: {
+        ...result._meta,
+        'io.modelcontextprotocol/related-task': { taskId: task.taskId },
+      },
+    });
   });
 
   server.server.setRequestHandler(TaskListSchema, async () => {
