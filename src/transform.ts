@@ -713,6 +713,41 @@ function createCustomTranslators(): TranslatorConfigObject {
 
       return { content: items ? `\n${items}\n\n` : '' };
     },
+    div: (ctx: unknown) => {
+      if (!isObject(ctx) || !isObject(ctx.node)) {
+        return {};
+      }
+      
+      const node = ctx.node as { attribs?: { class?: string } };
+      const className = typeof node.attribs?.class === 'string' ? node.attribs.class : '';
+      if (!className.includes('type')) {
+        return {};
+      }
+      return {
+        postprocess: ({ content }: { content: string }) => {
+          const lines = content.split('\n');
+          const separated: string[] = [];
+          
+          for (let i = 0; i < lines.length; i++) {
+            const line = lines[i] ?? '';
+            const nextLine = i < lines.length - 1 ? (lines[i + 1] ?? '') : '';
+            separated.push(line);
+            if (
+              line.trim() &&
+              nextLine.trim() &&
+              line.includes(':') &&
+              nextLine.includes(':') &&
+              !line.startsWith(' ') &&
+              !nextLine.startsWith(' ')
+            ) {
+              separated.push('');
+            }
+          }
+          
+          return separated.join('\n');
+        },
+      };
+    },
     kbd: () => ({
       postprocess: ({ content }: { content: string }) => `\`${content}\``,
     }),
@@ -725,7 +760,8 @@ function createCustomTranslators(): TranslatorConfigObject {
     sup: () => ({
       postprocess: ({ content }: { content: string }) => `^${content}^`,
     }),
-    // Fix #6: Handle <pre> without <code> - wrap in fenced code block
+    // Note: section translator removed in favor of HTML preprocessing
+    // See preprocessPropertySections() for the fix to TypeDoc section spacing
     pre: (ctx: unknown) => buildPreTranslator(ctx),
   };
 }
@@ -749,6 +785,14 @@ function getMarkdownConverter(): NodeHtmlMarkdown {
   return markdownInstance;
 }
 
+function preprocessPropertySections(html: string): string {
+  const result = html.replace(
+    /<\/section>\s*(<section[^>]*class="[^"]*tsd-panel[^"]*tsd-member[^"]*"[^>]*>)/g,
+    '</section><p>&nbsp;</p>$1'
+  );
+  return result;
+}
+
 function translateHtmlToMarkdown(
   html: string,
   url: string,
@@ -766,8 +810,12 @@ function translateHtmlToMarkdown(
 
   throwIfAborted(signal, url, 'markdown:cleaned');
 
+  const preprocessedHtml = runTransformStage(url, 'markdown:preprocess', () =>
+    preprocessPropertySections(cleanedHtml)
+  );
+
   const content = runTransformStage(url, 'markdown:translate', () =>
-    getMarkdownConverter().translate(cleanedHtml).trim()
+    getMarkdownConverter().translate(preprocessedHtml).trim()
   );
 
   throwIfAborted(signal, url, 'markdown:translated');
