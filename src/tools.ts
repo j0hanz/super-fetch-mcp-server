@@ -877,7 +877,10 @@ function resolveRequestIdFromExtra(extra: unknown): string | undefined {
   return undefined;
 }
 
-export function registerTools(server: McpServer, serverIcon?: string): void {
+export function registerTools(
+  server: McpServer,
+  serverIcons?: cache.McpIcon[]
+): void {
   server.registerTool(
     TOOL_DEFINITION.name,
     {
@@ -886,17 +889,7 @@ export function registerTools(server: McpServer, serverIcon?: string): void {
       inputSchema: TOOL_DEFINITION.inputSchema,
       outputSchema: TOOL_DEFINITION.outputSchema,
       annotations: TOOL_DEFINITION.annotations,
-      ...(serverIcon
-        ? {
-            icons: [
-              {
-                src: serverIcon,
-                mimeType: 'image/svg+xml',
-                sizes: ['any'],
-              },
-            ],
-          }
-        : {}),
+      ...(serverIcons ? { icons: serverIcons } : {}),
     },
     withRequestContextIfMissing(TOOL_DEFINITION.handler)
   );

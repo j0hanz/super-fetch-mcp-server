@@ -540,13 +540,19 @@ function notifyResourceUpdate(
   });
 }
 
+export interface McpIcon {
+  src: string;
+  mimeType: string;
+  sizes: string[];
+}
+
 export function registerCachedContentResource(
   server: McpServer,
-  serverIcon?: string
+  serverIcons?: McpIcon[]
 ): void {
   const isInitialized = attachInitializedGate(server);
   const subscriptions = registerResourceSubscriptionHandlers(server);
-  registerCacheContentResource(server, serverIcon);
+  registerCacheContentResource(server, serverIcons);
   registerCacheUpdateSubscription(server, subscriptions, isInitialized);
 }
 
@@ -560,7 +566,7 @@ function buildCachedContentResponse(
 
 function registerCacheContentResource(
   server: McpServer,
-  serverIcon?: string
+  serverIcons?: McpIcon[]
 ): void {
   server.registerResource(
     'cached-content',
@@ -572,17 +578,7 @@ function registerCacheContentResource(
       description:
         'Access previously fetched web content from cache. Namespace: markdown. UrlHash: SHA-256 hash of the URL.',
       mimeType: 'text/markdown',
-      ...(serverIcon
-        ? {
-            icons: [
-              {
-                src: serverIcon,
-                mimeType: 'image/svg+xml',
-                sizes: ['any'],
-              },
-            ],
-          }
-        : {}),
+      ...(serverIcons ? { icons: serverIcons } : {}),
     },
     (uri, params) => {
       const { namespace, urlHash } = resolveCacheParams(params);

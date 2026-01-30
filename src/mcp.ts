@@ -6,18 +6,24 @@ import {
 } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 
-import { registerCachedContentResource } from './cache.js';
+import { type McpIcon, registerCachedContentResource } from './cache.js';
 import { config } from './config.js';
 import { destroyAgents } from './fetch.js';
 import { logError, logInfo, setMcpServer } from './observability.js';
 import { registerTools } from './tools.js';
 import { shutdownTransformWorkerPool } from './transform.js';
 
-function getLocalIconData(): string | undefined {
+function getLocalIcons(): McpIcon[] | undefined {
   try {
     const iconPath = new URL('../assets/logo.svg', import.meta.url);
     const buffer = readFileSync(iconPath);
-    return `data:image/svg+xml;base64,${buffer.toString('base64')}`;
+    return [
+      {
+        src: `data:image/svg+xml;base64,${buffer.toString('base64')}`,
+        mimeType: 'image/svg+xml',
+        sizes: ['any'],
+      },
+    ];
   } catch {
     return undefined;
   }
@@ -26,20 +32,14 @@ function getLocalIconData(): string | undefined {
 function createServerInfo(): {
   name: string;
   version: string;
-  icons?: { src: string; mimeType: string; sizes: string[] }[];
+  icons?: McpIcon[];
 } {
-  const localIcon = getLocalIconData();
+  const localIcons = getLocalIcons();
 
   return {
     name: config.server.name,
     version: config.server.version,
-    ...(localIcon
-      ? {
-          icons: [
-            { src: localIcon, mimeType: 'image/svg+xml', sizes: ['any'] },
-          ],
-        }
-      : {}),
+    ...(localIcons ? { icons: localIcons } : {}),
   };
 }
 
@@ -99,9 +99,9 @@ export function createMcpServer(): McpServer {
   });
 
   setMcpServer(server);
-  const localIcon = getLocalIconData();
-  registerTools(server, localIcon);
-  registerCachedContentResource(server, localIcon);
+  const localIcons = getLocalIcons();
+  registerTools(server, localIcons);
+  registerCachedContentResource(server, localIcons);
   registerInstructionsResource(server, instructions);
 
   return server;
