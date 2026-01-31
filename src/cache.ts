@@ -402,10 +402,10 @@ export function isEnabled(): boolean {
   return store.isEnabled();
 }
 
-export function getRecentCachedUrls(): Array<{ url: string; title?: string }> {
+export function getRecentCachedUrls(): { url: string; title?: string }[] {
   const cacheKeys = store.keys();
   const maxResults = 20;
-  const results: Array<{ url: string; title?: string }> = [];
+  const results: { url: string; title?: string }[] = [];
 
   for (let i = 0; i < Math.min(cacheKeys.length, maxResults); i++) {
     const key = cacheKeys[i];
