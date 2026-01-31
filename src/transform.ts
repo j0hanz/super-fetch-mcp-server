@@ -1251,8 +1251,8 @@ function buildContentSource(params: {
   }
 
   if (document) {
-    const cleanedHtml = removeNoiseFromHtml(html, undefined, url);
-    const { document: cleanedDoc } = parseHTML(cleanedHtml);
+    removeNoiseFromHtml(html, document, url);
+    const cleanedDoc = document;
 
     const contentRoot = findContentRoot(cleanedDoc);
     if (contentRoot) {
@@ -1447,6 +1447,7 @@ class WorkerPool implements TransformWorkerPool {
   private readonly maxCapacity = POOL_MAX_WORKERS;
 
   private readonly queue: PendingTask[] = [];
+  private queueHead = 0;
   private readonly inflight = new Map<string, InflightTask>();
 
   private readonly timeoutMs: number;
@@ -1472,7 +1473,7 @@ class WorkerPool implements TransformWorkerPool {
     if (options.signal?.aborted)
       throw abortPolicy.createAbortError(url, 'transform:enqueue');
 
-    if (this.queue.length >= this.queueMax) {
+    if (this.getQueueDepth() >= this.queueMax) {
       throw new FetchError('Transform worker queue is full', url, 503, {
         reason: 'queue_full',
         stage: 'transform:enqueue',
@@ -1487,7 +1488,8 @@ class WorkerPool implements TransformWorkerPool {
   }
 
   getQueueDepth(): number {
-    return this.queue.length;
+    const depth = this.queue.length - this.queueHead;
+    return depth > 0 ? depth : 0;
   }
 
   getActiveWorkers(): number {
@@ -1516,9 +1518,12 @@ class WorkerPool implements TransformWorkerPool {
       this.inflight.delete(id);
     }
 
-    for (const task of this.queue)
-      task.reject(new Error('Transform worker pool closed'));
+    for (let i = this.queueHead; i < this.queue.length; i += 1) {
+      const task = this.queue[i];
+      if (task) task.reject(new Error('Transform worker pool closed'));
+    }
     this.queue.length = 0;
+    this.queueHead = 0;
 
     await Promise.allSettled(terminations);
   }
@@ -1572,10 +1577,11 @@ class WorkerPool implements TransformWorkerPool {
       return;
     }
 
-    const queuedIndex = this.queue.findIndex((t) => t.id === id);
-    if (queuedIndex !== -1) {
+    const queuedIndex = this.findQueuedIndex(id);
+    if (queuedIndex !== null) {
       this.queue.splice(queuedIndex, 1);
       reject(abortPolicy.createAbortError(url, 'transform:queued-abort'));
+      this.maybeCompactQueue();
     }
   }
 
@@ -1718,7 +1724,7 @@ class WorkerPool implements TransformWorkerPool {
 
   private maybeScaleUp(): void {
     if (
-      this.queue.length > this.capacity * POOL_SCALE_THRESHOLD &&
+      this.getQueueDepth() > this.capacity * POOL_SCALE_THRESHOLD &&
       this.capacity < this.maxCapacity
     ) {
       this.capacity += 1;
@@ -1726,7 +1732,7 @@ class WorkerPool implements TransformWorkerPool {
   }
 
   private drainQueue(): void {
-    if (this.closed || this.queue.length === 0) return;
+    if (this.closed || this.getQueueDepth() === 0) return;
 
     this.maybeScaleUp();
 
@@ -1734,17 +1740,17 @@ class WorkerPool implements TransformWorkerPool {
       const slot = this.workers[i];
       if (slot && !slot.busy) {
         this.dispatchFromQueue(i, slot);
-        if (this.queue.length === 0) return;
+        if (this.getQueueDepth() === 0) return;
       }
     }
 
-    if (this.workers.length < this.capacity && this.queue.length > 0) {
+    if (this.workers.length < this.capacity && this.getQueueDepth() > 0) {
       const workerIndex = this.workers.length;
       const slot = this.spawnWorker(workerIndex);
       this.workers.push(slot);
       this.dispatchFromQueue(workerIndex, slot);
 
-      if (this.workers.length < this.capacity && this.queue.length > 0) {
+      if (this.workers.length < this.capacity && this.getQueueDepth() > 0) {
         setImmediate(() => {
           this.drainQueue();
         });
@@ -1753,8 +1759,10 @@ class WorkerPool implements TransformWorkerPool {
   }
 
   private dispatchFromQueue(workerIndex: number, slot: WorkerSlot): void {
-    const task = this.queue.shift();
+    const task = this.queue[this.queueHead];
     if (!task) return;
+    this.queueHead += 1;
+    this.maybeCompactQueue();
 
     if (this.closed) {
       task.reject(new Error('Transform worker pool closed'));
@@ -1820,6 +1828,26 @@ class WorkerPool implements TransformWorkerPool {
           : new Error('Failed to dispatch transform worker message')
       );
       this.restartWorker(workerIndex, slot);
+    }
+  }
+
+  private findQueuedIndex(id: string): number | null {
+    for (let i = this.queueHead; i < this.queue.length; i += 1) {
+      const task = this.queue[i];
+      if (task?.id === id) return i;
+    }
+    return null;
+  }
+
+  private maybeCompactQueue(): void {
+    if (this.queueHead === 0) return;
+
+    if (
+      this.queueHead >= this.queue.length ||
+      (this.queueHead > 1024 && this.queueHead > this.queue.length / 2)
+    ) {
+      this.queue.splice(0, this.queueHead);
+      this.queueHead = 0;
     }
   }
 }

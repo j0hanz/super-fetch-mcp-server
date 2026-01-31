@@ -167,6 +167,79 @@ interface ExtendedCallToolRequest {
   };
 }
 
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return isObject(value);
+}
+
+function isValidTask(task: unknown): boolean {
+  if (task === undefined) return true;
+  if (!isRecord(task)) return false;
+  const { ttl } = task as { ttl?: unknown };
+  return ttl === undefined || typeof ttl === 'number';
+}
+
+function isValidMeta(meta: unknown): boolean {
+  if (meta === undefined) return true;
+  if (!isRecord(meta)) return false;
+
+  const { progressToken } = meta as { progressToken?: unknown };
+  if (
+    progressToken !== undefined &&
+    typeof progressToken !== 'string' &&
+    typeof progressToken !== 'number'
+  ) {
+    return false;
+  }
+
+  const related = (
+    meta as {
+      'io.modelcontextprotocol/related-task'?: unknown;
+    }
+  )['io.modelcontextprotocol/related-task'];
+
+  if (related === undefined) return true;
+  if (!isRecord(related)) return false;
+
+  const { taskId } = related as { taskId?: unknown };
+  return typeof taskId === 'string';
+}
+
+function isExtendedCallToolRequest(
+  request: unknown
+): request is ExtendedCallToolRequest {
+  if (!isRecord(request)) return false;
+  const { method, params } = request as {
+    method?: unknown;
+    params?: unknown;
+  };
+
+  if (method !== 'tools/call') return false;
+  if (!isRecord(params)) return false;
+
+  const {
+    name,
+    arguments: args,
+    task,
+    _meta,
+  } = params as {
+    name?: unknown;
+    arguments?: unknown;
+    task?: unknown;
+    _meta?: unknown;
+  };
+
+  return (
+    isNonEmptyString(name) &&
+    (args === undefined || isRecord(args)) &&
+    isValidTask(task) &&
+    isValidMeta(_meta)
+  );
+}
+
 interface HandlerExtra {
   sessionId?: string;
   authInfo?: { clientId?: string; token?: string };
@@ -390,9 +463,11 @@ function registerTaskHandlers(server: McpServer): void {
   server.server.setRequestHandler(
     CallToolRequestSchema,
     async (request, extra) => {
-      const extendedRequest = request as unknown as ExtendedCallToolRequest;
       const context = resolveToolCallContext(extra as HandlerExtra | undefined);
-      const result = await handleToolCallRequest(extendedRequest, context);
+      if (!isExtendedCallToolRequest(request)) {
+        throw new McpError(ErrorCode.InvalidParams, 'Invalid tool request');
+      }
+      const result = await handleToolCallRequest(request, context);
       return result as unknown as { content: [] };
     }
   );
