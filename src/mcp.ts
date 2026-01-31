@@ -2,7 +2,6 @@ import { readFile } from 'node:fs/promises';
 
 import { z } from 'zod';
 
-import { completable } from '@modelcontextprotocol/sdk/server/completable.js';
 import {
   McpServer,
   ResourceTemplate,
@@ -15,11 +14,7 @@ import {
   type Result,
 } from '@modelcontextprotocol/sdk/types.js';
 
-import {
-  getRecentCachedUrls,
-  type McpIcon,
-  registerCachedContentResource,
-} from './cache.js';
+import { type McpIcon, registerCachedContentResource } from './cache.js';
 import { config } from './config.js';
 import { destroyAgents } from './fetch.js';
 import { logError, logInfo, setMcpServer } from './observability.js';
@@ -67,7 +62,6 @@ async function createServerInfo(): Promise<{
 function createServerCapabilities(): {
   tools: { listChanged: boolean };
   resources: { listChanged: boolean; subscribe: boolean };
-  prompts: { listChanged: boolean };
   logging: Record<string, never>;
   tasks: {
     list: Record<string, never>;
@@ -82,7 +76,6 @@ function createServerCapabilities(): {
   return {
     tools: { listChanged: false },
     resources: { listChanged: false, subscribe: false },
-    prompts: { listChanged: false },
     logging: {},
     tasks: {
       list: {},
@@ -588,34 +581,6 @@ function registerTaskHandlers(server: McpServer): void {
   });
 }
 
-function registerPrompts(server: McpServer): void {
-  if (config.tools.enabled.includes(FETCH_URL_TOOL_NAME)) {
-    server.registerPrompt(
-      'summarize-webpage',
-      {
-        title: 'Summarize Webpage',
-        description: 'Summarize the content of a webpage given its URL.',
-        argsSchema: {
-          url: completable(z.string().describe('The URL to summarize'), () =>
-            getRecentCachedUrls().map((entry) => entry.url)
-          ),
-        },
-      },
-      (args) => ({
-        messages: [
-          {
-            role: 'user',
-            content: {
-              type: 'text',
-              text: `Please summarize the content of the webpage at the following URL: ${args.url}`,
-            },
-          },
-        ],
-      })
-    );
-  }
-}
-
 export async function createMcpServer(): Promise<McpServer> {
   const instructions = await createServerInstructions(config.server.version);
   const serverInfo = await createServerInfo();
@@ -631,7 +596,6 @@ export async function createMcpServer(): Promise<McpServer> {
   registerInstructionsResource(server, instructions);
   registerConfigResource(server);
   registerTaskHandlers(server);
-  registerPrompts(server);
 
   return server;
 }

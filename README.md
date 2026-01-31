@@ -263,10 +263,6 @@ Large content handling:
 | `internal://instructions`               | Server usage instructions.                 | `text/markdown`    |
 | `internal://config`                     | Current runtime config (secrets redacted). | `application/json` |
 
-### Prompts
-
-- `summarize-webpage` (registered when `fetch-url` is enabled)
-
 ### Tasks
 
 `fetch-url` supports async execution via MCP tasks. Call `tools/call` with a
