@@ -60,8 +60,8 @@ async function createServerInfo(): Promise<{
 }
 
 function createServerCapabilities(): {
-  tools: { listChanged: true };
-  resources: { listChanged: true; subscribe: true };
+  tools: { listChanged: boolean };
+  resources: { listChanged: boolean; subscribe: boolean };
   prompts: { listChanged: boolean };
   logging: Record<string, never>;
   tasks: {
@@ -75,8 +75,8 @@ function createServerCapabilities(): {
   };
 } {
   return {
-    tools: { listChanged: true },
-    resources: { listChanged: true, subscribe: true },
+    tools: { listChanged: false },
+    resources: { listChanged: false, subscribe: false },
     prompts: { listChanged: false },
     logging: {},
     tasks: {
