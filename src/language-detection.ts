@@ -383,6 +383,7 @@ const detector = new LanguageDetector();
  * Detect programming language from code content using heuristics.
  */
 export function detectLanguageFromCode(code: string): string | undefined {
+  if (!code || code.trim().length === 0) return undefined;
   return detector.detect(code);
 }
 

@@ -963,13 +963,13 @@ function tryTransformRawContent(params: {
  * Quality gates + content source resolution
  * ------------------------------------------------------------------------------------------------- */
 
-const MIN_CONTENT_RATIO = 0.3;
+const MIN_CONTENT_RATIO = 0.07;
 const MIN_HTML_LENGTH_FOR_GATE = 100;
-const MIN_HEADING_RETENTION_RATIO = 0.7;
-const MIN_CODE_BLOCK_RETENTION_RATIO = 0.5;
+const MIN_HEADING_RETENTION_RATIO = 0.3;
+const MIN_CODE_BLOCK_RETENTION_RATIO = 0.15;
 
 const MIN_LINE_LENGTH_FOR_TRUNCATION_CHECK = 20;
-const MAX_TRUNCATED_LINE_RATIO = 0.5;
+const MAX_TRUNCATED_LINE_RATIO = 0.95;
 
 function needsDocumentWrapper(html: string): boolean {
   const trimmed = html.trim().toLowerCase();
@@ -1102,8 +1102,8 @@ interface ContentSource {
 }
 
 const CONTENT_ROOT_SELECTORS = [
-  'main',
   'article',
+  'main',
   '[role="main"]',
   '#content',
   '#main-content',
@@ -1136,11 +1136,10 @@ function findContentRoot(document: Document): string | undefined {
 function shouldUseArticleContent(
   article: ExtractedArticle,
   originalHtmlOrDocument: string | Document,
-  url: string
+  _url: string
 ): boolean {
   const articleLength = article.textContent.length;
   const originalLength = getVisibleTextLength(originalHtmlOrDocument);
-  const safeUrl = url.substring(0, 80);
 
   let articleDocument: Document | null = null;
   const getArticleDocument = (): Document => {
@@ -1151,16 +1150,7 @@ function shouldUseArticleContent(
 
   if (originalLength >= MIN_HTML_LENGTH_FOR_GATE) {
     const ratio = articleLength / originalLength;
-    if (ratio < MIN_CONTENT_RATIO) {
-      logDebug(
-        'Quality gate: Readability extraction below threshold, using full HTML',
-        {
-          url: safeUrl,
-          articleLength,
-        }
-      );
-      return false;
-    }
+    if (ratio < MIN_CONTENT_RATIO) return false;
   }
 
   const originalHeadings = countHeadingsDom(originalHtmlOrDocument);
@@ -1168,17 +1158,7 @@ function shouldUseArticleContent(
     const articleHeadings = countHeadingsDom(getArticleDocument());
     const retentionRatio = articleHeadings / originalHeadings;
 
-    if (retentionRatio < MIN_HEADING_RETENTION_RATIO) {
-      logDebug(
-        'Quality gate: Readability broke heading structure, using full HTML',
-        {
-          url: safeUrl,
-          originalHeadings,
-          articleHeadings,
-        }
-      );
-      return false;
-    }
+    if (retentionRatio < MIN_HEADING_RETENTION_RATIO) return false;
   }
 
   const originalCodeBlocks = countCodeBlocksDom(originalHtmlOrDocument);
@@ -1186,37 +1166,10 @@ function shouldUseArticleContent(
     const articleCodeBlocks = countCodeBlocksDom(getArticleDocument());
     const codeRetentionRatio = articleCodeBlocks / originalCodeBlocks;
 
-    logDebug('Code block retention check', {
-      url: safeUrl,
-      originalCodeBlocks,
-      articleCodeBlocks,
-      codeRetentionRatio,
-    });
-
-    if (codeRetentionRatio < MIN_CODE_BLOCK_RETENTION_RATIO) {
-      logDebug(
-        'Quality gate: Readability removed code blocks, using full HTML',
-        {
-          url: safeUrl,
-          originalCodeBlocks,
-          articleCodeBlocks,
-        }
-      );
-      return false;
-    }
+    if (codeRetentionRatio < MIN_CODE_BLOCK_RETENTION_RATIO) return false;
   }
 
-  if (hasTruncatedSentences(article.textContent)) {
-    logDebug(
-      'Quality gate: Extracted text has many truncated sentences, using full HTML',
-      {
-        url: safeUrl,
-      }
-    );
-    return false;
-  }
-
-  return true;
+  return !hasTruncatedSentences(article.textContent);
 }
 
 function buildContentSource(params: {
@@ -1256,11 +1209,6 @@ function buildContentSource(params: {
 
     const contentRoot = findContentRoot(cleanedDoc);
     if (contentRoot) {
-      logDebug('Using content root fallback instead of full HTML', {
-        url: url.substring(0, 80),
-        contentLength: contentRoot.length,
-      });
-
       return {
         sourceHtml: contentRoot,
         title: extractedMeta.title,

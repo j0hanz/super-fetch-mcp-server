@@ -505,10 +505,7 @@ function hasMarkdownSourceLine(content: string): boolean {
   return false;
 }
 
-function addSourceToMarkdownMarkdownFormat(
-  content: string,
-  url: string
-): string {
+function addSourceToMarkdownAsMarkdown(content: string, url: string): string {
   if (hasMarkdownSourceLine(content)) return content;
 
   const lineEnding = detectLineEnding(content);
@@ -537,7 +534,7 @@ export function addSourceToMarkdown(content: string, url: string): string {
   const fm = frontmatter.find(content);
 
   if (config.transform.metadataFormat === 'markdown' && !fm) {
-    return addSourceToMarkdownMarkdownFormat(content, url);
+    return addSourceToMarkdownAsMarkdown(content, url);
   }
 
   if (!fm) {
