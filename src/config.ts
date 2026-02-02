@@ -143,7 +143,12 @@ const SIZE_LIMITS = {
 };
 
 const TIMEOUT = {
-  DEFAULT_FETCH_TIMEOUT_MS: 15000,
+  DEFAULT_FETCH_TIMEOUT_MS: parseInteger(
+    process.env.FETCH_TIMEOUT_MS,
+    15000,
+    1000,
+    60000
+  ),
   DEFAULT_SESSION_TTL_MS: 30 * 60 * 1000,
   DEFAULT_TRANSFORM_TIMEOUT_MS: parseInteger(
     process.env.TRANSFORM_TIMEOUT_MS,
@@ -332,6 +337,12 @@ export const config = {
     metadataFormat: parseTransformMetadataFormat(
       process.env.TRANSFORM_METADATA_FORMAT
     ),
+    maxWorkerScale: parseInteger(
+      process.env.TRANSFORM_WORKER_MAX_SCALE,
+      4,
+      1,
+      16
+    ),
   },
   tools: {
     enabled: parseList(process.env.ENABLED_TOOLS ?? 'fetch-url'),
@@ -405,8 +416,13 @@ export const config = {
   auth: buildAuthConfig(baseUrl),
   rateLimit: {
     enabled: true,
-    maxRequests: 100,
-    windowMs: 60000,
+    maxRequests: parseInteger(process.env.RATE_LIMIT_MAX, 100, 1, 10000),
+    windowMs: parseInteger(
+      process.env.RATE_LIMIT_WINDOW_MS,
+      60000,
+      1000,
+      3600000
+    ),
     cleanupIntervalMs: 60000,
   },
   runtime: runtimeState,

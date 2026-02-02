@@ -1435,7 +1435,7 @@ interface TransformWorkerPool {
 }
 
 const POOL_MIN_WORKERS = 2;
-const POOL_MAX_WORKERS = 4;
+const POOL_MAX_WORKERS = config.transform.maxWorkerScale;
 const POOL_SCALE_THRESHOLD = 0.5;
 
 const DEFAULT_TIMEOUT_MS = config.transform.timeoutMs;
@@ -1498,6 +1498,17 @@ class WorkerPool implements TransformWorkerPool {
 
   getCapacity(): number {
     return this.capacity;
+  }
+
+  resize(size: number): void {
+    const newCapacity = Math.max(
+      this.minCapacity,
+      Math.min(size, this.maxCapacity)
+    );
+    if (newCapacity === this.capacity) return;
+
+    this.capacity = newCapacity;
+    this.drainQueue();
   }
 
   async close(): Promise<void> {
