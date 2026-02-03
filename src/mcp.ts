@@ -11,7 +11,7 @@ import {
   CallToolRequestSchema,
   ErrorCode,
   McpError,
-  type Result,
+  type ServerResult,
 } from '@modelcontextprotocol/sdk/types.js';
 
 import { type McpIcon, registerCachedContentResource } from './cache.js';
@@ -424,7 +424,7 @@ function handleTaskToolCall(
 async function handleDirectToolCall(
   params: ExtendedCallToolRequest['params'],
   context: ToolCallContext
-): Promise<Result> {
+): Promise<ServerResult> {
   const args = requireFetchUrlArgs(params.arguments);
   return fetchUrlToolHandler(
     { url: args.url },
@@ -442,7 +442,7 @@ async function handleDirectToolCall(
 async function handleToolCallRequest(
   request: ExtendedCallToolRequest,
   context: ToolCallContext
-): Promise<Result | CreateTaskResult> {
+): Promise<ServerResult> {
   const { params } = request;
 
   if (params.task) {
@@ -465,7 +465,7 @@ function registerTaskHandlers(server: McpServer): void {
         throw new McpError(ErrorCode.InvalidParams, 'Invalid tool request');
       }
       const result = await handleToolCallRequest(request, context);
-      return result as unknown as { content: [] };
+      return result;
     }
   );
 
@@ -509,8 +509,8 @@ function registerTaskHandlers(server: McpServer): void {
           task.error.data
         );
       }
-      const failedResult = (task.result ?? null) as Result | null;
-      const fallback: Result = failedResult ?? {
+      const failedResult = (task.result ?? null) as ServerResult | null;
+      const fallback: ServerResult = failedResult ?? {
         content: [
           {
             type: 'text',
@@ -530,7 +530,7 @@ function registerTaskHandlers(server: McpServer): void {
     if (task.status === 'cancelled') {
       throw new McpError(ErrorCode.InvalidRequest, 'Task was cancelled');
     }
-    const result = (task.result ?? { content: [] }) as Result;
+    const result = (task.result ?? { content: [] }) as ServerResult;
     return Promise.resolve({
       ...result,
       _meta: {

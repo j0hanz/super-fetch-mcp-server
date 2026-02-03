@@ -880,6 +880,12 @@ function appendMetadataFooter(
   url: string
 ): string {
   const footer = buildMetadataFooter(metadata, url);
+  if (!content.trim() && footer) {
+    const note =
+      '> **Note:** This page contains no readable content. It may require JavaScript to render.\n\n';
+    return `${note}${footer}`;
+  }
+
   return footer ? `${content}\n\n${footer}` : content;
 }
 

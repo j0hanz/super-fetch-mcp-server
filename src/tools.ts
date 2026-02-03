@@ -219,30 +219,34 @@ class ToolProgressReporter implements ProgressReporter {
 
   async report(progress: number, message: string): Promise<void> {
     try {
-      await Promise.race([
-        this.sendNotification({
-          method: 'notifications/progress',
-          params: {
-            progressToken: this.token,
-            progress,
-            total: FETCH_PROGRESS_TOTAL,
-            message,
-            ...(this.relatedTaskMeta
-              ? {
-                  _meta: {
-                    'io.modelcontextprotocol/related-task':
-                      this.relatedTaskMeta,
-                  },
-                }
-              : {}),
-          },
-        }),
-        new Promise<void>((_, reject) => {
-          setTimeout(() => {
-            reject(new Error('Progress notification timeout'));
-          }, PROGRESS_NOTIFICATION_TIMEOUT_MS);
-        }),
-      ]);
+      let timeoutId: NodeJS.Timeout | undefined;
+      const timeoutPromise = new Promise<void>((_, reject) => {
+        timeoutId = setTimeout(() => {
+          reject(new Error('Progress notification timeout'));
+        }, PROGRESS_NOTIFICATION_TIMEOUT_MS);
+        timeoutId.unref();
+      });
+
+      const sendPromise = this.sendNotification({
+        method: 'notifications/progress',
+        params: {
+          progressToken: this.token,
+          progress,
+          total: FETCH_PROGRESS_TOTAL,
+          message,
+          ...(this.relatedTaskMeta
+            ? {
+                _meta: {
+                  'io.modelcontextprotocol/related-task': this.relatedTaskMeta,
+                },
+              }
+            : {}),
+        },
+      }).finally(() => {
+        if (timeoutId) clearTimeout(timeoutId);
+      });
+
+      await Promise.race([sendPromise, timeoutPromise]);
     } catch (error: unknown) {
       const isTimeout =
         error instanceof Error &&
