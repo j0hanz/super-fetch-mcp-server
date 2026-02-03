@@ -2,11 +2,7 @@ import { randomUUID } from 'node:crypto';
 import diagnosticsChannel from 'node:diagnostics_channel';
 import dns from 'node:dns';
 import { BlockList, isIP } from 'node:net';
-import os from 'node:os';
 import { performance } from 'node:perf_hooks';
-
-import type { Dispatcher } from 'undici';
-import { Agent } from 'undici';
 
 import { config } from './config.js';
 import { createErrorWithCode, FetchError, isSystemError } from './errors.js';
@@ -420,7 +416,7 @@ export function isRawTextContentUrl(url: string): boolean {
 }
 
 /* -------------------------------------------------------------------------------------------------
- * Safe DNS lookup for undici Agent
+ * Safe DNS lookup (preflight)
  * ------------------------------------------------------------------------------------------------- */
 
 type LookupCallback = (
@@ -641,24 +637,16 @@ class SafeDnsLookup {
 
 const safeDns = new SafeDnsLookup();
 
-/* -------------------------------------------------------------------------------------------------
- * Dispatcher / Agent lifecycle
- * ------------------------------------------------------------------------------------------------- */
-
-function getAgentOptions(): ConstructorParameters<typeof Agent>[0] {
-  const cpuCount = os.availableParallelism();
-  return {
-    keepAliveTimeout: 60000,
-    connections: Math.max(cpuCount * 2, 25),
-    pipelining: 1,
-    connect: { lookup: safeDns.lookup.bind(safeDns) },
-  };
-}
-
-export const dispatcher: Dispatcher = new Agent(getAgentOptions());
-
-export function destroyAgents(): void {
-  void dispatcher.close();
+async function assertSafeDnsLookup(hostname: string): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    safeDns.lookup(hostname, { all: true }, (err) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+      resolve();
+    });
+  });
 }
 
 /* -------------------------------------------------------------------------------------------------
@@ -1257,8 +1245,8 @@ function buildRequestSignal(
 function buildRequestInit(
   headers: HeadersInit,
   signal: AbortSignal
-): RequestInit & { dispatcher: Dispatcher } {
-  return { method: 'GET', headers, signal, dispatcher };
+): RequestInit {
+  return { method: 'GET', headers, signal };
 }
 
 function resolveResponseError(
@@ -1303,6 +1291,9 @@ class HttpFetcher {
     normalizedUrl: string,
     options?: FetchOptions
   ): Promise<string> {
+    const { hostname } = new URL(normalizedUrl);
+    await assertSafeDnsLookup(hostname);
+
     const timeoutMs = config.fetcher.timeout;
     const headers = buildHeaders();
     const signal = buildRequestSignal(timeoutMs, options?.signal);

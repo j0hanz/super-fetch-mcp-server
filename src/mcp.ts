@@ -16,7 +16,6 @@ import {
 
 import { type McpIcon, registerCachedContentResource } from './cache.js';
 import { config } from './config.js';
-import { destroyAgents } from './fetch.js';
 import { logError, logInfo, setMcpServer } from './observability.js';
 import { registerConfigResource } from './resources.js';
 import { type CreateTaskResult, taskManager } from './tasks.js';
@@ -613,7 +612,6 @@ function handleShutdownSignal(server: McpServer, signal: string): void {
 
   Promise.resolve()
     .then(async () => {
-      destroyAgents();
       await shutdownTransformWorkerPool();
       await server.close();
     })
