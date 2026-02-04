@@ -27,6 +27,10 @@ const CONFIG = {
     tsc: ['npx', ['tsc', '-p', 'tsconfig.build.json']],
     tscCheck: ['npx', ['tsc', '-p', 'tsconfig.json', '--noEmit']],
   },
+  test: {
+    loader: null,
+    patterns: ['src/__tests__/**/*.test.ts', 'tests/**/*.test.ts'],
+  },
 };
 
 // --- Infrastructure Layer (IO & System) ---
@@ -135,6 +139,21 @@ const TestTasks = {
     });
   },
 
+  async detectLoader() {
+    if (CONFIG.test.loader) {
+      return CONFIG.test.loader;
+    }
+
+    if (await System.exists('node_modules/tsx')) {
+      return ['--import', 'tsx/esm'];
+    }
+
+    if (await System.exists('node_modules/ts-node')) {
+      return ['--loader', 'ts-node/esm'];
+    }
+    return [];
+  },
+
   async test(args = []) {
     await Pipeline.fullBuild();
 
@@ -142,11 +161,29 @@ const TestTasks = {
       ? ['--experimental-test-coverage']
       : [];
 
+    // Determine which test patterns exist
+    const existingPatterns = [];
+    for (const pattern of CONFIG.test.patterns) {
+      const basePath = pattern.split('/')[0];
+      if (await System.exists(basePath)) {
+        existingPatterns.push(pattern);
+      }
+    }
+
+    if (existingPatterns.length === 0) {
+      throw new Error(
+        `No test directories found. Expected one of: ${CONFIG.test.patterns.join(', ')}`
+      );
+    }
+
+    const loader = await this.detectLoader();
+
     await Runner.runShellTask('Running tests', async () => {
       await System.exec('node', [
         '--test',
-        '--experimental-transform-types',
+        ...loader,
         ...extraArgs,
+        ...existingPatterns,
       ]);
     });
   },
