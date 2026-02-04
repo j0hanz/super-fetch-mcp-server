@@ -1107,6 +1107,42 @@ interface ContentSource {
   readonly skipNoiseRemoval?: boolean;
 }
 
+class ContentSourceResolver {
+  constructor(private readonly extractor: ContentExtractor) {}
+
+  resolve(params: {
+    html: string;
+    url: string;
+    includeMetadata: boolean;
+    signal?: AbortSignal;
+  }): ContentSource {
+    const {
+      article,
+      metadata: extractedMeta,
+      document,
+    } = this.extractor.extract(params.html, params.url, {
+      extractArticle: true,
+      ...(params.signal ? { signal: params.signal } : {}),
+    });
+
+    const useArticleContent = article
+      ? shouldUseArticleContent(article, document)
+      : false;
+
+    return buildContentSource({
+      html: params.html,
+      url: params.url,
+      article,
+      extractedMeta,
+      includeMetadata: params.includeMetadata,
+      useArticleContent,
+      document,
+    });
+  }
+}
+
+const contentSourceResolver = new ContentSourceResolver(contentExtractor);
+
 const CONTENT_ROOT_SELECTORS = [
   'article',
   'main',
@@ -1250,28 +1286,7 @@ function resolveContentSource(params: {
   includeMetadata: boolean;
   signal?: AbortSignal;
 }): ContentSource {
-  const {
-    article,
-    metadata: extractedMeta,
-    document,
-  } = contentExtractor.extract(params.html, params.url, {
-    extractArticle: true,
-    ...(params.signal ? { signal: params.signal } : {}),
-  });
-
-  const useArticleContent = article
-    ? shouldUseArticleContent(article, document)
-    : false;
-
-  return buildContentSource({
-    html: params.html,
-    url: params.url,
-    article,
-    extractedMeta,
-    includeMetadata: params.includeMetadata,
-    useArticleContent,
-    document,
-  });
+  return contentSourceResolver.resolve(params);
 }
 
 /* -------------------------------------------------------------------------------------------------
@@ -1407,6 +1422,8 @@ const POOL_SCALE_THRESHOLD = 0.5;
 const DEFAULT_TIMEOUT_MS = config.transform.timeoutMs;
 
 class WorkerPool implements TransformWorkerPool {
+  private static readonly CLOSED_MESSAGE = 'Transform worker pool closed';
+
   private readonly workers: (WorkerSlot | undefined)[] = [];
   private capacity: number;
   private readonly minCapacity = POOL_MIN_WORKERS;
@@ -1491,13 +1508,15 @@ class WorkerPool implements TransformWorkerPool {
     for (const [id, inflight] of this.inflight.entries()) {
       clearTimeout(inflight.timer);
       this.clearAbortListener(inflight.signal, inflight.abortListener);
-      inflight.reject(new Error('Transform worker pool closed'));
+      inflight.reject(new Error(WorkerPool.CLOSED_MESSAGE));
       this.inflight.delete(id);
     }
 
     for (let i = this.queueHead; i < this.queue.length; i += 1) {
       const task = this.queue[i];
-      if (task) task.reject(new Error('Transform worker pool closed'));
+      if (!task) continue;
+      this.clearAbortListener(task.signal, task.abortListener);
+      task.reject(new Error(WorkerPool.CLOSED_MESSAGE));
     }
     this.queue.length = 0;
     this.queueHead = 0;
@@ -1506,7 +1525,7 @@ class WorkerPool implements TransformWorkerPool {
   }
 
   private ensureOpen(): void {
-    if (this.closed) throw new Error('Transform worker pool closed');
+    if (this.closed) throw new Error(WorkerPool.CLOSED_MESSAGE);
   }
 
   private createPendingTask(
@@ -1544,7 +1563,7 @@ class WorkerPool implements TransformWorkerPool {
     reject: (error: unknown) => void
   ): void {
     if (this.closed) {
-      reject(new Error('Transform worker pool closed'));
+      reject(new Error(WorkerPool.CLOSED_MESSAGE));
       return;
     }
 
@@ -1735,14 +1754,28 @@ class WorkerPool implements TransformWorkerPool {
     }
   }
 
-  private dispatchFromQueue(workerIndex: number, slot: WorkerSlot): void {
-    const task = this.queue[this.queueHead];
-    if (!task) return;
-    this.queueHead += 1;
+  private takeNextQueuedTask(): PendingTask | null {
+    while (this.queueHead < this.queue.length) {
+      const task = this.queue[this.queueHead];
+      this.queueHead += 1;
+
+      if (task) {
+        this.maybeCompactQueue();
+        return task;
+      }
+    }
+
     this.maybeCompactQueue();
+    return null;
+  }
+
+  private dispatchFromQueue(workerIndex: number, slot: WorkerSlot): void {
+    const task = this.takeNextQueuedTask();
+    if (!task) return;
 
     if (this.closed) {
-      task.reject(new Error('Transform worker pool closed'));
+      this.clearAbortListener(task.signal, task.abortListener);
+      task.reject(new Error(WorkerPool.CLOSED_MESSAGE));
       return;
     }
 
