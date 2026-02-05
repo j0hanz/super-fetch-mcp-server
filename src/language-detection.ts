@@ -9,11 +9,52 @@ interface LanguagePattern {
 interface CodeSample {
   code: string;
   lower: string;
-  lines: string[];
+  lines: readonly string[];
   trimmedStart: string;
 }
 
 type SamplePredicate = (sample: CodeSample) => boolean;
+
+const BASH_COMMANDS = [
+  'sudo',
+  'chmod',
+  'mkdir',
+  'cd',
+  'ls',
+  'cat',
+  'echo',
+] as const;
+
+const BASH_PACKAGE_MANAGERS = [
+  'npm',
+  'yarn',
+  'pnpm',
+  'npx',
+  'brew',
+  'apt',
+  'pip',
+  'cargo',
+  'go',
+] as const;
+
+const BASH_VERBS = ['install', 'add', 'run', 'build', 'start'] as const;
+
+const TYPESCRIPT_HINTS = [
+  ': string',
+  ':string',
+  ': number',
+  ':number',
+  ': boolean',
+  ':boolean',
+  ': void',
+  ':void',
+  ': any',
+  ':any',
+  ': unknown',
+  ':unknown',
+  ': never',
+  ':never',
+] as const;
 
 function createCodeSample(code: string): CodeSample {
   return {
@@ -28,9 +69,12 @@ function escapeRegExpLiteral(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function safeTest(regex: RegExp, input: string): boolean {
-  // Reset stateful regexes to avoid cross-call false negatives.
+function resetStatefulRegex(regex: RegExp): void {
   if (regex.global || regex.sticky) regex.lastIndex = 0;
+}
+
+function safeTest(regex: RegExp, input: string): boolean {
+  resetStatefulRegex(regex);
   return regex.test(input);
 }
 
@@ -38,111 +82,76 @@ function compileWordBoundaryRegex(word: string): RegExp {
   return new RegExp(`\\b${escapeRegExpLiteral(word)}\\b`);
 }
 
-const Heuristics = {
-  containsJsxTag(code: string): boolean {
-    for (let i = 0; i < code.length - 1; i += 1) {
-      if (code[i] !== '<') continue;
-      const next = code[i + 1];
-      if (next && next >= 'A' && next <= 'Z') return true;
-    }
-    return false;
-  },
+function containsJsxTag(code: string): boolean {
+  for (let i = 0; i < code.length - 1; i += 1) {
+    if (code[i] !== '<') continue;
+    const next = code[i + 1];
+    if (next && next >= 'A' && next <= 'Z') return true;
+  }
+  return false;
+}
 
-  bash: (() => {
-    const commands = [
-      'sudo',
-      'chmod',
-      'mkdir',
-      'cd',
-      'ls',
-      'cat',
-      'echo',
-    ] as const;
-    const pkgManagers = [
-      'npm',
-      'yarn',
-      'pnpm',
-      'npx',
-      'brew',
-      'apt',
-      'pip',
-      'cargo',
-      'go',
-    ] as const;
-    const verbs = ['install', 'add', 'run', 'build', 'start'] as const;
+function isShellPrefix(line: string): boolean {
+  return (
+    line.startsWith('#!') || line.startsWith('$ ') || line.startsWith('# ')
+  );
+}
 
-    function isShellPrefix(line: string): boolean {
-      return (
-        line.startsWith('#!') || line.startsWith('$ ') || line.startsWith('# ')
-      );
-    }
+function matchesCommand(line: string): boolean {
+  return BASH_COMMANDS.some(
+    (cmd) => line === cmd || line.startsWith(`${cmd} `)
+  );
+}
 
-    function matchesCommand(line: string): boolean {
-      return commands.some((cmd) => line === cmd || line.startsWith(`${cmd} `));
-    }
+function matchesPackageManagerVerb(line: string): boolean {
+  for (const mgr of BASH_PACKAGE_MANAGERS) {
+    if (!line.startsWith(`${mgr} `)) continue;
+    const rest = line.slice(mgr.length + 1);
+    if (BASH_VERBS.some((verb) => rest === verb || rest.startsWith(`${verb} `)))
+      return true;
+  }
+  return false;
+}
 
-    function matchesPackageManagerVerb(line: string): boolean {
-      for (const mgr of pkgManagers) {
-        if (!line.startsWith(`${mgr} `)) continue;
+function detectBashIndicators(lines: readonly string[]): boolean {
+  for (const line of lines) {
+    const trimmed = line.trimStart();
+    if (!trimmed) continue;
+    if (isShellPrefix(trimmed)) return true;
+    if (matchesCommand(trimmed)) return true;
+    if (matchesPackageManagerVerb(trimmed)) return true;
+  }
+  return false;
+}
 
-        const rest = line.slice(mgr.length + 1);
-        if (verbs.some((v) => rest === v || rest.startsWith(`${v} `)))
-          return true;
-      }
-      return false;
-    }
+function detectCssStructure(lines: readonly string[]): boolean {
+  for (const line of lines) {
+    const trimmed = line.trimStart();
+    if (!trimmed) continue;
 
-    function detectIndicators(lines: string[]): boolean {
-      for (const line of lines) {
-        const trimmed = line.trimStart();
-        if (!trimmed) continue;
-        if (
-          isShellPrefix(trimmed) ||
-          matchesCommand(trimmed) ||
-          matchesPackageManagerVerb(trimmed)
-        ) {
-          return true;
-        }
-      }
-      return false;
-    }
+    const hasSelector =
+      (trimmed.startsWith('.') || trimmed.startsWith('#')) &&
+      trimmed.includes('{');
 
-    return { detectIndicators } as const;
-  })(),
+    if (hasSelector || (trimmed.includes(':') && trimmed.includes(';')))
+      return true;
+  }
+  return false;
+}
 
-  css: {
-    detectStructure(lines: string[]): boolean {
-      for (const line of lines) {
-        const trimmed = line.trimStart();
-        if (!trimmed) continue;
+function detectYamlStructure(lines: readonly string[]): boolean {
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
 
-        const hasSelector =
-          (trimmed.startsWith('.') || trimmed.startsWith('#')) &&
-          trimmed.includes('{');
+    const colonIdx = trimmed.indexOf(':');
+    if (colonIdx <= 0) continue;
 
-        if (hasSelector || (trimmed.includes(':') && trimmed.includes(';')))
-          return true;
-      }
-      return false;
-    },
-  },
-
-  yaml: {
-    detectStructure(lines: string[]): boolean {
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-
-        const colonIdx = trimmed.indexOf(':');
-        if (colonIdx <= 0) continue;
-
-        const after = trimmed[colonIdx + 1];
-        if (after === ' ' || after === '\t') return true;
-      }
-      return false;
-    },
-  },
-} as const;
+    const after = trimmed[colonIdx + 1];
+    if (after === ' ' || after === '\t') return true;
+  }
+  return false;
+}
 
 const LANGUAGE_PATTERNS: readonly {
   language: string;
@@ -154,7 +163,7 @@ const LANGUAGE_PATTERNS: readonly {
     weight: 22,
     pattern: {
       keywords: ['classname=', 'jsx:', "from 'react'", 'from "react"'],
-      custom: (sample) => Heuristics.containsJsxTag(sample.code),
+      custom: (sample) => containsJsxTag(sample.code),
     },
   },
   {
@@ -163,22 +172,7 @@ const LANGUAGE_PATTERNS: readonly {
     pattern: {
       wordBoundary: ['interface', 'type'],
       custom: (sample) =>
-        [
-          ': string',
-          ':string',
-          ': number',
-          ':number',
-          ': boolean',
-          ':boolean',
-          ': void',
-          ':void',
-          ': any',
-          ':any',
-          ': unknown',
-          ':unknown',
-          ': never',
-          ':never',
-        ].some((hint) => sample.lower.includes(hint)),
+        TYPESCRIPT_HINTS.some((hint) => sample.lower.includes(hint)),
     },
   },
   {
@@ -210,7 +204,7 @@ const LANGUAGE_PATTERNS: readonly {
     language: 'bash',
     weight: 15,
     pattern: {
-      custom: (sample) => Heuristics.bash.detectIndicators(sample.lines),
+      custom: (sample) => detectBashIndicators(sample.lines),
     },
   },
   {
@@ -218,7 +212,7 @@ const LANGUAGE_PATTERNS: readonly {
     weight: 18,
     pattern: {
       regex: /@media|@import|@keyframes/,
-      custom: (sample) => Heuristics.css.detectStructure(sample.lines),
+      custom: (sample) => detectCssStructure(sample.lines),
     },
   },
   {
@@ -250,7 +244,7 @@ const LANGUAGE_PATTERNS: readonly {
     language: 'yaml',
     weight: 15,
     pattern: {
-      custom: (sample) => Heuristics.yaml.detectStructure(sample.lines),
+      custom: (sample) => detectYamlStructure(sample.lines),
     },
   },
   {
@@ -278,6 +272,32 @@ const LANGUAGE_PATTERNS: readonly {
   },
 ];
 
+function includesAny(haystack: string, needles: readonly string[]): boolean {
+  for (const needle of needles) {
+    if (haystack.includes(needle)) return true;
+  }
+  return false;
+}
+
+function startsWithAny(value: string, prefixes: readonly string[]): boolean {
+  for (const prefix of prefixes) {
+    if (value.startsWith(prefix)) return true;
+  }
+  return false;
+}
+
+function matchesAnyRegex(value: string, regexes: readonly RegExp[]): boolean {
+  for (const regex of regexes) {
+    if (safeTest(regex, value)) return true;
+  }
+  return false;
+}
+
+function toLowercaseList(values?: readonly string[]): readonly string[] {
+  if (!values || values.length === 0) return [];
+  return values.map((value) => value.toLowerCase());
+}
+
 function compilePattern(pattern: LanguagePattern): SamplePredicate {
   const {
     keywords: rawKeywords,
@@ -286,33 +306,26 @@ function compilePattern(pattern: LanguagePattern): SamplePredicate {
     regex,
     custom,
   } = pattern;
-  const keywords = rawKeywords?.map((k) => k.toLowerCase()) ?? [];
-  const boundaryRegexes =
-    wordBoundary
-      ?.map((w) => w.toLowerCase())
-      .map((w) => compileWordBoundaryRegex(w)) ?? [];
+  const keywords = toLowercaseList(rawKeywords);
+  const boundaryRegexes = toLowercaseList(wordBoundary).map((w) =>
+    compileWordBoundaryRegex(w)
+  );
   const startsWithList = startsWith ?? [];
 
   const hasKeywords = keywords.length > 0;
   const hasBoundaries = boundaryRegexes.length > 0;
   const hasStartsWith = startsWithList.length > 0;
+  const hasRegex = Boolean(regex);
+  const hasCustom = Boolean(custom);
 
   return (sample: CodeSample): boolean => {
-    if (hasKeywords && keywords.some((kw) => sample.lower.includes(kw)))
+    if (hasKeywords && includesAny(sample.lower, keywords)) return true;
+    if (hasBoundaries && matchesAnyRegex(sample.lower, boundaryRegexes))
       return true;
-    if (
-      hasBoundaries &&
-      boundaryRegexes.some((re) => safeTest(re, sample.lower))
-    )
+    if (hasRegex && regex && safeTest(regex, sample.lower)) return true;
+    if (hasStartsWith && startsWithAny(sample.trimmedStart, startsWithList))
       return true;
-    if (regex && safeTest(regex, sample.lower)) return true;
-    if (
-      hasStartsWith &&
-      startsWithList.some((p) => sample.trimmedStart.startsWith(p))
-    )
-      return true;
-    if (custom?.(sample)) return true;
-
+    if (hasCustom && custom?.(sample)) return true;
     return false;
   };
 }
