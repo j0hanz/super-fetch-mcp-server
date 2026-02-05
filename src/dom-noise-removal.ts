@@ -243,46 +243,85 @@ function escapeRegexLiteral(value: string): string {
 }
 
 class PromoDetector {
-  private tokenCache: Set<string> | null = null;
-  private regexCache: RegExp | null = null;
+  private tokenCache: { base: Set<string>; aggressive: Set<string> } | null =
+    null;
+  private regexCache: { base: RegExp; aggressive: RegExp } | null = null;
+  private cacheKey: string | null = null;
 
-  matches(className: string, id: string): boolean {
-    const regex = this.getRegex();
-    return regex.test(className) || regex.test(id);
+  matches(
+    className: string,
+    id: string
+  ): { matched: boolean; aggressive: boolean } {
+    const regexes = this.getRegexes();
+    const aggressiveMatch =
+      regexes.aggressive.test(className) || regexes.aggressive.test(id);
+    if (aggressiveMatch) return { matched: true, aggressive: true };
+
+    const baseMatch = regexes.base.test(className) || regexes.base.test(id);
+    return { matched: baseMatch, aggressive: false };
   }
 
-  private getTokens(): Set<string> {
-    if (this.tokenCache) return this.tokenCache;
+  private getTokenSets(): {
+    base: Set<string>;
+    aggressive: Set<string>;
+  } {
+    const cacheKey = this.buildCacheKey();
+    if (this.tokenCache && this.cacheKey === cacheKey) return this.tokenCache;
 
-    const tokens = new Set<string>(PROMO_TOKENS_ALWAYS);
+    const base = new Set<string>(PROMO_TOKENS_ALWAYS);
+    const aggressive = new Set<string>();
 
     // Include high false-positive tokens only when aggressive mode is enabled.
     if (config.noiseRemoval.aggressiveMode) {
-      for (const token of PROMO_TOKENS_AGGRESSIVE) tokens.add(token);
+      for (const token of PROMO_TOKENS_AGGRESSIVE) aggressive.add(token);
     }
 
     for (const [category, categoryTokens] of Object.entries(
       PROMO_TOKENS_BY_CATEGORY
     )) {
       if (!isCategoryEnabled(category)) continue;
-      for (const token of categoryTokens) tokens.add(token);
+      for (const token of categoryTokens) base.add(token);
     }
     for (const token of config.noiseRemoval.extraTokens) {
       const normalized = token.toLowerCase().trim();
-      if (normalized) tokens.add(normalized);
+      if (normalized) base.add(normalized);
     }
 
-    this.tokenCache = tokens;
-    return tokens;
+    this.cacheKey = cacheKey;
+    this.tokenCache = { base, aggressive };
+    this.regexCache = null;
+    return this.tokenCache;
   }
 
-  private getRegex(): RegExp {
-    if (this.regexCache) return this.regexCache;
+  private buildCacheKey(): string {
+    const extraTokens = config.noiseRemoval.extraTokens
+      .map((token) => token.toLowerCase().trim())
+      .filter((token) => token.length > 0)
+      .join(',');
 
-    const escaped = [...this.getTokens()].map(escapeRegexLiteral);
+    return [config.noiseRemoval.aggressiveMode ? '1' : '0', extraTokens].join(
+      '|'
+    );
+  }
+
+  private buildRegex(tokens: Set<string>): RegExp {
+    if (tokens.size === 0) return /a^/i;
+
+    const escaped = [...tokens].map(escapeRegexLiteral);
     const pattern = `(?:^|[^a-z0-9])(?:${escaped.join('|')})(?:$|[^a-z0-9])`;
 
-    this.regexCache = new RegExp(pattern, 'i');
+    return new RegExp(pattern, 'i');
+  }
+
+  private getRegexes(): { base: RegExp; aggressive: RegExp } {
+    if (this.regexCache) return this.regexCache;
+
+    const tokens = this.getTokenSets();
+    this.regexCache = {
+      base: this.buildRegex(tokens.base),
+      aggressive: this.buildRegex(tokens.aggressive),
+    };
+
     return this.regexCache;
   }
 }
@@ -326,8 +365,16 @@ class NoiseClassifier {
 
     if (this.matchesFixedOrHighZIsolate(meta.className))
       score += weights.stickyFixed;
-    if (promoEnabled && this.promo.matches(meta.className, meta.id))
-      score += weights.promo;
+
+    if (promoEnabled) {
+      const promoMatch = this.promo.matches(meta.className, meta.id);
+      if (
+        promoMatch.matched &&
+        (!promoMatch.aggressive || !this.isWithinPrimaryContent(element))
+      ) {
+        score += weights.promo;
+      }
+    }
 
     return score;
   }
@@ -407,6 +454,29 @@ class NoiseClassifier {
     if (element.getAttribute('data-accordion-item') !== null) return true;
     if (element.getAttribute('data-radix-collection-item') !== null)
       return true;
+
+    return false;
+  }
+
+  private isWithinPrimaryContent(element: Element): boolean {
+    let current: Element | null = element;
+
+    while (current) {
+      const tagName = current.tagName.toLowerCase();
+      if (tagName === 'article' || tagName === 'main') return true;
+
+      const role = current.getAttribute('role');
+      if (role === 'main') return true;
+
+      const ancestorNode: ParentNode | null = current.parentNode;
+      const next: Element | null =
+        current.parentElement ??
+        (isObject(ancestorNode) &&
+        (ancestorNode as { nodeType?: unknown }).nodeType === 1
+          ? (ancestorNode as unknown as Element)
+          : null);
+      current = next;
+    }
 
     return false;
   }

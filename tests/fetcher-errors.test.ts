@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import dns from 'node:dns';
 import test from 'node:test';
 
 import { FetchError } from '../dist/errors.js';
@@ -75,4 +76,39 @@ test('fetchNormalizedUrl maps network failures to FetchError', async () => {
       );
     }
   );
+});
+
+test('fetchNormalizedUrl aborts during DNS preflight', async () => {
+  const controller = new AbortController();
+  controller.abort();
+
+  const originalLookup = dns.promises.lookup;
+  dns.promises.lookup = async () =>
+    await new Promise(() => {
+      // Never resolves; abort should win.
+    });
+
+  const originalFetch: typeof fetch = fetch;
+  (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch =
+    async () => {
+      throw new Error('fetch should not be called');
+    };
+
+  try {
+    await assert.rejects(
+      () =>
+        fetchNormalizedUrl('https://example.com', {
+          signal: controller.signal,
+        }),
+      (error: unknown) => {
+        assert.ok(error instanceof FetchError);
+        assert.equal(error.statusCode, 499);
+        return true;
+      }
+    );
+  } finally {
+    dns.promises.lookup = originalLookup;
+    (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch =
+      originalFetch;
+  }
 });

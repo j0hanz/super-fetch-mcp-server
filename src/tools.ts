@@ -370,16 +370,24 @@ class InlineContentLimiter {
     const resourceUri =
       cache.isEnabled() && cacheKey ? cache.toResourceUri(cacheKey) : null;
 
+    const truncatedContent = truncateWithMarker(
+      content,
+      inlineLimit,
+      TRUNCATION_MARKER
+    );
+
     if (resourceUri) {
       return {
+        content: truncatedContent,
         contentSize,
         resourceUri,
         resourceMimeType: 'text/markdown',
+        truncated: true,
       };
     }
 
     return {
-      content: truncateWithMarker(content, inlineLimit, TRUNCATION_MARKER),
+      content: truncatedContent,
       contentSize,
       truncated: true,
     };
@@ -820,13 +828,15 @@ function buildStructuredContent(
   inlineResult: InlineResult,
   inputUrl: string
 ): Record<string, unknown> {
+  const truncated = inlineResult.truncated ?? pipeline.data.truncated;
+
   return {
     url: pipeline.url,
     resolvedUrl: pipeline.url,
     inputUrl,
     title: pipeline.data.title,
     markdown: inlineResult.content,
-    ...(inlineResult.truncated ? { truncated: true } : {}),
+    ...(truncated ? { truncated: true } : {}),
   };
 }
 

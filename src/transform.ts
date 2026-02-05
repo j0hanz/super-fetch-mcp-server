@@ -103,6 +103,14 @@ class AbortPolicy {
 
 const abortPolicy = new AbortPolicy();
 
+function buildTransformSignal(signal?: AbortSignal): AbortSignal | undefined {
+  const { timeoutMs } = config.transform;
+  if (timeoutMs <= 0) return signal;
+
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  return signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+}
+
 class StageTracker {
   private readonly channel = diagnosticsChannel.channel('superfetch.transform');
 
@@ -1326,11 +1334,12 @@ export function transformHtmlToMarkdownInProcess(
   url: string,
   options: TransformOptions
 ): MarkdownTransformResult {
+  const signal = buildTransformSignal(options.signal);
   const totalStage = stageTracker.start(url, 'transform:total');
   let completed: MarkdownTransformResult | null = null;
 
   try {
-    abortPolicy.throwIfAborted(options.signal, url, 'transform:begin');
+    abortPolicy.throwIfAborted(signal, url, 'transform:begin');
 
     const raw = stageTracker.run(url, 'transform:raw', () =>
       tryTransformRawContent({
@@ -1349,11 +1358,11 @@ export function transformHtmlToMarkdownInProcess(
         html,
         url,
         includeMetadata: options.includeMetadata,
-        ...(options.signal ? { signal: options.signal } : {}),
+        ...(signal ? { signal } : {}),
       })
     );
 
-    const result = buildMarkdownFromContext(context, url, options.signal);
+    const result = buildMarkdownFromContext(context, url, signal);
     completed = result;
     return result;
   } finally {

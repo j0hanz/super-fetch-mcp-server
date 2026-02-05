@@ -12,6 +12,7 @@ const REGEX = {
 
   LIST_MARKER: /^(?:[-*+])\s/m,
   TOC_LINK: /^- \[[^\]]+\]\(#[^)]+\)\s*$/,
+  TOC_HEADING: /^(?:#{1,6}\s+)?(?:table of contents|contents)\s*$/i,
 
   HTML_DOC_START: /^(<!doctype|<html)/i,
   COMMON_TAGS: /<(html|head|body|div|span|script|style|meta|link)\b/gi,
@@ -210,27 +211,38 @@ function removeToc(text: string): string {
   const out: string[] = [];
   let skipping = false;
 
+  const hasTocBlock = (startIndex: number): boolean => {
+    for (
+      let i = startIndex + 1;
+      i < Math.min(lines.length, startIndex + 8);
+      i++
+    ) {
+      const line = lines[i] ?? '';
+      const trimmed = line.trim();
+      if (trimmed === '') continue;
+      return REGEX.TOC_LINK.test(line);
+    }
+    return false;
+  };
+
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i] ?? '';
+    const trimmed = line.trim();
     const isToc = REGEX.TOC_LINK.test(line);
-    const isEmpty = line.trim() === '';
 
-    const prevIsToc =
-      i > 0 &&
-      (REGEX.TOC_LINK.test(lines[i - 1] ?? '') || lines[i - 1]?.trim() === '');
-    const nextIsToc =
-      i < lines.length - 1 &&
-      (REGEX.TOC_LINK.test(lines[i + 1] ?? '') || lines[i + 1]?.trim() === '');
-
-    if (isToc && (prevIsToc || nextIsToc)) {
+    if (!skipping && REGEX.TOC_HEADING.test(trimmed) && hasTocBlock(i)) {
+      out.push(line);
       skipping = true;
       continue;
     }
 
     if (skipping) {
-      if (isEmpty) skipping = false;
-      continue;
+      if (trimmed === '' || isToc) {
+        continue;
+      }
+      skipping = false;
     }
+
     out.push(line);
   }
   return out.join('\n');

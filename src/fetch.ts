@@ -432,9 +432,12 @@ const DNS_LOOKUP_TIMEOUT_MS = 5000;
 async function withTimeout<T>(
   promise: Promise<T>,
   timeoutMs: number,
-  onTimeout: () => Error
+  onTimeout: () => Error,
+  signal?: AbortSignal,
+  onAbort?: () => Error
 ): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
+  let abortListener: (() => void) | undefined;
 
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
@@ -443,17 +446,43 @@ async function withTimeout<T>(
     timer.unref();
   });
 
+  const abortPromise = signal
+    ? new Promise<never>((_, reject) => {
+        if (signal.aborted) {
+          reject(onAbort ? onAbort() : new Error('Request was canceled'));
+          return;
+        }
+
+        abortListener = () => {
+          reject(onAbort ? onAbort() : new Error('Request was canceled'));
+        };
+        signal.addEventListener('abort', abortListener, { once: true });
+      })
+    : null;
+
   try {
-    return await Promise.race([promise, timeout]);
+    return await Promise.race(
+      abortPromise ? [promise, timeout, abortPromise] : [promise, timeout]
+    );
   } finally {
     if (timer) clearTimeout(timer);
+    if (abortListener && signal) {
+      try {
+        signal.removeEventListener('abort', abortListener);
+      } catch {
+        // Best-effort cleanup.
+      }
+    }
   }
 }
 
 class SafeDnsResolver {
   constructor(private readonly ipBlocker: IpBlocker) {}
 
-  async assertSafeHostname(hostname: string): Promise<void> {
+  async assertSafeHostname(
+    hostname: string,
+    signal?: AbortSignal
+  ): Promise<void> {
     const resultPromise = dns.promises.lookup(hostname, {
       all: true,
       order: 'verbatim',
@@ -463,7 +492,13 @@ class SafeDnsResolver {
       resultPromise,
       DNS_LOOKUP_TIMEOUT_MS,
       () =>
-        createErrorWithCode(`DNS lookup timed out for ${hostname}`, 'ETIMEOUT')
+        createErrorWithCode(`DNS lookup timed out for ${hostname}`, 'ETIMEOUT'),
+      signal,
+      () => {
+        const err = new Error('Request was canceled');
+        err.name = 'AbortError';
+        return err;
+      }
     );
 
     if (addresses.length === 0) {
@@ -1204,7 +1239,7 @@ async function handleFetchResponse(
 
 type FetcherConfig = typeof config.fetcher;
 
-type HostnamePreflight = (url: string) => Promise<void>;
+type HostnamePreflight = (url: string, signal?: AbortSignal) => Promise<void>;
 
 function extractHostname(url: string): string {
   if (!URL.canParse(url)) {
@@ -1214,9 +1249,9 @@ function extractHostname(url: string): string {
 }
 
 function createDnsPreflight(dnsResolver: SafeDnsResolver): HostnamePreflight {
-  return async (url: string) => {
+  return async (url: string, signal?: AbortSignal) => {
     const hostname = extractHostname(url);
-    await dnsResolver.assertSafeHostname(hostname);
+    await dnsResolver.assertSafeHostname(hostname, signal);
   };
 }
 
@@ -1234,7 +1269,6 @@ class HttpFetcher {
     options?: FetchOptions
   ): Promise<string> {
     const hostname = extractHostname(normalizedUrl);
-    await this.dnsResolver.assertSafeHostname(hostname);
 
     const timeoutMs = this.fetcherConfig.timeout;
     const headers = buildHeaders();
@@ -1244,6 +1278,8 @@ class HttpFetcher {
     const ctx = this.telemetry.start(normalizedUrl, 'GET');
 
     try {
+      await this.dnsResolver.assertSafeHostname(hostname, signal ?? undefined);
+
       const { response, url: finalUrl } =
         await this.redirectFollower.fetchWithRedirects(
           normalizedUrl,
