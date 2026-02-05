@@ -4,7 +4,6 @@ import { config } from './config.js';
 import { logDebug } from './observability.js';
 import { isObject } from './type-guards.js';
 
-// Constants
 const NOISE_SCAN_LIMIT = 50_000;
 const MIN_BODY_CONTENT_LENGTH = 100;
 const DIALOG_MIN_CHARS_FOR_PRESERVATION = 500;
@@ -131,10 +130,12 @@ const BASE_NOISE_SELECTORS = {
     '[aria-hidden="true"]',
   ],
 } as const;
-// Types
-type NodeListLike<T> =
-  | ArrayLike<T>
-  | { length: number; item: (index: number) => T | null };
+
+const NO_MATCH_REGEX = /a^/i;
+
+type NoiseRemovalConfig = typeof config.noiseRemoval;
+type NoiseWeights = NoiseRemovalConfig['weights'];
+type NodeCollection = Iterable<Element> | ArrayLike<Element>;
 
 interface ElementMetadata {
   readonly tagName: string;
@@ -150,19 +151,154 @@ interface CategoryFlags {
   readonly cookieBanners: boolean;
   readonly newsletters: boolean;
   readonly socialShare: boolean;
-  readonly enabled: Set<string>;
 }
 
 interface PromoMatchResult {
   readonly matched: boolean;
   readonly aggressive: boolean;
 }
-// Helpers: DOM utilities
-function isNodeListLike<T>(value: unknown): value is NodeListLike<T> {
-  return (
-    isObject(value) &&
-    typeof (value as { length?: unknown }).length === 'number'
+
+interface PromoTokenMatchers {
+  readonly base: RegExp;
+  readonly aggressive: RegExp;
+}
+
+interface NoiseContext {
+  readonly enabledCategories: ReadonlySet<string>;
+  readonly flags: CategoryFlags;
+  readonly structuralTags: ReadonlySet<string>;
+  readonly weights: NoiseWeights;
+  readonly promoMatchers: PromoTokenMatchers;
+  readonly promoEnabled: boolean;
+  readonly extraSelectors: readonly string[];
+}
+
+function normalizeCategories(categories: readonly string[]): Set<string> {
+  return new Set(categories.map((entry) => entry.toLowerCase().trim()));
+}
+
+function isCategoryEnabled(
+  category: string,
+  enabled: ReadonlySet<string>
+): boolean {
+  return enabled.has(category.toLowerCase());
+}
+
+function createCategoryFlags(enabled: ReadonlySet<string>): CategoryFlags {
+  return {
+    navFooter: isCategoryEnabled(NOISE_CATEGORY.navFooter, enabled),
+    cookieBanners: isCategoryEnabled(NOISE_CATEGORY.cookieBanners, enabled),
+    newsletters: isCategoryEnabled(NOISE_CATEGORY.newsletters, enabled),
+    socialShare: isCategoryEnabled(NOISE_CATEGORY.socialShare, enabled),
+  };
+}
+
+function getStructuralTags(preserveSvgCanvas: boolean): Set<string> {
+  const tags = new Set<string>(BASE_STRUCTURAL_TAGS);
+  if (!preserveSvgCanvas) {
+    tags.add('svg');
+    tags.add('canvas');
+  }
+  return tags;
+}
+
+function normalizeSelectors(selectors: readonly string[]): string[] {
+  return selectors
+    .map((selector) => selector.trim())
+    .filter((selector) => selector.length > 0);
+}
+
+function createNoiseContext(options: NoiseRemovalConfig): NoiseContext {
+  const enabledCategories = normalizeCategories(options.enabledCategories);
+  const flags = createCategoryFlags(enabledCategories);
+  const structuralTags = getStructuralTags(options.preserveSvgCanvas);
+  const promoMatchers = buildPromoTokenMatchers(
+    enabledCategories,
+    options.aggressiveMode,
+    options.extraTokens
   );
+  const promoEnabled =
+    flags.cookieBanners || flags.newsletters || flags.socialShare;
+  const extraSelectors = normalizeSelectors(options.extraSelectors);
+
+  return {
+    enabledCategories,
+    flags,
+    structuralTags,
+    weights: options.weights,
+    promoMatchers,
+    promoEnabled,
+    extraSelectors,
+  };
+}
+
+function escapeRegexLiteral(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function buildTokenRegex(tokens: ReadonlySet<string>): RegExp {
+  if (tokens.size === 0) return NO_MATCH_REGEX;
+  const escaped = [...tokens].map(escapeRegexLiteral);
+  return new RegExp(
+    `(?:^|[^a-z0-9])(?:${escaped.join('|')})(?:$|[^a-z0-9])`,
+    'i'
+  );
+}
+
+function collectPromoTokens(
+  enabled: ReadonlySet<string>,
+  aggressiveMode: boolean,
+  extraTokens: readonly string[]
+): { base: Set<string>; aggressive: Set<string> } {
+  const base = new Set<string>(PROMO_TOKENS_ALWAYS);
+  const aggressive = new Set<string>();
+
+  if (aggressiveMode) {
+    for (const token of PROMO_TOKENS_AGGRESSIVE) {
+      aggressive.add(token);
+    }
+  }
+
+  for (const [category, categoryTokens] of Object.entries(
+    PROMO_TOKENS_BY_CATEGORY
+  )) {
+    if (!isCategoryEnabled(category, enabled)) continue;
+    for (const token of categoryTokens) {
+      base.add(token);
+    }
+  }
+
+  for (const token of extraTokens) {
+    const normalized = token.toLowerCase().trim();
+    if (normalized) base.add(normalized);
+  }
+
+  return { base, aggressive };
+}
+
+function buildPromoTokenMatchers(
+  enabled: ReadonlySet<string>,
+  aggressiveMode: boolean,
+  extraTokens: readonly string[]
+): PromoTokenMatchers {
+  const tokens = collectPromoTokens(enabled, aggressiveMode, extraTokens);
+  return {
+    base: buildTokenRegex(tokens.base),
+    aggressive: buildTokenRegex(tokens.aggressive),
+  };
+}
+
+function matchPromoTokens(
+  matchers: PromoTokenMatchers,
+  className: string,
+  id: string
+): PromoMatchResult {
+  const aggressiveMatch =
+    matchers.aggressive.test(className) || matchers.aggressive.test(id);
+  if (aggressiveMatch) return { matched: true, aggressive: true };
+
+  const baseMatch = matchers.base.test(className) || matchers.base.test(id);
+  return { matched: baseMatch, aggressive: false };
 }
 
 function getAttr(element: Element, name: string): string {
@@ -181,121 +317,14 @@ function safeQuerySelectorAll(
 }
 
 function removeMatchingNodes(
-  nodes: NodeListOf<Element> | Iterable<Element>,
+  nodes: NodeCollection,
   shouldRemove: (node: Element) => boolean
 ): void {
-  if (isNodeListLike<Element>(nodes)) {
-    for (let i = nodes.length - 1; i >= 0; i -= 1) {
-      const node =
-        'item' in nodes && typeof nodes.item === 'function'
-          ? nodes.item(i)
-          : (nodes as ArrayLike<Element>)[i];
-      if (node && shouldRemove(node)) node.remove();
-    }
-    return;
-  }
-
-  for (const node of nodes) {
+  for (const node of Array.from(nodes)) {
     if (shouldRemove(node)) node.remove();
   }
 }
 
-// Helpers: Config-derived values (computed per-call, not cached)
-function getEnabledCategories(): Set<string> {
-  return new Set(
-    config.noiseRemoval.enabledCategories.map((c) => c.toLowerCase().trim())
-  );
-}
-
-function isCategoryEnabled(
-  category: string,
-  enabled: Set<string> = getEnabledCategories()
-): boolean {
-  return enabled.has(category.toLowerCase());
-}
-
-function getCategoryFlags(): CategoryFlags {
-  const enabled = getEnabledCategories();
-  return {
-    navFooter: isCategoryEnabled(NOISE_CATEGORY.navFooter, enabled),
-    cookieBanners: isCategoryEnabled(NOISE_CATEGORY.cookieBanners, enabled),
-    newsletters: isCategoryEnabled(NOISE_CATEGORY.newsletters, enabled),
-    socialShare: isCategoryEnabled(NOISE_CATEGORY.socialShare, enabled),
-    enabled,
-  };
-}
-
-function getStructuralTags(): Set<string> {
-  const tags = new Set<string>(BASE_STRUCTURAL_TAGS);
-  if (!config.noiseRemoval.preserveSvgCanvas) {
-    tags.add('svg');
-    tags.add('canvas');
-  }
-  return tags;
-}
-
-// Helpers: Promo token detection
-function escapeRegexLiteral(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-function buildTokenRegex(tokens: Set<string>): RegExp {
-  if (tokens.size === 0) return /a^/i;
-  const escaped = [...tokens].map(escapeRegexLiteral);
-  return new RegExp(
-    `(?:^|[^a-z0-9])(?:${escaped.join('|')})(?:$|[^a-z0-9])`,
-    'i'
-  );
-}
-
-function collectPromoTokens(enabled: Set<string>): {
-  base: Set<string>;
-  aggressive: Set<string>;
-} {
-  const base = new Set<string>(PROMO_TOKENS_ALWAYS);
-  const aggressive = new Set<string>();
-
-  if (config.noiseRemoval.aggressiveMode) {
-    for (const token of PROMO_TOKENS_AGGRESSIVE) {
-      aggressive.add(token);
-    }
-  }
-
-  for (const [category, categoryTokens] of Object.entries(
-    PROMO_TOKENS_BY_CATEGORY
-  )) {
-    if (!isCategoryEnabled(category, enabled)) continue;
-    for (const token of categoryTokens) {
-      base.add(token);
-    }
-  }
-
-  for (const token of config.noiseRemoval.extraTokens) {
-    const normalized = token.toLowerCase().trim();
-    if (normalized) base.add(normalized);
-  }
-
-  return { base, aggressive };
-}
-
-function matchPromoTokens(
-  className: string,
-  id: string,
-  enabled: Set<string>
-): PromoMatchResult {
-  const tokens = collectPromoTokens(enabled);
-  const baseRegex = buildTokenRegex(tokens.base);
-  const aggressiveRegex = buildTokenRegex(tokens.aggressive);
-
-  const aggressiveMatch =
-    aggressiveRegex.test(className) || aggressiveRegex.test(id);
-  if (aggressiveMatch) return { matched: true, aggressive: true };
-
-  const baseMatch = baseRegex.test(className) || baseRegex.test(id);
-  return { matched: baseMatch, aggressive: false };
-}
-
-// Helpers: Element classification
 function isElementHidden(element: Element): boolean {
   const style = getAttr(element, 'style');
   return (
@@ -336,6 +365,21 @@ function readElementMetadata(element: Element): ElementMetadata {
   return { tagName, className, id, role, isHidden, isInteractive };
 }
 
+function isElementNode(value: unknown): value is Element {
+  if (!isObject(value)) return false;
+  const { nodeType, tagName } = value as {
+    nodeType?: unknown;
+    tagName?: unknown;
+  };
+  return nodeType === 1 && typeof tagName === 'string';
+}
+
+function getParentElement(element: Element): Element | null {
+  if (element.parentElement) return element.parentElement;
+  const { parentNode } = element;
+  return isElementNode(parentNode) ? parentNode : null;
+}
+
 function isWithinPrimaryContent(element: Element): boolean {
   let current: Element | null = element;
 
@@ -346,19 +390,12 @@ function isWithinPrimaryContent(element: Element): boolean {
     const role = current.getAttribute('role');
     if (role === 'main') return true;
 
-    const ancestorNode: ParentNode | null = current.parentNode;
-    current =
-      current.parentElement ??
-      (isObject(ancestorNode) &&
-      (ancestorNode as { nodeType?: unknown }).nodeType === 1
-        ? (ancestorNode as unknown as Element)
-        : null);
+    current = getParentElement(current);
   }
 
   return false;
 }
 
-// Noise scoring
 function hasNoiseRole(role: string | null): boolean {
   return role !== null && NAVIGATION_ROLES.has(role);
 }
@@ -396,65 +433,58 @@ function scoreNavFooter(
 function scorePromo(
   element: Element,
   meta: ElementMetadata,
-  enabled: Set<string>,
-  promoWeight: number
+  context: NoiseContext
 ): number {
-  const promoMatch = matchPromoTokens(meta.className, meta.id, enabled);
+  if (!context.promoEnabled) return 0;
+  const promoMatch = matchPromoTokens(
+    context.promoMatchers,
+    meta.className,
+    meta.id
+  );
   if (!promoMatch.matched) return 0;
   if (promoMatch.aggressive && isWithinPrimaryContent(element)) return 0;
-  return promoWeight;
+  return context.weights.promo;
 }
 
 function calculateNoiseScore(
   element: Element,
   meta: ElementMetadata,
-  structuralTags: Set<string>,
-  flags: CategoryFlags
+  context: NoiseContext
 ): number {
-  const { weights } = config.noiseRemoval;
   let score = 0;
 
-  if (structuralTags.has(meta.tagName) && !meta.isInteractive) {
-    score += weights.structural;
+  if (context.structuralTags.has(meta.tagName) && !meta.isInteractive) {
+    score += context.weights.structural;
   }
 
-  if (flags.navFooter) {
-    score += scoreNavFooter(meta, weights.structural);
+  if (context.flags.navFooter) {
+    score += scoreNavFooter(meta, context.weights.structural);
   }
 
   if (meta.isHidden && !meta.isInteractive) {
-    score += weights.hidden;
+    score += context.weights.hidden;
   }
 
   if (matchesFixedOrHighZIsolate(meta.className)) {
-    score += weights.stickyFixed;
+    score += context.weights.stickyFixed;
   }
 
-  const promoEnabled =
-    flags.cookieBanners || flags.newsletters || flags.socialShare;
-  if (promoEnabled) {
-    score += scorePromo(element, meta, flags.enabled, weights.promo);
-  }
+  score += scorePromo(element, meta, context);
 
   return score;
 }
 
-function isNoiseElement(
-  element: Element,
-  structuralTags: Set<string>,
-  flags: CategoryFlags
-): boolean {
+function isNoiseElement(element: Element, context: NoiseContext): boolean {
   const meta = readElementMetadata(element);
-  const score = calculateNoiseScore(element, meta, structuralTags, flags);
-  return score >= config.noiseRemoval.weights.threshold;
+  const score = calculateNoiseScore(element, meta, context);
+  return score >= context.weights.threshold;
 }
 
-// Preservation logic
 function shouldPreserveDialog(element: Element): boolean {
   const role = element.getAttribute('role');
   if (role !== 'dialog' && role !== 'alertdialog') return false;
 
-  const { textContent } = element;
+  const textContent = element.textContent || '';
   if (textContent.length > DIALOG_MIN_CHARS_FOR_PRESERVATION) return true;
 
   return element.querySelector('h1, h2, h3, h4, h5, h6') !== null;
@@ -471,7 +501,6 @@ function shouldPreserveElement(element: Element): boolean {
   return shouldPreserveDialog(element) || shouldPreserveNavFooter(element);
 }
 
-// Selector building
 function buildBaseNoiseSelector(flags: CategoryFlags): string {
   const selectors: string[] = [...BASE_NOISE_SELECTORS.hidden];
 
@@ -486,11 +515,9 @@ function buildBaseNoiseSelector(flags: CategoryFlags): string {
   return selectors.join(',');
 }
 
-function normalizeSelectors(selectors: readonly string[]): string[] {
-  return selectors.map((s) => s.trim()).filter((s) => s.length > 0);
-}
-
-function buildCandidateNoiseSelector(structuralTags: Set<string>): string {
+function buildCandidateNoiseSelector(
+  structuralTags: ReadonlySet<string>
+): string {
   return [
     ...structuralTags,
     ...ALWAYS_NOISE_TAGS,
@@ -503,59 +530,51 @@ function buildCandidateNoiseSelector(structuralTags: Set<string>): string {
   ].join(',');
 }
 
-// Noise stripping
 function removeBaseAndExtraNoiseNodes(
   document: Document,
-  flags: CategoryFlags
+  context: NoiseContext
 ): void {
-  const extra = normalizeSelectors(config.noiseRemoval.extraSelectors);
-  const baseSelector = buildBaseNoiseSelector(flags);
-  const combined =
-    extra.length === 0 ? baseSelector : `${baseSelector},${extra.join(',')}`;
+  const baseSelector = buildBaseNoiseSelector(context.flags);
+  const combinedSelector =
+    context.extraSelectors.length === 0
+      ? baseSelector
+      : `${baseSelector},${context.extraSelectors.join(',')}`;
+  const shouldRemove = (node: Element): boolean => !shouldPreserveElement(node);
 
-  const combinedNodes = safeQuerySelectorAll(document, combined);
+  const combinedNodes = safeQuerySelectorAll(document, combinedSelector);
   if (combinedNodes) {
-    removeMatchingNodes(combinedNodes, (node) => !shouldPreserveElement(node));
+    removeMatchingNodes(combinedNodes, shouldRemove);
     return;
   }
 
   const baseNodes = safeQuerySelectorAll(document, baseSelector);
-  if (baseNodes) {
-    removeMatchingNodes(baseNodes, (node) => !shouldPreserveElement(node));
-  }
+  if (baseNodes) removeMatchingNodes(baseNodes, shouldRemove);
 
-  for (const selector of extra) {
+  for (const selector of context.extraSelectors) {
     const nodes = safeQuerySelectorAll(document, selector);
-    if (nodes) {
-      removeMatchingNodes(nodes, (node) => !shouldPreserveElement(node));
-    }
+    if (nodes) removeMatchingNodes(nodes, shouldRemove);
   }
 }
 
 function removeCandidateNoiseNodes(
   document: Document,
-  structuralTags: Set<string>,
-  flags: CategoryFlags
+  context: NoiseContext
 ): void {
-  const candidateSelector = buildCandidateNoiseSelector(structuralTags);
+  const candidateSelector = buildCandidateNoiseSelector(context.structuralTags);
   const nodes = safeQuerySelectorAll(document, candidateSelector);
   if (!nodes) return;
 
   removeMatchingNodes(nodes, (node) => {
     if (shouldPreserveElement(node)) return false;
-    return isNoiseElement(node, structuralTags, flags);
+    return isNoiseElement(node, context);
   });
 }
 
-function stripNoise(document: Document): void {
-  const flags = getCategoryFlags();
-  const structuralTags = getStructuralTags();
-
-  removeBaseAndExtraNoiseNodes(document, flags);
-  removeCandidateNoiseNodes(document, structuralTags, flags);
+function stripNoise(document: Document, context: NoiseContext): void {
+  removeBaseAndExtraNoiseNodes(document, context);
+  removeCandidateNoiseNodes(document, context);
 }
 
-// URL resolution
 function shouldSkipUrlResolution(url: string): boolean {
   const normalized = url.trim().toLowerCase();
   return SKIP_URL_PREFIXES.some((prefix) => normalized.startsWith(prefix));
@@ -622,36 +641,39 @@ function resolveRelativeUrls(document: Document, baseUrl: string): void {
   }
 }
 
-// Document serialization
+function readProperty(value: unknown, key: string): unknown {
+  if (!isObject(value)) return undefined;
+  return (value as Record<string, unknown>)[key];
+}
+
+function readStringProperty(value: unknown, key: string): string | undefined {
+  const prop = readProperty(value, key);
+  return typeof prop === 'string' ? prop : undefined;
+}
+
+function readFunctionProperty(
+  value: unknown,
+  key: string
+): (() => string) | undefined {
+  const prop = readProperty(value, key);
+  if (typeof prop !== 'function') return undefined;
+  return prop as () => string;
+}
+
 function getBodyInnerHtml(document: unknown): string | undefined {
-  if (!isObject(document)) return undefined;
-  const { body } = document as { body?: unknown };
-  if (
-    isObject(body) &&
-    typeof (body as { innerHTML?: unknown }).innerHTML === 'string'
-  ) {
-    return (body as { innerHTML: string }).innerHTML;
-  }
-  return undefined;
+  const body = readProperty(document, 'body');
+  return readStringProperty(body, 'innerHTML');
 }
 
 function getDocumentToString(document: unknown): (() => string) | undefined {
-  if (!isObject(document)) return undefined;
-  const fn = (document as { toString?: unknown }).toString;
-  if (typeof fn !== 'function') return undefined;
+  const fn = readFunctionProperty(document, 'toString');
+  if (!fn) return undefined;
   return fn.bind(document) as () => string;
 }
 
 function getDocumentElementOuterHtml(document: unknown): string | undefined {
-  if (!isObject(document)) return undefined;
-  const docEl = (document as { documentElement?: unknown }).documentElement;
-  if (
-    isObject(docEl) &&
-    typeof (docEl as { outerHTML?: unknown }).outerHTML === 'string'
-  ) {
-    return (docEl as { outerHTML: string }).outerHTML;
-  }
-  return undefined;
+  const docEl = readProperty(document, 'documentElement');
+  return readStringProperty(docEl, 'outerHTML');
 }
 
 function serializeDocument(document: unknown, fallbackHtml: string): string {
@@ -668,7 +690,6 @@ function serializeDocument(document: unknown, fallbackHtml: string): string {
   return fallbackHtml;
 }
 
-// Detection heuristics
 function isFullDocumentHtml(html: string): boolean {
   return HTML_DOCUMENT_MARKERS.test(html);
 }
@@ -684,7 +705,6 @@ function mayContainNoise(html: string): boolean {
   );
 }
 
-// Public API
 export function removeNoiseFromHtml(
   html: string,
   document?: Document,
@@ -694,15 +714,17 @@ export function removeNoiseFromHtml(
   if (!shouldParse) return html;
 
   try {
+    const context = createNoiseContext(config.noiseRemoval);
+
     if (config.noiseRemoval.debug) {
       logDebug('Noise removal audit enabled', {
-        categories: [...getEnabledCategories()],
+        categories: [...context.enabledCategories],
       });
     }
 
     const resolvedDocument = document ?? parseHTML(html).document;
 
-    stripNoise(resolvedDocument);
+    stripNoise(resolvedDocument, context);
 
     if (baseUrl) resolveRelativeUrls(resolvedDocument, baseUrl);
 
