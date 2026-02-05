@@ -132,7 +132,9 @@ describe('fetchUrlToolHandler', () => {
 
   it('exposes truncated flag when inline content is trimmed', async () => {
     const originalCacheEnabled = config.cache.enabled;
+    const originalInlineLimit = config.constants.maxInlineContentChars;
     config.cache.enabled = false;
+    config.constants.maxInlineContentChars = 20000;
 
     const html = `<html><body><p>${'a'.repeat(21000)}</p></body></html>`;
 
@@ -156,6 +158,7 @@ describe('fetchUrlToolHandler', () => {
       );
     } finally {
       config.cache.enabled = originalCacheEnabled;
+      config.constants.maxInlineContentChars = originalInlineLimit;
     }
   });
 
@@ -180,8 +183,10 @@ describe('fetchUrlToolHandler', () => {
   it('returns truncated markdown even when cache + http mode are enabled', async () => {
     const originalHttpMode = config.runtime.httpMode;
     const originalCacheEnabled = config.cache.enabled;
+    const originalInlineLimit = config.constants.maxInlineContentChars;
     config.runtime.httpMode = true;
     config.cache.enabled = true;
+    config.constants.maxInlineContentChars = 20000;
 
     const html = `<html><body><p>${'a'.repeat(25000)}</p></body></html>`;
 
@@ -208,6 +213,7 @@ describe('fetchUrlToolHandler', () => {
     } finally {
       config.runtime.httpMode = originalHttpMode;
       config.cache.enabled = originalCacheEnabled;
+      config.constants.maxInlineContentChars = originalInlineLimit;
     }
   });
 
@@ -330,29 +336,35 @@ describe('fetchUrlToolHandler', () => {
   });
 
   it('closes tilde code fences when truncating inline content', async () => {
+    const originalInlineLimit = config.constants.maxInlineContentChars;
+    config.constants.maxInlineContentChars = 20000;
     const longBody = 'a'.repeat(config.constants.maxInlineContentChars + 500);
     const rawContent = `# Title\n\n~~~\n${longBody}\n~~~\n`;
 
-    await withMockedFetch(
-      async () => {
-        return new Response(rawContent, {
-          status: 200,
-          headers: { 'content-type': 'text/plain' },
-        });
-      },
-      async () => {
-        const response = await fetchUrlToolHandler({
-          url: 'https://example.com/tilde-fence',
-        });
+    try {
+      await withMockedFetch(
+        async () => {
+          return new Response(rawContent, {
+            status: 200,
+            headers: { 'content-type': 'text/plain' },
+          });
+        },
+        async () => {
+          const response = await fetchUrlToolHandler({
+            url: 'https://example.com/tilde-fence',
+          });
 
-        const structured = response.structuredContent;
-        assert.ok(structured);
-        assert.equal(structured.truncated, true);
-        const markdown = String(structured.markdown);
-        assert.match(markdown, /~~~\n\.\.\.\[truncated\]/);
-        assert.equal(markdown.includes('```\n...[truncated]'), false);
-      }
-    );
+          const structured = response.structuredContent;
+          assert.ok(structured);
+          assert.equal(structured.truncated, true);
+          const markdown = String(structured.markdown);
+          assert.match(markdown, /~~~\n\.\.\.\[truncated\]/);
+          assert.equal(markdown.includes('```\n...[truncated]'), false);
+        }
+      );
+    } finally {
+      config.constants.maxInlineContentChars = originalInlineLimit;
+    }
   });
 
   it('converts html fragments even when markdown-like markers appear', async () => {

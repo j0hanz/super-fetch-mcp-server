@@ -244,7 +244,7 @@ Structured response fields:
 - `inputUrl` (string, optional): original input URL
 - `resolvedUrl` (string, optional): normalized or raw-content URL
 - `title` (string, optional): page title
-- `markdown` (string, optional): inline markdown (may be truncated)
+- `markdown` (string, optional): inline markdown (may be truncated when `MAX_INLINE_CONTENT_CHARS` is set)
 - `error` (string, optional): error message on failure
 
 Limitations:
@@ -257,12 +257,12 @@ Limitations:
 
 Large content handling:
 
-- Inline markdown is capped at 20,000 characters.
-- If cache is enabled and content exceeds the inline limit, the tool response
-  includes a `resource_link` block pointing to `superfetch://cache/markdown/{urlHash}`.
-- If cache is disabled, inline markdown is truncated with `...[truncated]`.
-- In stdio mode, the tool also embeds a `resource` block containing full
-  markdown content when available.
+- HTML response size is unlimited by default. Set `MAX_HTML_BYTES` to cap downloads.
+- Inline markdown is unlimited by default. Set `MAX_INLINE_CONTENT_CHARS` to cap output.
+- If a cap is set and cache is enabled, the tool response includes a `resource_link`
+  pointing to `superfetch://cache/markdown/{urlHash}`.
+- If a cap is set and cache is disabled, inline markdown is truncated with `...[truncated]`.
+- In stdio mode, the tool also embeds a `resource` block containing full markdown content when available.
 
 ### Resources
 

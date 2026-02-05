@@ -201,7 +201,7 @@ This tool is useful for:
 - Caching content to speed up repeated queries.
 
 Limitations:
-- Returns truncated content if it exceeds ${config.constants.maxInlineContentChars} characters.
+- Inline output may be truncated when MAX_INLINE_CONTENT_CHARS is set.
 - Does not execute complex client-side JavaScript interactions.
 `.trim();
 
@@ -464,6 +464,10 @@ class InlineContentLimiter {
   apply(content: string, cacheKey: string | null): InlineContentResult {
     const contentSize = content.length;
     const inlineLimit = config.constants.maxInlineContentChars;
+
+    if (inlineLimit <= 0) {
+      return { content, contentSize };
+    }
 
     if (contentSize <= inlineLimit) {
       return { content, contentSize };

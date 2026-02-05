@@ -36,7 +36,7 @@ fetch-url
 - Purpose: Fetch a URL and return Markdown.
 - Input: { "url": "https://..." }
 - Side effects: None (read-only, idempotent). Populates cache automatically.
-- Limits: Inline content capped at 20,000 chars; larger content offloaded to superfetch://cache/....
+- Limits: HTML size is unlimited by default. Set MAX_HTML_BYTES to cap downloads. Inline content is unlimited by default; set MAX_INLINE_CONTENT_CHARS to cap output (0 disables).
 - Blocked targets: localhost, private IPs (10.x, 172.16–31.x, 192.168.x), cloud metadata endpoints.
 - Content quality: Extraction quality varies by HTML structure. Works best with standard articles/docs. Always verify output.
 

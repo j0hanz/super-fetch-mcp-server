@@ -4,6 +4,7 @@ import { after, describe, it } from 'node:test';
 // Note: We need to import the internal function for testing.
 // Since it's not exported, we'll test through the public API by creating
 // markdown with code fences that exceed the inline limit.
+import { config } from '../dist/config.js';
 import { fetchUrlToolHandler } from '../dist/tools.js';
 import { shutdownTransformWorkerPool } from '../dist/transform.js';
 
@@ -13,6 +14,8 @@ after(async () => {
 
 describe('Inline content truncation', () => {
   it('does not produce malformed markdown when truncating mid-code-fence', async () => {
+    const originalInlineLimit = config.constants.maxInlineContentChars;
+    config.constants.maxInlineContentChars = 20000;
     // Create a mock fetch that returns markdown with a code fence
     // that gets truncated in the middle
     const longCode = 'a'.repeat(20100); // Exceeds 20000 char limit
@@ -91,10 +94,13 @@ Text after fence.
       }
     } finally {
       globalThis.fetch = originalFetch;
+      config.constants.maxInlineContentChars = originalInlineLimit;
     }
   });
 
   it('handles truncation of nested code fences correctly', async () => {
+    const originalInlineLimit = config.constants.maxInlineContentChars;
+    config.constants.maxInlineContentChars = 20000;
     // Test with markdown containing nested fences (e.g., in documentation)
     const longContent = 'b'.repeat(20100);
     const nestedFenceMarkdown = `
@@ -156,6 +162,7 @@ End of example.
       }
     } finally {
       globalThis.fetch = originalFetch;
+      config.constants.maxInlineContentChars = originalInlineLimit;
     }
   });
 });

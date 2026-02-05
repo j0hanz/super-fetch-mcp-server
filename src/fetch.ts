@@ -1381,11 +1381,13 @@ class ResponseTextReader {
       throw createAbortedFetchError(url);
     }
 
+    const limit = maxBytes <= 0 ? Number.POSITIVE_INFINITY : maxBytes;
+
     if (!response.body) {
       if (signal?.aborted) throw createCanceledFetchError(url);
 
       const arrayBuffer = await response.arrayBuffer();
-      const length = Math.min(arrayBuffer.byteLength, maxBytes);
+      const length = Math.min(arrayBuffer.byteLength, limit);
       const buffer = new Uint8Array(arrayBuffer, 0, length);
 
       const effectiveEncoding =
@@ -1403,13 +1405,7 @@ class ResponseTextReader {
       return { buffer, encoding: effectiveEncoding, size: buffer.byteLength };
     }
 
-    return this.readStreamToBuffer(
-      response.body,
-      url,
-      maxBytes,
-      signal,
-      encoding
-    );
+    return this.readStreamToBuffer(response.body, url, limit, signal, encoding);
   }
 
   private async readNext(

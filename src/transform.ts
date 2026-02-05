@@ -256,7 +256,7 @@ export function endTransformStage(
 function truncateHtml(html: string): { html: string; truncated: boolean } {
   const maxSize = config.constants.maxHtmlSize;
 
-  if (html.length <= maxSize) {
+  if (maxSize <= 0 || html.length <= maxSize) {
     return { html, truncated: false };
   }
 
@@ -289,7 +289,8 @@ function truncateHtml(html: string): { html: string; truncated: boolean } {
 }
 
 function willTruncate(html: string): boolean {
-  return html.length > config.constants.maxHtmlSize;
+  const maxSize = config.constants.maxHtmlSize;
+  return maxSize > 0 && html.length > maxSize;
 }
 
 const HEAD_END_PATTERN = /<\/head\s*>|<body\b/i;

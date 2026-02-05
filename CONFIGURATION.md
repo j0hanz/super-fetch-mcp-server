@@ -35,19 +35,21 @@ SuperFetch runs with no configuration by default. Just run with `--stdio`:
 
 ### Core Server Settings
 
-| Variable               | Default              | Description                                                                                                        |
-| ---------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `HOST`                 | `127.0.0.1`          | HTTP server bind address                                                                                           |
-| `PORT`                 | `3000`               | HTTP server port (1024-65535)                                                                                      |
-| `USER_AGENT`           | `superFetch-MCP/2.0` | User-Agent header for outgoing requests                                                                            |
-| `CACHE_ENABLED`        | `true`               | Enable response caching                                                                                            |
-| `CACHE_TTL`            | `3600`               | Cache lifetime in seconds (60-86400)                                                                               |
-| `LOG_LEVEL`            | `info`               | Logging level. Only `debug` enables verbose logs; other values behave like `info`                                  |
-| `ALLOW_REMOTE`         | `false`              | Allow binding to non-loopback hosts (OAuth required)                                                               |
-| `ALLOWED_HOSTS`        | (empty)              | Additional allowed Host/Origin values (comma/space separated)                                                      |
-| `FETCH_TIMEOUT_MS`     | `15000`              | Outgoing fetch timeout in milliseconds (1000-60000)                                                                |
-| `TRANSFORM_TIMEOUT_MS` | `30000`              | Worker transform timeout in milliseconds (5000-120000)                                                             |
-| `TOOL_TIMEOUT_MS`      | `50000`              | Overall tool timeout in milliseconds (1000-300000). Defaults to `FETCH_TIMEOUT_MS` + `TRANSFORM_TIMEOUT_MS` + 5000 |
+| Variable                   | Default                           | Description                                                                                                        |
+| -------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `HOST`                     | `127.0.0.1`                       | HTTP server bind address                                                                                           |
+| `PORT`                     | `3000`                            | HTTP server port (1024-65535)                                                                                      |
+| `USER_AGENT`               | `superFetch-MCP│${serverVersion}` | User-Agent header for outgoing requests                                                                            |
+| `CACHE_ENABLED`            | `true`                            | Enable response caching                                                                                            |
+| `CACHE_TTL`                | `3600`                            | Cache lifetime in seconds (60-86400)                                                                               |
+| `LOG_LEVEL`                | `info`                            | Logging level. Only `debug` enables verbose logs; other values behave like `info`                                  |
+| `ALLOW_REMOTE`             | `false`                           | Allow binding to non-loopback hosts (OAuth required)                                                               |
+| `ALLOWED_HOSTS`            | (empty)                           | Additional allowed Host/Origin values (comma/space separated)                                                      |
+| `FETCH_TIMEOUT_MS`         | `15000`                           | Outgoing fetch timeout in milliseconds (1000-60000)                                                                |
+| `TRANSFORM_TIMEOUT_MS`     | `30000`                           | Worker transform timeout in milliseconds (5000-120000)                                                             |
+| `TOOL_TIMEOUT_MS`          | `50000`                           | Overall tool timeout in milliseconds (1000-300000). Defaults to `FETCH_TIMEOUT_MS` + `TRANSFORM_TIMEOUT_MS` + 5000 |
+| `MAX_HTML_BYTES`           | `0`                               | Maximum HTML response size in bytes; `0` disables the limit (unlimited)                                            |
+| `MAX_INLINE_CONTENT_CHARS` | `0`                               | Maximum inline markdown characters; `0` disables truncation (unlimited)                                            |
 
 > **Timeout Composition**: The tool timeout (`TOOL_TIMEOUT_MS`) is the overall deadline for a `fetch-url` call. It composes as: fetch (network I/O) + transform (HTML→Markdown) + 5s padding. Each layer has its own abort signal:
 >
@@ -252,14 +254,12 @@ npm start
 
 These values are not configurable (sensible defaults for all use cases):
 
-| Setting               | Value        | Notes                                |
-| --------------------- | ------------ | ------------------------------------ |
-| Request timeout       | 15 seconds   | Fast failure for unresponsive URLs   |
-| Max redirects         | 5            | Per request                          |
-| Max response size     | 10 MB        | HTML responses larger than this fail |
-| Inline markdown limit | 20,000 chars | Used for tool output                 |
-| Cache max entries     | 100          | LRU eviction when exceeded           |
-| Session TTL           | 30 minutes   | HTTP mode only                       |
-| Session init timeout  | 10 seconds   | HTTP mode only                       |
-| Max sessions          | 200          | HTTP mode only                       |
-| Rate limit            | 100 req/min  | HTTP mode only, per IP               |
+| Setting              | Value       | Notes                              |
+| -------------------- | ----------- | ---------------------------------- |
+| Request timeout      | 15 seconds  | Fast failure for unresponsive URLs |
+| Max redirects        | 5           | Per request                        |
+| Cache max entries    | 100         | LRU eviction when exceeded         |
+| Session TTL          | 30 minutes  | HTTP mode only                     |
+| Session init timeout | 10 seconds  | HTTP mode only                     |
+| Max sessions         | 200         | HTTP mode only                     |
+| Rate limit           | 100 req/min | HTTP mode only, per IP             |

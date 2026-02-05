@@ -22,7 +22,9 @@ function withMockedFetch(mock: any, execute: any) {
 describe('Forced Cache on Truncation', () => {
   it('generates a resource URI when content is truncated even if cache is disabled', async () => {
     const originalCacheEnabled = config.cache.enabled;
+    const originalInlineLimit = config.constants.maxInlineContentChars;
     config.cache.enabled = false;
+    config.constants.maxInlineContentChars = 20000;
 
     // Create content larger than maxInlineContentChars (20000)
     const largeContent = 'a'.repeat(25000);
@@ -82,6 +84,7 @@ describe('Forced Cache on Truncation', () => {
       );
     } finally {
       config.cache.enabled = originalCacheEnabled;
+      config.constants.maxInlineContentChars = originalInlineLimit;
     }
   });
 });

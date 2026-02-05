@@ -163,11 +163,18 @@ function parsePort(envValue: string | undefined): number {
   return parseInteger(envValue, 3000, 1024, 65535);
 }
 
-const MAX_HTML_BYTES = 10 * 1024 * 1024;
+const DEFAULT_MAX_HTML_BYTES = 0;
+const DEFAULT_MAX_INLINE_CONTENT_CHARS = 0;
+
+const MAX_HTML_BYTES =
+  parseIntegerValue(env.MAX_HTML_BYTES, 0) ?? DEFAULT_MAX_HTML_BYTES;
+const MAX_INLINE_CONTENT_CHARS =
+  parseIntegerValue(env.MAX_INLINE_CONTENT_CHARS, 0) ??
+  DEFAULT_MAX_INLINE_CONTENT_CHARS;
 const DEFAULT_SESSION_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_SESSION_INIT_TIMEOUT_MS = 10000;
 const DEFAULT_MAX_SESSIONS = 200;
-const DEFAULT_USER_AGENT = 'superFetch-MCP/2.0';
+const DEFAULT_USER_AGENT = `superFetch-MCP│${serverVersion}`;
 const DEFAULT_ENABLED_TOOLS = 'fetch-url';
 const DEFAULT_NOISE_REMOVAL_CATEGORIES =
   'cookie-banners,newsletters,social-share,nav-footer';
@@ -446,7 +453,7 @@ export const config = {
   constants: {
     maxHtmlSize: MAX_HTML_BYTES,
     maxUrlLength: 2048,
-    maxInlineContentChars: 20000,
+    maxInlineContentChars: MAX_INLINE_CONTENT_CHARS,
   },
   security: {
     blockedHosts: BLOCKED_HOSTS,
