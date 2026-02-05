@@ -50,14 +50,12 @@ import type {
 } from './transform-types.js';
 import { isObject } from './type-guards.js';
 
-// Spread signal into options object only if defined
 function spreadSignal(
   signal: AbortSignal | undefined
 ): { signal: AbortSignal } | Record<string, never> {
   return signal ? { signal } : {};
 }
 
-// Extract uppercase tagName from unknown node, or empty string
 function getTagName(node: unknown): string {
   if (!isObject(node)) return '';
   const raw = (node as { tagName?: unknown }).tagName;
@@ -74,48 +72,44 @@ export interface StageBudget {
   elapsedMs: number;
 }
 
-class AbortPolicy {
-  private getAbortReason(signal: AbortSignal): unknown {
-    if (!isObject(signal)) return undefined;
-    return 'reason' in signal
-      ? (signal as Record<string, unknown>).reason
-      : undefined;
-  }
-
-  private isTimeoutReason(reason: unknown): boolean {
-    return reason instanceof Error && reason.name === 'TimeoutError';
-  }
-
-  throwIfAborted(
-    signal: AbortSignal | undefined,
-    url: string,
-    stage: string
-  ): void {
-    if (!signal?.aborted) return;
-
-    const reason = this.getAbortReason(signal);
-    if (this.isTimeoutReason(reason)) {
-      throw new FetchError('Request timeout', url, 504, {
-        reason: 'timeout',
-        stage,
-      });
-    }
-
-    throw new FetchError('Request was canceled', url, 499, {
-      reason: 'aborted',
-      stage,
-    });
-  }
-
-  createAbortError(url: string, stage: string): FetchError {
-    return new FetchError('Request was canceled', url, 499, {
-      reason: 'aborted',
-      stage,
-    });
-  }
+function getAbortReason(signal: AbortSignal): unknown {
+  const record = isObject(signal) ? (signal as Record<string, unknown>) : null;
+  return record && 'reason' in record ? record.reason : undefined;
 }
 
-const abortPolicy = new AbortPolicy();
+function isTimeoutAbortReason(reason: unknown): boolean {
+  return reason instanceof Error && reason.name === 'TimeoutError';
+}
+
+function throwIfAborted(
+  signal: AbortSignal | undefined,
+  url: string,
+  stage: string
+): void {
+  if (!signal?.aborted) return;
+
+  const reason = getAbortReason(signal);
+  if (isTimeoutAbortReason(reason)) {
+    throw new FetchError('Request timeout', url, 504, {
+      reason: 'timeout',
+      stage,
+    });
+  }
+
+  throw new FetchError('Request was canceled', url, 499, {
+    reason: 'aborted',
+    stage,
+  });
+}
+
+function createAbortError(url: string, stage: string): FetchError {
+  return new FetchError('Request was canceled', url, 499, {
+    reason: 'aborted',
+    stage,
+  });
+}
+
+const abortPolicy = { throwIfAborted, createAbortError };
 
 function buildTransformSignal(signal?: AbortSignal): AbortSignal | undefined {
   const { timeoutMs } = config.transform;
@@ -232,7 +226,7 @@ class StageTracker {
     try {
       this.channel.publish(event);
     } catch {
-      void 0;
+      /* ignore */
     }
   }
 }
@@ -262,7 +256,7 @@ function truncateHtml(html: string): { html: string; truncated: boolean } {
   }
 
   let limit = maxSize;
-  // Prevent splitting surrogate pairs: check if the char at limit-1 is a high surrogate
+  // Avoid splitting surrogate pairs.
   if (
     limit > 0 &&
     html.charCodeAt(limit - 1) >= 0xd800 &&
@@ -273,8 +267,7 @@ function truncateHtml(html: string): { html: string; truncated: boolean } {
 
   let content = html.substring(0, limit);
 
-  // Avoid cutting inside a tag (e.g. <div cla...)
-  // If the last '<' is after the last '>', we are likely inside an open tag.
+  // Avoid truncating inside tags.
   const lastOpen = content.lastIndexOf('<');
   const lastClose = content.lastIndexOf('>');
 
@@ -365,44 +358,39 @@ const META_NAME_HANDLERS = new Map<
   ],
 ]);
 
-class MetadataExtractor {
-  extract(document: Document): ExtractedMetadata {
-    const ctx: MetaContext = { title: {}, description: {} };
+function extractMetadata(document: Document): ExtractedMetadata {
+  const ctx: MetaContext = { title: {}, description: {} };
 
-    for (const tag of document.querySelectorAll('meta')) {
-      const content = tag.getAttribute('content')?.trim();
-      if (!content) continue;
+  for (const tag of document.querySelectorAll('meta')) {
+    const content = tag.getAttribute('content')?.trim();
+    if (!content) continue;
 
-      const property = tag.getAttribute('property');
-      if (property) META_PROPERTY_HANDLERS.get(property)?.(ctx, content);
+    const property = tag.getAttribute('property');
+    if (property) META_PROPERTY_HANDLERS.get(property)?.(ctx, content);
 
-      const name = tag.getAttribute('name');
-      if (name) META_NAME_HANDLERS.get(name)?.(ctx, content);
-    }
-
-    const titleEl = document.querySelector('title');
-    if (!ctx.title.standard && titleEl?.textContent) {
-      ctx.title.standard = titleEl.textContent.trim();
-    }
-
-    const resolvedTitle =
-      ctx.title.og ?? ctx.title.twitter ?? ctx.title.standard;
-    const resolvedDesc =
-      ctx.description.og ?? ctx.description.twitter ?? ctx.description.standard;
-
-    const metadata: ExtractedMetadata = {};
-    if (resolvedTitle) metadata.title = resolvedTitle;
-    if (resolvedDesc) metadata.description = resolvedDesc;
-    if (ctx.author) metadata.author = ctx.author;
-    if (ctx.image) metadata.image = ctx.image;
-    if (ctx.publishedAt) metadata.publishedAt = ctx.publishedAt;
-    if (ctx.modifiedAt) metadata.modifiedAt = ctx.modifiedAt;
-
-    return metadata;
+    const name = tag.getAttribute('name');
+    if (name) META_NAME_HANDLERS.get(name)?.(ctx, content);
   }
-}
 
-const metadataExtractor = new MetadataExtractor();
+  const titleEl = document.querySelector('title');
+  if (!ctx.title.standard && titleEl?.textContent) {
+    ctx.title.standard = titleEl.textContent.trim();
+  }
+
+  const resolvedTitle = ctx.title.og ?? ctx.title.twitter ?? ctx.title.standard;
+  const resolvedDesc =
+    ctx.description.og ?? ctx.description.twitter ?? ctx.description.standard;
+
+  const metadata: ExtractedMetadata = {};
+  if (resolvedTitle) metadata.title = resolvedTitle;
+  if (resolvedDesc) metadata.description = resolvedDesc;
+  if (ctx.author) metadata.author = ctx.author;
+  if (ctx.image) metadata.image = ctx.image;
+  if (ctx.publishedAt) metadata.publishedAt = ctx.publishedAt;
+  if (ctx.modifiedAt) metadata.modifiedAt = ctx.modifiedAt;
+
+  return metadata;
+}
 
 function isReadabilityCompatible(doc: unknown): doc is Document {
   if (!isObject(doc)) return false;
@@ -415,65 +403,59 @@ function isReadabilityCompatible(doc: unknown): doc is Document {
   );
 }
 
-class ArticleExtractor {
-  extract(document: unknown): ExtractedArticle | null {
-    if (!isReadabilityCompatible(document)) {
-      logWarn('Document not compatible with Readability');
-      return null;
-    }
+function extractArticle(document: unknown): ExtractedArticle | null {
+  if (!isReadabilityCompatible(document)) {
+    logWarn('Document not compatible with Readability');
+    return null;
+  }
 
-    try {
-      const doc = document;
+  try {
+    const doc = document;
 
-      const rawText =
-        doc.querySelector('body')?.textContent ??
-        (doc.documentElement.textContent as string | null | undefined) ??
-        '';
-      const textLength = rawText.replace(/\s+/g, ' ').trim().length;
+    const rawText =
+      doc.querySelector('body')?.textContent ??
+      (doc.documentElement.textContent as string | null | undefined) ??
+      '';
+    const textLength = rawText.replace(/\s+/g, ' ').trim().length;
 
-      if (textLength < 100) {
-        logWarn(
-          'Very minimal server-rendered content detected (< 100 chars). ' +
-            'This might be a client-side rendered (SPA) application. ' +
-            'Content extraction may be incomplete.',
-          { textLength }
-        );
-      }
-
-      if (textLength >= 400 && !isProbablyReaderable(doc)) {
-        return null;
-      }
-
-      const readabilityDoc =
-        typeof doc.cloneNode === 'function'
-          ? (doc.cloneNode(true) as Document)
-          : doc;
-
-      const reader = new Readability(readabilityDoc, {
-        maxElemsToParse: 20_000,
-      });
-      const parsed = reader.parse();
-      if (!parsed) return null;
-
-      return {
-        content: parsed.content ?? '',
-        textContent: parsed.textContent ?? '',
-        ...(parsed.title != null && { title: parsed.title }),
-        ...(parsed.byline != null && { byline: parsed.byline }),
-        ...(parsed.excerpt != null && { excerpt: parsed.excerpt }),
-        ...(parsed.siteName != null && { siteName: parsed.siteName }),
-      };
-    } catch (error: unknown) {
-      logError(
-        'Failed to extract article with Readability',
-        error instanceof Error ? error : undefined
+    if (textLength < 100) {
+      logWarn(
+        'Very minimal server-rendered content detected (< 100 chars). ' +
+          'This might be a client-side rendered (SPA) application. ' +
+          'Content extraction may be incomplete.',
+        { textLength }
       );
+    }
+
+    if (textLength >= 400 && !isProbablyReaderable(doc)) {
       return null;
     }
+
+    const readabilityDoc =
+      typeof doc.cloneNode === 'function'
+        ? (doc.cloneNode(true) as Document)
+        : doc;
+
+    const reader = new Readability(readabilityDoc, { maxElemsToParse: 20_000 });
+    const parsed = reader.parse();
+    if (!parsed) return null;
+
+    return {
+      content: parsed.content ?? '',
+      textContent: parsed.textContent ?? '',
+      ...(parsed.title != null && { title: parsed.title }),
+      ...(parsed.byline != null && { byline: parsed.byline }),
+      ...(parsed.excerpt != null && { excerpt: parsed.excerpt }),
+      ...(parsed.siteName != null && { siteName: parsed.siteName }),
+    };
+  } catch (error: unknown) {
+    logError(
+      'Failed to extract article with Readability',
+      error instanceof Error ? error : undefined
+    );
+    return null;
   }
 }
-
-const articleExtractor = new ArticleExtractor();
 
 function validateRequiredString(value: unknown, message: string): boolean {
   if (typeof value === 'string' && value.length > 0) return true;
@@ -501,64 +483,59 @@ function applyBaseUri(document: Document, url: string): void {
   }
 }
 
-class ContentExtractor {
-  extract(
-    html: string,
-    url: string,
-    options: { extractArticle?: boolean; signal?: AbortSignal }
-  ): ExtractionContext {
-    if (!isValidInput(html, url)) {
-      const { document } = parseHTML('<html></html>');
-      return { article: null, metadata: {}, document };
-    }
+function extractContentContext(
+  html: string,
+  url: string,
+  options: { extractArticle?: boolean; signal?: AbortSignal }
+): ExtractionContext {
+  if (!isValidInput(html, url)) {
+    const { document } = parseHTML('<html></html>');
+    return { article: null, metadata: {}, document };
+  }
 
-    try {
-      abortPolicy.throwIfAborted(options.signal, url, 'extract:begin');
+  try {
+    abortPolicy.throwIfAborted(options.signal, url, 'extract:begin');
 
-      const { html: limitedHtml, truncated } = truncateHtml(html);
+    const { html: limitedHtml, truncated } = truncateHtml(html);
 
-      const { document } = stageTracker.run(url, 'extract:parse', () =>
-        parseHTML(limitedHtml)
-      );
-      abortPolicy.throwIfAborted(options.signal, url, 'extract:parsed');
+    const { document } = stageTracker.run(url, 'extract:parse', () =>
+      parseHTML(limitedHtml)
+    );
+    abortPolicy.throwIfAborted(options.signal, url, 'extract:parsed');
 
-      applyBaseUri(document, url);
+    applyBaseUri(document, url);
 
-      const metadata = stageTracker.run(url, 'extract:metadata', () =>
-        metadataExtractor.extract(document)
-      );
-      abortPolicy.throwIfAborted(options.signal, url, 'extract:metadata');
+    const metadata = stageTracker.run(url, 'extract:metadata', () =>
+      extractMetadata(document)
+    );
+    abortPolicy.throwIfAborted(options.signal, url, 'extract:metadata');
 
-      const article = options.extractArticle
-        ? stageTracker.run(url, 'extract:article', () =>
-            articleExtractor.extract(document)
-          )
-        : null;
+    const article = options.extractArticle
+      ? stageTracker.run(url, 'extract:article', () => extractArticle(document))
+      : null;
 
-      abortPolicy.throwIfAborted(options.signal, url, 'extract:article');
+    abortPolicy.throwIfAborted(options.signal, url, 'extract:article');
 
-      return {
-        article,
-        metadata,
-        document,
-        ...(truncated ? { truncated: true } : {}),
-      };
-    } catch (error: unknown) {
-      if (error instanceof FetchError) throw error;
+    return {
+      article,
+      metadata,
+      document,
+      ...(truncated ? { truncated: true } : {}),
+    };
+  } catch (error: unknown) {
+    if (error instanceof FetchError) throw error;
 
-      abortPolicy.throwIfAborted(options.signal, url, 'extract:error');
+    abortPolicy.throwIfAborted(options.signal, url, 'extract:error');
 
-      logError(
-        'Failed to extract content',
-        error instanceof Error ? error : undefined
-      );
-      const { document } = parseHTML('<html></html>');
-      return { article: null, metadata: {}, document };
-    }
+    logError(
+      'Failed to extract content',
+      error instanceof Error ? error : undefined
+    );
+
+    const { document } = parseHTML('<html></html>');
+    return { article: null, metadata: {}, document };
   }
 }
-
-const contentExtractor = new ContentExtractor();
 
 export function extractContent(
   html: string,
@@ -567,7 +544,7 @@ export function extractContent(
     extractArticle: true,
   }
 ): ExtractionResult {
-  const result = contentExtractor.extract(html, url, options);
+  const result = extractContentContext(html, url, options);
   return { article: result.article, metadata: result.metadata };
 }
 
@@ -819,28 +796,24 @@ function createCustomTranslators(): TranslatorConfigObject {
   };
 }
 
-class MarkdownConverter {
-  private instance: NodeHtmlMarkdown | null = null;
+let markdownConverter: NodeHtmlMarkdown | null = null;
 
-  translate(html: string): string {
-    return this.get().translate(html).trim();
-  }
-
-  private get(): NodeHtmlMarkdown {
-    this.instance ??= new NodeHtmlMarkdown(
-      {
-        codeFence: CODE_BLOCK.fence,
-        codeBlockStyle: 'fenced',
-        emDelimiter: '_',
-        bulletMarker: '-',
-      },
-      createCustomTranslators()
-    );
-    return this.instance;
-  }
+function getMarkdownConverter(): NodeHtmlMarkdown {
+  markdownConverter ??= new NodeHtmlMarkdown(
+    {
+      codeFence: CODE_BLOCK.fence,
+      codeBlockStyle: 'fenced',
+      emDelimiter: '_',
+      bulletMarker: '-',
+    },
+    createCustomTranslators()
+  );
+  return markdownConverter;
 }
 
-const markdownConverter = new MarkdownConverter();
+function translateHtmlFragmentToMarkdown(html: string): string {
+  return getMarkdownConverter().translate(html).trim();
+}
 
 function preprocessPropertySections(html: string): string {
   return html.replace(
@@ -873,7 +846,7 @@ function translateHtmlToMarkdown(params: {
   );
 
   const content = stageTracker.run(url, 'markdown:translate', () =>
-    markdownConverter.translate(preprocessedHtml)
+    translateHtmlFragmentToMarkdown(preprocessedHtml)
   );
 
   abortPolicy.throwIfAborted(signal, url, 'markdown:translated');
@@ -999,7 +972,7 @@ function resolveHtmlDocument(htmlOrDocument: string | Document): Document {
   try {
     return parseHTML(htmlToParse).document;
   } catch {
-    // Fallback: parsing failures should not crash extraction quality gates.
+    // Don't crash on parse failures.
     return parseHTML('<!DOCTYPE html><html><body></body></html>').document;
   }
 }
@@ -1116,44 +1089,6 @@ interface ContentSource {
   readonly truncated: boolean;
 }
 
-class ContentSourceResolver {
-  constructor(private readonly extractor: ContentExtractor) {}
-
-  resolve(params: {
-    html: string;
-    url: string;
-    includeMetadata: boolean;
-    signal?: AbortSignal;
-  }): ContentSource {
-    const {
-      article,
-      metadata: extractedMeta,
-      document,
-      truncated,
-    } = this.extractor.extract(params.html, params.url, {
-      extractArticle: true,
-      ...spreadSignal(params.signal),
-    });
-
-    const useArticleContent = article
-      ? shouldUseArticleContent(article, document)
-      : false;
-
-    return buildContentSource({
-      html: params.html,
-      url: params.url,
-      article,
-      extractedMeta,
-      includeMetadata: params.includeMetadata,
-      useArticleContent,
-      document,
-      truncated: truncated ?? false,
-    });
-  }
-}
-
-const contentSourceResolver = new ContentSourceResolver(contentExtractor);
-
 const CONTENT_ROOT_SELECTORS = [
   'article',
   'main',
@@ -1254,7 +1189,7 @@ function buildContentSource(params: {
   );
 
   if (useArticleContent && article) {
-    // Clean Readability HTML; it can include boilerplate.
+    // Readability output can still be noisy.
     const cleanedArticleHtml = removeNoiseFromHtml(
       article.content,
       undefined,
@@ -1264,7 +1199,7 @@ function buildContentSource(params: {
       sourceHtml: cleanedArticleHtml,
       title: article.title,
       metadata,
-      skipNoiseRemoval: true, // cleaned
+      skipNoiseRemoval: true,
       truncated,
     };
   }
@@ -1308,7 +1243,30 @@ function resolveContentSource(params: {
   includeMetadata: boolean;
   signal?: AbortSignal;
 }): ContentSource {
-  return contentSourceResolver.resolve(params);
+  const {
+    article,
+    metadata: extractedMeta,
+    document,
+    truncated,
+  } = extractContentContext(params.html, params.url, {
+    extractArticle: true,
+    ...spreadSignal(params.signal),
+  });
+
+  const useArticleContent = article
+    ? shouldUseArticleContent(article, document)
+    : false;
+
+  return buildContentSource({
+    html: params.html,
+    url: params.url,
+    article,
+    extractedMeta,
+    includeMetadata: params.includeMetadata,
+    useArticleContent,
+    document,
+    truncated: truncated ?? false,
+  });
 }
 
 function buildMarkdownFromContext(
@@ -1612,7 +1570,7 @@ class WorkerPool implements TransformWorkerPool {
       try {
         slot.worker.postMessage({ type: 'cancel', id });
       } catch {
-        void 0;
+        /* ignore */
       }
     }
     this.failTask(
@@ -1630,7 +1588,7 @@ class WorkerPool implements TransformWorkerPool {
     try {
       signal.removeEventListener('abort', listener);
     } catch {
-      void 0;
+      /* ignore */
     }
   }
 
@@ -1817,7 +1775,7 @@ class WorkerPool implements TransformWorkerPool {
       try {
         slot.worker.postMessage({ type: 'cancel', id: task.id });
       } catch {
-        void 0;
+        /* ignore */
       }
 
       const inflight = this.takeInflight(task.id);
@@ -1887,35 +1845,31 @@ class WorkerPool implements TransformWorkerPool {
   }
 }
 
-class TransformWorkerPoolManager {
-  private pool: WorkerPool | null = null;
+let workerPool: WorkerPool | null = null;
 
-  getOrCreate(): WorkerPool {
-    this.pool ??= new WorkerPool(POOL_MIN_WORKERS, DEFAULT_TIMEOUT_MS);
-    return this.pool;
-  }
-
-  getStats(): {
-    queueDepth: number;
-    activeWorkers: number;
-    capacity: number;
-  } | null {
-    if (!this.pool) return null;
-    return {
-      queueDepth: this.pool.getQueueDepth(),
-      activeWorkers: this.pool.getActiveWorkers(),
-      capacity: this.pool.getCapacity(),
-    };
-  }
-
-  async shutdown(): Promise<void> {
-    if (!this.pool) return;
-    await this.pool.close();
-    this.pool = null;
-  }
+function getOrCreateWorkerPool(): WorkerPool {
+  workerPool ??= new WorkerPool(POOL_MIN_WORKERS, DEFAULT_TIMEOUT_MS);
+  return workerPool;
 }
 
-const poolManager = new TransformWorkerPoolManager();
+function getWorkerPoolStats(): {
+  queueDepth: number;
+  activeWorkers: number;
+  capacity: number;
+} | null {
+  if (!workerPool) return null;
+  return {
+    queueDepth: workerPool.getQueueDepth(),
+    activeWorkers: workerPool.getActiveWorkers(),
+    capacity: workerPool.getCapacity(),
+  };
+}
+
+async function shutdownWorkerPool(): Promise<void> {
+  if (!workerPool) return;
+  await workerPool.close();
+  workerPool = null;
+}
 
 export interface TransformPoolStats {
   queueDepth: number;
@@ -1924,11 +1878,11 @@ export interface TransformPoolStats {
 }
 
 export function getTransformPoolStats(): TransformPoolStats | null {
-  return poolManager.getStats();
+  return getWorkerPoolStats();
 }
 
 export async function shutdownTransformWorkerPool(): Promise<void> {
-  await poolManager.shutdown();
+  await shutdownWorkerPool();
 }
 
 function buildWorkerTransformOptions(options: TransformOptions): {
@@ -1946,7 +1900,7 @@ async function transformWithWorkerPool(
   url: string,
   options: TransformOptions
 ): Promise<MarkdownTransformResult> {
-  const pool = poolManager.getOrCreate();
+  const pool = getOrCreateWorkerPool();
   return pool.transform(html, url, buildWorkerTransformOptions(options));
 }
 
