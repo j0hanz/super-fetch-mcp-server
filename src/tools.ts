@@ -347,6 +347,40 @@ interface InlineContentResult {
 
 export type InlineResult = ReturnType<InlineContentLimiter['apply']>;
 
+function isInOpenCodeFence(content: string): boolean {
+  const lines = content.split('\n');
+  let inFence = false;
+  let fenceChar: string | null | undefined = null;
+  let fenceLength = 0;
+
+  for (const line of lines) {
+    const trimmed = line.trimStart();
+
+    // Check for fence markers (``` or ~~~)
+    const match = /^(`{3,}|~{3,})/.exec(trimmed);
+
+    if (match) {
+      const marker = match[0];
+      const char = marker[0];
+      const { length } = marker;
+
+      if (!inFence) {
+        // Opening fence
+        inFence = true;
+        fenceChar = char;
+        fenceLength = length;
+      } else if (char === fenceChar && length >= fenceLength) {
+        // Closing fence (same character, at least as many repetitions)
+        inFence = false;
+        fenceChar = null;
+        fenceLength = 0;
+      }
+    }
+  }
+
+  return inFence;
+}
+
 function truncateWithMarker(
   content: string,
   limit: number,
@@ -355,7 +389,20 @@ function truncateWithMarker(
   if (content.length <= limit) return content;
 
   const maxContentLength = Math.max(0, limit - marker.length);
-  return `${content.substring(0, maxContentLength)}${marker}`;
+  const truncatedContent = content.substring(0, maxContentLength);
+
+  // Check if we're inside an open code fence
+  if (isInOpenCodeFence(truncatedContent)) {
+    // Add a closing fence before the marker
+    const fenceCloser = '\n```\n';
+    const adjustedLength = Math.max(
+      0,
+      limit - marker.length - fenceCloser.length
+    );
+    return `${content.substring(0, adjustedLength)}${fenceCloser}${marker}`;
+  }
+
+  return `${truncatedContent}${marker}`;
 }
 
 class InlineContentLimiter {

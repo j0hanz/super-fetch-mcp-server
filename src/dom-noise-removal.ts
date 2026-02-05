@@ -136,16 +136,24 @@ function normalizeSelectors(selectors: readonly string[]): string[] {
   return selectors.map((s) => s.trim()).filter((s) => s.length > 0);
 }
 
-function createEnabledCategorySet(): Set<string> {
-  return new Set(
+let cachedEnabledCategories: Set<string> | null = null;
+let cachedCategoriesKey: string | null = null;
+
+function getEnabledCategories(): Set<string> {
+  const currentKey = config.noiseRemoval.enabledCategories.join(',');
+  if (cachedEnabledCategories && cachedCategoriesKey === currentKey) {
+    return cachedEnabledCategories;
+  }
+
+  cachedEnabledCategories = new Set(
     config.noiseRemoval.enabledCategories.map((c) => c.toLowerCase().trim())
   );
+  cachedCategoriesKey = currentKey;
+  return cachedEnabledCategories;
 }
 
-const enabledCategories = createEnabledCategorySet();
-
 function isCategoryEnabled(category: string): boolean {
-  return enabledCategories.has(category.toLowerCase());
+  return getEnabledCategories().has(category.toLowerCase());
 }
 
 function buildBaseNoiseSelector(): string {
@@ -482,6 +490,31 @@ class NoiseClassifier {
   }
 }
 
+const DIALOG_PRESERVATION_MIN_CHARS = 500;
+
+function shouldPreserveDialog(element: Element): boolean {
+  const role = element.getAttribute('role');
+  if (role !== 'dialog' && role !== 'alertdialog') return false;
+
+  // Preserve dialogs with substantial text content (>500 chars).
+  const textContent = element.textContent || '';
+  if (textContent.length > DIALOG_PRESERVATION_MIN_CHARS) return true;
+
+  // Preserve dialogs containing structural content (headings indicate main content).
+  const hasHeadings = element.querySelector('h1, h2, h3, h4, h5, h6') !== null;
+  return hasHeadings;
+}
+
+function shouldPreserveNavFooter(element: Element): boolean {
+  const tagName = element.tagName.toLowerCase();
+  if (tagName !== 'nav' && tagName !== 'footer') return false;
+
+  // Preserve nav/footer elements containing semantic content containers.
+  const hasSemanticContent =
+    element.querySelector('article, main, section') !== null;
+  return hasSemanticContent;
+}
+
 class NoiseStripper {
   constructor(private readonly classifier: NoiseClassifier) {}
 
@@ -499,17 +532,33 @@ class NoiseStripper {
     // Fast path: same behavior as before when selectors are valid.
     const combinedNodes = safeQuerySelectorAll(document, combined);
     if (combinedNodes) {
-      removeNodes(combinedNodes, () => true);
+      removeNodes(combinedNodes, (node) => {
+        if (shouldPreserveDialog(node)) return false;
+        if (shouldPreserveNavFooter(node)) return false;
+        return true;
+      });
       return;
     }
 
     // Robust fallback: one invalid extra selector should not disable base stripping.
     const baseNodes = safeQuerySelectorAll(document, baseSelector);
-    if (baseNodes) removeNodes(baseNodes, () => true);
+    if (baseNodes) {
+      removeNodes(baseNodes, (node) => {
+        if (shouldPreserveDialog(node)) return false;
+        if (shouldPreserveNavFooter(node)) return false;
+        return true;
+      });
+    }
 
     for (const selector of extra) {
       const nodes = safeQuerySelectorAll(document, selector);
-      if (nodes) removeNodes(nodes, () => true);
+      if (nodes) {
+        removeNodes(nodes, (node) => {
+          if (shouldPreserveDialog(node)) return false;
+          if (shouldPreserveNavFooter(node)) return false;
+          return true;
+        });
+      }
     }
   }
 
@@ -517,7 +566,14 @@ class NoiseStripper {
     const nodes = safeQuerySelectorAll(document, CANDIDATE_NOISE_SELECTOR);
     if (!nodes) return;
 
-    removeNodes(nodes, (node) => this.classifier.isNoise(node));
+    removeNodes(nodes, (node) => {
+      // Preserve dialogs that meet preservation criteria
+      if (shouldPreserveDialog(node)) return false;
+      // Preserve nav/footer elements containing semantic content
+      if (shouldPreserveNavFooter(node)) return false;
+      // Otherwise apply noise classifier
+      return this.classifier.isNoise(node);
+    });
   }
 }
 
@@ -660,7 +716,7 @@ class HtmlNoiseRemovalPipeline {
     try {
       if (config.noiseRemoval.debug) {
         logDebug('Noise removal audit enabled', {
-          categories: [...enabledCategories],
+          categories: [...getEnabledCategories()],
         });
       }
 

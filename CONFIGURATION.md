@@ -101,6 +101,34 @@ Optional:
 - **Integers**: Parsed with `parseInt`. Invalid values use defaults.
 - **Booleans**: The string `false` (lowercase) is `false`; any other non-empty value is `true`.
 
+### Noise Removal Tuning (Advanced)
+
+Control DOM noise filtering behavior. Higher weights increase likelihood of removal.
+
+| Variable                           | Default                                              | Description                                                              |
+| ---------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------ |
+| `NOISE_WEIGHT_HIDDEN`              | `50`                                                 | Weight for hidden elements (0-100)                                       |
+| `NOISE_WEIGHT_STRUCTURAL`          | `50`                                                 | Weight for structural noise tags like script, style (0-100)              |
+| `NOISE_WEIGHT_PROMO`               | `35`                                                 | Weight for promotional content (banners, ads) (0-100)                    |
+| `NOISE_WEIGHT_STICKY_FIXED`        | `30`                                                 | Weight for fixed/sticky positioned elements (0-100)                      |
+| `NOISE_WEIGHT_THRESHOLD`           | `50`                                                 | Removal threshold: elements with score ≥ threshold are removed (0-100)   |
+| `SUPERFETCH_EXTRA_NOISE_TOKENS`    | (empty)                                              | Additional CSS class/ID tokens to flag as noise (comma/space separated)  |
+| `SUPERFETCH_EXTRA_NOISE_SELECTORS` | (empty)                                              | Additional CSS selectors for noise removal (comma/space separated)       |
+| `NOISE_REMOVAL_CATEGORIES`         | `cookie-banners,newsletters,social-share,nav-footer` | Enabled noise categories (comma/space separated)                         |
+| `SUPERFETCH_AGGRESSIVE_NOISE`      | `false`                                              | Enable aggressive mode (includes tokens with higher false-positive risk) |
+| `SUPERFETCH_PRESERVE_SVG_CANVAS`   | `false`                                              | Preserve SVG and canvas elements (don't treat as structural noise)       |
+| `DEBUG_NOISE_REMOVAL`              | `false`                                              | Log noise removal decisions for debugging                                |
+
+### Markdown Cleanup Tuning (Advanced)
+
+Control post-processing of converted markdown.
+
+| Variable                           | Default | Description                                             |
+| ---------------------------------- | ------- | ------------------------------------------------------- |
+| `MARKDOWN_PROMOTE_ORPHAN_HEADINGS` | `true`  | Auto-promote title-case lines to headings               |
+| `MARKDOWN_REMOVE_SKIP_LINKS`       | `true`  | Remove "Skip to content/navigation" accessibility links |
+| `MARKDOWN_REMOVE_TOC_BLOCKS`       | `true`  | Remove auto-generated table of contents blocks          |
+
 ## Configuration Presets
 
 <details open>
