@@ -850,6 +850,27 @@ function createCustomTranslators(): TranslatorConfigObject {
           ).getAttribute.bind(node)
         : undefined;
       const className = getAttribute?.('class') ?? '';
+      if (className.includes('mermaid')) {
+        return {
+          noEscape: true,
+          preserveWhitespace: true,
+          postprocess: ({ content }: { content: string }) =>
+            `\n\n\`\`\`mermaid\n${content.trim()}\n\`\`\`\n\n`,
+        };
+      }
+      const isAdmonition =
+        className.includes('admonition') ||
+        className.includes('callout') ||
+        className.includes('custom-block') ||
+        /\b(note|tip|info|warning|danger|caution)\b/i.test(className);
+      if (isAdmonition) {
+        return {
+          postprocess: ({ content }: { content: string }) => {
+            const lines = content.trim().split('\n');
+            return `\n\n> ${lines.join('\n> ')}\n\n`;
+          },
+        };
+      }
 
       if (!className.includes('type')) return {};
 
@@ -895,7 +916,28 @@ function createCustomTranslators(): TranslatorConfigObject {
     section: () => ({
       postprocess: ({ content }: { content: string }) => `\n\n${content}\n\n`,
     }),
-    pre: (ctx: unknown) => buildPreTranslator(ctx),
+    pre: (ctx: unknown) => {
+      if (!isObject(ctx) || !isObject((ctx as { node?: unknown }).node)) {
+        return buildPreTranslator(ctx);
+      }
+      const { node } = ctx as { node: unknown };
+      const getAttribute = hasGetAttribute(node)
+        ? (
+            node as { getAttribute: (n: string) => string | null }
+          ).getAttribute.bind(node)
+        : undefined;
+      const className = getAttribute?.('class') ?? '';
+      if (className.includes('mermaid')) {
+        return {
+          noEscape: true,
+          preserveWhitespace: true,
+          postprocess: ({ content }: { content: string }) =>
+            `\n\n\`\`\`mermaid\n${content.trim()}\n\`\`\`\n\n`,
+        };
+      }
+
+      return buildPreTranslator(ctx);
+    },
   };
 }
 
@@ -1390,7 +1432,7 @@ function buildMarkdownFromContext(
   url: string,
   signal?: AbortSignal
 ): MarkdownTransformResult {
-  const content = stageTracker.run(url, 'transform:markdown', () =>
+  let content = stageTracker.run(url, 'transform:markdown', () =>
     htmlToMarkdown(context.sourceHtml, context.metadata, {
       url,
       ...spreadSignal(signal),
@@ -1398,6 +1440,9 @@ function buildMarkdownFromContext(
       ...(context.skipNoiseRemoval ? { skipNoiseRemoval: true } : {}),
     })
   );
+  if (context.title && !content.trim().startsWith('# ')) {
+    content = `# ${context.title}\n\n${content}`;
+  }
 
   return {
     markdown: content,

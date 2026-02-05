@@ -5,7 +5,6 @@ import dns from 'node:dns';
 import { BlockList, isIP } from 'node:net';
 import { performance } from 'node:perf_hooks';
 import { setTimeout as delay } from 'node:timers/promises';
-import { types } from 'node:util';
 
 import { config } from './config.js';
 import { createErrorWithCode, FetchError, isSystemError } from './errors.js';
@@ -17,7 +16,7 @@ import {
   logWarn,
   redactUrl,
 } from './observability.js';
-import { isObject } from './type-guards.js';
+import { isError, isObject } from './type-guards.js';
 
 export interface FetchOptions {
   signal?: AbortSignal;
@@ -508,7 +507,7 @@ async function withTimeout<T>(
   })
     .then(() => Promise.reject(onTimeout()))
     .catch((err: unknown) => {
-      if (types.isNativeError(err) && err.name === 'AbortError')
+      if (isError(err) && err.name === 'AbortError')
         return new Promise<never>(() => {});
       throw err;
     });
@@ -663,7 +662,7 @@ class SafeDnsResolver {
         .map((value) => normalizeDnsName(value))
         .filter((value) => value.length > 0);
     } catch (error) {
-      if (types.isNativeError(error) && error.name === 'AbortError') {
+      if (isError(error) && error.name === 'AbortError') {
         throw error;
       }
 
@@ -757,13 +756,13 @@ function createAbortedFetchError(url: string): FetchError {
 
 function isAbortError(error: unknown): boolean {
   return (
-    types.isNativeError(error) &&
+    isError(error) &&
     (error.name === 'AbortError' || error.name === 'TimeoutError')
   );
 }
 
 function isTimeoutError(error: unknown): boolean {
-  return types.isNativeError(error) && error.name === 'TimeoutError';
+  return isError(error) && error.name === 'TimeoutError';
 }
 
 function resolveErrorUrl(error: unknown, fallback: string): string {
@@ -789,8 +788,7 @@ function mapFetchError(
       : createCanceledFetchError(url);
   }
 
-  if (!types.isNativeError(error))
-    return createUnknownFetchError(url, 'Unexpected error');
+  if (!isError(error)) return createUnknownFetchError(url, 'Unexpected error');
 
   if (!isSystemError(error)) return createNetworkFetchError(url, error.message);
 
@@ -970,7 +968,7 @@ class FetchTelemetry {
     status?: number
   ): void {
     const duration = performance.now() - context.startTime;
-    const err = types.isNativeError(error) ? error : new Error(String(error));
+    const err = isError(error) ? error : new Error(String(error));
     const code = isSystemError(err) ? err.code : undefined;
 
     this.publish({
