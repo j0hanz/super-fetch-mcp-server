@@ -65,6 +65,8 @@ export type ToolErrorResponse = CallToolResult & {
   structuredContent: {
     error: string;
     url: string;
+    statusCode?: number;
+    details?: Record<string, unknown>;
   };
   isError: true;
 };
@@ -158,11 +160,24 @@ const fetchUrlOutputSchema = z.strictObject({
     .max(config.constants.maxInlineContentChars)
     .optional()
     .describe('The extracted content in Markdown format'),
+  truncated: z
+    .boolean()
+    .optional()
+    .describe('Whether the returned markdown was truncated'),
   error: z
     .string()
     .max(2048)
     .optional()
     .describe('Error message if the request failed'),
+  statusCode: z
+    .number()
+    .int()
+    .optional()
+    .describe('HTTP status code for failed requests'),
+  details: z
+    .record(z.string(), z.unknown())
+    .optional()
+    .describe('Additional error details when available'),
 });
 
 export const FETCH_URL_TOOL_NAME = 'fetch-url';
@@ -354,7 +369,9 @@ interface InlineContentResult {
 
 export type InlineResult = ReturnType<InlineContentLimiter['apply']>;
 
-function isInOpenCodeFence(content: string): boolean {
+function getOpenCodeFence(
+  content: string
+): { fenceChar: string; fenceLength: number } | null {
   const lines = content.split('\n');
   let inFence = false;
   let fenceChar: string | null | undefined = null;
@@ -385,7 +402,8 @@ function isInOpenCodeFence(content: string): boolean {
     }
   }
 
-  return inFence;
+  if (!inFence || !fenceChar) return null;
+  return { fenceChar, fenceLength };
 }
 
 function truncateWithMarker(
@@ -399,9 +417,10 @@ function truncateWithMarker(
   const truncatedContent = content.substring(0, maxContentLength);
 
   // Check if we're inside an open code fence
-  if (isInOpenCodeFence(truncatedContent)) {
-    // Add a closing fence before the marker
-    const fenceCloser = '\n```\n';
+  const openFence = getOpenCodeFence(truncatedContent);
+  if (openFence) {
+    // Add a matching closing fence before the marker
+    const fenceCloser = `\n${openFence.fenceChar.repeat(openFence.fenceLength)}\n`;
     const adjustedLength = Math.max(
       0,
       limit - marker.length - fenceCloser.length
@@ -790,11 +809,16 @@ export async function performSharedFetch<T extends { content: string }>(
 
 export function createToolErrorResponse(
   message: string,
-  url: string
+  url: string,
+  extra?: { statusCode?: number; details?: Record<string, unknown> }
 ): ToolErrorResponse {
   const structuredContent = {
     error: message,
     url,
+    ...(extra?.statusCode !== undefined
+      ? { statusCode: extra.statusCode }
+      : {}),
+    ...(extra?.details ? { details: extra.details } : {}),
   };
 
   return {
@@ -831,6 +855,12 @@ export function handleToolError(
   fallbackMessage = 'Operation failed'
 ): ToolErrorResponse {
   const message = resolveToolErrorMessage(error, fallbackMessage);
+  if (error instanceof FetchError) {
+    return createToolErrorResponse(message, url, {
+      statusCode: error.statusCode,
+      details: error.details,
+    });
+  }
   return createToolErrorResponse(message, url);
 }
 

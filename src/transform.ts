@@ -988,12 +988,15 @@ export function htmlToMarkdown(
 }
 
 const HTML_DOCUMENT_START = /^\s*<(?:!doctype|html|head|body)\b/i;
+const STRUCTURAL_HTML_TAGS =
+  /<(?:html|head|body|div|p|span|section|article|main|nav|footer|header)\b/i;
 
 function shouldPreserveRawContent(url: string, content: string): boolean {
   if (isRawTextContentUrl(url)) {
     return !HTML_DOCUMENT_START.test(content.trim());
   }
-  return isRawTextContent(content);
+  if (!isRawTextContent(content)) return false;
+  return !STRUCTURAL_HTML_TAGS.test(content);
 }
 
 function buildRawMarkdownPayload(params: {

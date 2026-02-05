@@ -53,15 +53,21 @@ describe('transformHtmlToMarkdown raw content detection', () => {
     });
   });
 
-  it('treats <=2 common HTML tags + markdown patterns as raw', () => {
+  it('treats HTML fragments as HTML even with markdown patterns', () => {
     return runRawContentCase({
       input: '<div>one</div><span>two</span>\n# Heading',
       url: 'https://example.com/raw',
       includeMetadata: true,
       assert: (result) => {
-        assert.ok(result.markdown.includes('<div>one</div>'));
-        assert.ok(result.markdown.includes('# Heading'));
-        assert.ok(result.markdown.includes('Source: https://example.com/raw'));
+        assert.ok(!result.markdown.includes('<div>one</div>'));
+        assert.ok(!result.markdown.includes('<span>two</span>'));
+        assert.ok(result.markdown.includes('one'));
+        assert.ok(result.markdown.includes('two'));
+        assert.ok(
+          result.markdown.includes(
+            '[_Original Source_](https://example.com/raw)'
+          )
+        );
       },
     });
   });

@@ -909,7 +909,7 @@ function cancelResponseBody(response: Response): void {
 
 type NormalizeUrl = (urlString: string) => string;
 
-type RedirectPreflight = (url: string) => Promise<void>;
+type RedirectPreflight = (url: string, signal?: AbortSignal) => Promise<void>;
 
 class RedirectFollower {
   constructor(
@@ -934,7 +934,9 @@ class RedirectFollower {
       const { response, nextUrl } = await this.withRedirectErrorContext(
         currentUrl,
         async () => {
-          if (this.preflight) await this.preflight(currentUrl);
+          if (this.preflight) {
+            await this.preflight(currentUrl, init.signal ?? undefined);
+          }
           return this.performFetchCycle(
             currentUrl,
             init,
@@ -1232,6 +1234,31 @@ function resolveMediaType(contentType: string | null): string | null {
   return trimmed ? trimmed.toLowerCase() : null;
 }
 
+const TEXTUAL_MEDIA_TYPES = new Set([
+  'application/json',
+  'application/ld+json',
+  'application/xml',
+  'application/xhtml+xml',
+  'application/javascript',
+  'application/ecmascript',
+  'application/x-javascript',
+  'application/x-yaml',
+  'application/yaml',
+  'application/markdown',
+]);
+
+function isTextLikeMediaType(mediaType: string): boolean {
+  if (mediaType.startsWith('text/')) return true;
+  if (TEXTUAL_MEDIA_TYPES.has(mediaType)) return true;
+  return (
+    mediaType.endsWith('+json') ||
+    mediaType.endsWith('+xml') ||
+    mediaType.endsWith('+yaml') ||
+    mediaType.endsWith('+text') ||
+    mediaType.endsWith('+markdown')
+  );
+}
+
 function assertSupportedContentType(
   contentType: string | null,
   url: string
@@ -1239,11 +1266,7 @@ function assertSupportedContentType(
   const mediaType = resolveMediaType(contentType);
   if (!mediaType) return;
 
-  if (mediaType.startsWith('image/')) {
-    throw new FetchError(`Unsupported content type: ${mediaType}`, url);
-  }
-
-  if (mediaType === 'application/pdf') {
+  if (!isTextLikeMediaType(mediaType)) {
     throw new FetchError(`Unsupported content type: ${mediaType}`, url);
   }
 }

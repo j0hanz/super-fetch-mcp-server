@@ -102,6 +102,33 @@ test('fetchNormalizedUrl rejects unsupported content types', async () => {
   );
 });
 
+test('fetchNormalizedUrl rejects non-text application content types', async () => {
+  await withMockedFetch(
+    async () => {
+      return new Response(new Uint8Array([1, 2, 3]), {
+        status: 200,
+        headers: {
+          'content-type': 'application/octet-stream',
+          'content-length': '3',
+        },
+      });
+    },
+    async () => {
+      await assert.rejects(
+        () => fetchNormalizedUrl('https://example.com'),
+        (error: unknown) => {
+          assert.ok(error instanceof FetchError);
+          assert.equal(
+            error.message,
+            'Unsupported content type: application/octet-stream'
+          );
+          return true;
+        }
+      );
+    }
+  );
+});
+
 test('fetchNormalizedUrl aborts during DNS preflight', async () => {
   const controller = new AbortController();
   controller.abort();
@@ -124,6 +151,70 @@ test('fetchNormalizedUrl aborts during DNS preflight', async () => {
         fetchNormalizedUrl('https://example.com', {
           signal: controller.signal,
         }),
+      (error: unknown) => {
+        assert.ok(error instanceof FetchError);
+        assert.equal(error.statusCode, 499);
+        return true;
+      }
+    );
+  } finally {
+    dns.promises.lookup = originalLookup;
+    (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch =
+      originalFetch;
+  }
+});
+
+test('fetchNormalizedUrl aborts during redirect DNS preflight', async () => {
+  const controller = new AbortController();
+
+  const originalLookup = dns.promises.lookup;
+  dns.promises.lookup = async (hostname, _options) => {
+    if (hostname === 'example.com') {
+      return [{ address: '93.184.216.34', family: 4 }];
+    }
+
+    if (hostname === 'redirected.test') {
+      await new Promise(() => {
+        // Never resolves; abort should win if signal is threaded.
+      });
+    }
+
+    return await originalLookup(hostname, _options);
+  };
+
+  const originalFetch: typeof fetch = fetch;
+  (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = async (
+    url
+  ) => {
+    if (String(url).includes('example.com')) {
+      return new Response(null, {
+        status: 302,
+        headers: { location: 'https://redirected.test/resource' },
+      });
+    }
+
+    return new Response('ok', {
+      status: 200,
+      headers: { 'content-type': 'text/plain' },
+    });
+  };
+
+  try {
+    setTimeout(() => controller.abort(), 10);
+
+    const timeout = new Promise((_, reject) => {
+      setTimeout(() => {
+        reject(new Error('test-timeout'));
+      }, 200);
+    });
+
+    await assert.rejects(
+      Promise.race([
+        fetchNormalizedUrl('https://example.com/start', {
+          signal: controller.signal,
+        }),
+        timeout,
+      ]),
       (error: unknown) => {
         assert.ok(error instanceof FetchError);
         assert.equal(error.statusCode, 499);

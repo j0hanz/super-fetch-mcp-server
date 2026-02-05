@@ -307,6 +307,78 @@ describe('fetchUrlToolHandler', () => {
     }
   });
 
+  it('includes status code and details for fetch errors', async () => {
+    await withMockedFetch(
+      async () => {
+        return new Response('busy', {
+          status: 429,
+          headers: { 'retry-after': '30' },
+        });
+      },
+      async () => {
+        const response = await fetchUrlToolHandler({
+          url: 'https://example.com/rate-limited',
+        });
+
+        assert.equal(response.isError, true);
+        const structured = response.structuredContent;
+        assert.ok(structured);
+        assert.equal(structured.statusCode, 429);
+        assert.equal(structured.details?.retryAfter, 30);
+      }
+    );
+  });
+
+  it('closes tilde code fences when truncating inline content', async () => {
+    const longBody = 'a'.repeat(config.constants.maxInlineContentChars + 500);
+    const rawContent = `# Title\n\n~~~\n${longBody}\n~~~\n`;
+
+    await withMockedFetch(
+      async () => {
+        return new Response(rawContent, {
+          status: 200,
+          headers: { 'content-type': 'text/plain' },
+        });
+      },
+      async () => {
+        const response = await fetchUrlToolHandler({
+          url: 'https://example.com/tilde-fence',
+        });
+
+        const structured = response.structuredContent;
+        assert.ok(structured);
+        assert.equal(structured.truncated, true);
+        const markdown = String(structured.markdown);
+        assert.match(markdown, /~~~\n\.\.\.\[truncated\]/);
+        assert.equal(markdown.includes('```\n...[truncated]'), false);
+      }
+    );
+  });
+
+  it('converts html fragments even when markdown-like markers appear', async () => {
+    const html = `<div>\n# Title\n</div>\n<p>Body</p>`;
+
+    await withMockedFetch(
+      async () => {
+        return new Response(html, {
+          status: 200,
+          headers: { 'content-type': 'text/plain' },
+        });
+      },
+      async () => {
+        const response = await fetchUrlToolHandler({
+          url: 'https://example.com/html-fragment',
+        });
+
+        const structured = response.structuredContent;
+        assert.ok(structured);
+        const markdown = String(structured.markdown);
+        assert.equal(markdown.includes('<div>'), false);
+        assert.equal(markdown.includes('<p>'), false);
+      }
+    );
+  });
+
   it('does not drop aggressive promo matches inside main content', () => {
     const originalAggressiveMode = config.noiseRemoval.aggressiveMode;
     const originalThreshold = config.noiseRemoval.weights.threshold;
