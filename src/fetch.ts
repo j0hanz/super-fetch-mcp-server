@@ -1416,7 +1416,7 @@ const DEFAULT_HEADERS = {
   Accept:
     'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
   'Accept-Language': 'en-US,en;q=0.5',
-  'Accept-Encoding': 'gzip, deflate',
+  'Accept-Encoding': 'gzip, deflate, br',
   Connection: 'keep-alive',
 } as const satisfies Record<string, string>;
 
@@ -1693,12 +1693,6 @@ const normalizeRedirectUrl = (url: string): string =>
   urlNormalizer.validateAndNormalize(url);
 const dnsPreflight = createDnsPreflight(dnsResolver);
 
-// Legacy redirect follower (no per-hop DNS preflight).
-const redirectFollower = new RedirectFollower(
-  defaultFetch,
-  normalizeRedirectUrl
-);
-
 // Redirect follower with per-hop DNS preflight.
 const secureRedirectFollower = new RedirectFollower(
   defaultFetch,
@@ -1766,7 +1760,7 @@ export async function fetchWithRedirects(
   init: RequestInit,
   maxRedirects: number
 ): Promise<{ response: Response; url: string }> {
-  return redirectFollower.fetchWithRedirects(url, init, maxRedirects);
+  return secureRedirectFollower.fetchWithRedirects(url, init, maxRedirects);
 }
 
 export async function readResponseText(

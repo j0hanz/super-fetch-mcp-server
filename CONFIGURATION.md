@@ -56,10 +56,11 @@ SuperFetch runs with no configuration by default. Just run with `--stdio`:
 > 3. **Tool timeout** is the outermost deadline; if reached, both fetch and transform are cancelled.
 >
 > For slow sites, increase `FETCH_TIMEOUT_MS`. For large/complex HTML, increase `TRANSFORM_TIMEOUT_MS`. The tool timeout auto-adjusts unless explicitly set.
-> | `TRANSFORM_METADATA_FORMAT` | `markdown` | Metadata preamble format: `markdown` (title-first) or `frontmatter` (YAML) |
-> | `TRANSFORM_STAGE_WARN_RATIO` | `0.5` | Emit a warning when a transform stage uses more than this fraction of the total budget |
-> | `TRANSFORM_WORKER_MAX_SCALE` | `4` | Max worker pool scale factor (0-16) |
-> | `ENABLED_TOOLS` | `fetch-url` | Comma/space-separated list of enabled tools |
+
+| `TRANSFORM_METADATA_FORMAT` | `markdown` | Metadata preamble format: `markdown` (title-first) or `frontmatter` (YAML) |
+| `TRANSFORM_STAGE_WARN_RATIO` | `0.5` | Emit a warning when a transform stage uses more than this fraction of the total budget |
+| `TRANSFORM_WORKER_MAX_SCALE` | `4` | Max worker pool scale factor (0-16) |
+| `ENABLED_TOOLS` | `fetch-url` | Comma/space-separated list of enabled tools |
 
 ### HTTP Server Tuning (HTTP Mode, Advanced)
 
