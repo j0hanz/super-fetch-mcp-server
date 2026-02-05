@@ -577,7 +577,55 @@ function removeCandidateNoiseNodes(
   });
 }
 
+function isAnchorContainerDiv(div: Element): boolean {
+  const className = div.getAttribute('class') ?? '';
+  const style = div.getAttribute('style') ?? '';
+  return (
+    className.includes('absolute') ||
+    style.includes('position') ||
+    div.getAttribute('tabindex') === '-1'
+  );
+}
+
+function isEmptyAnchorLink(a: Element): boolean {
+  const href = a.getAttribute('href') ?? '';
+  const text = a.textContent.replace(/[\u200B\s]/g, '');
+  return href.startsWith('#') && text.length === 0;
+}
+
+function stripZeroWidthSpaces(heading: Element, document: Document): void {
+  const walker = document.createTreeWalker(
+    heading,
+    4 /* NodeFilter.SHOW_TEXT */
+  );
+  let textNode = walker.nextNode();
+  while (textNode) {
+    if (textNode.textContent) {
+      textNode.textContent = textNode.textContent.replace(/\u200B/g, '');
+    }
+    textNode = walker.nextNode();
+  }
+}
+
+function cleanHeadingAnchors(document: Document): void {
+  const headings = safeQuerySelectorAll(document, 'h1, h2, h3, h4, h5, h6');
+  if (!headings) return;
+
+  for (const heading of Array.from(headings)) {
+    for (const div of Array.from(heading.querySelectorAll('div'))) {
+      if (isAnchorContainerDiv(div)) div.remove();
+    }
+
+    for (const a of Array.from(heading.querySelectorAll('a'))) {
+      if (isEmptyAnchorLink(a)) a.remove();
+    }
+
+    stripZeroWidthSpaces(heading, document);
+  }
+}
+
 function stripNoise(document: Document, context: NoiseContext): void {
+  cleanHeadingAnchors(document);
   removeBaseAndExtraNoiseNodes(document, context);
   removeCandidateNoiseNodes(document, context);
 }

@@ -643,10 +643,13 @@ const CODE_BLOCK = {
 };
 
 function buildInlineCode(content: string): string {
+  const trimmed = content.trim();
+  if (!trimmed) return '``';
+
   let maxBackticks = 0;
   let currentRun = 0;
 
-  for (const char of content) {
+  for (const char of trimmed) {
     if (char === '`') currentRun += 1;
     else {
       if (currentRun > maxBackticks) maxBackticks = currentRun;
@@ -656,8 +659,8 @@ function buildInlineCode(content: string): string {
   if (currentRun > maxBackticks) maxBackticks = currentRun;
 
   const delimiter = '`'.repeat(maxBackticks + 1);
-  const padding = content.startsWith('`') || content.endsWith('`') ? ' ' : '';
-  return `${delimiter}${padding}${content}${padding}${delimiter}`;
+  const padding = trimmed.startsWith('`') || trimmed.endsWith('`') ? ' ' : '';
+  return `${delimiter}${padding}${trimmed}${padding}${delimiter}`;
 }
 
 function deriveAltFromImageUrl(src: string): string {
@@ -916,6 +919,24 @@ function createCustomTranslators(): TranslatorConfigObject {
     section: () => ({
       postprocess: ({ content }: { content: string }) => `\n\n${content}\n\n`,
     }),
+    span: (ctx: unknown) => {
+      if (!isObject(ctx) || !isObject((ctx as { node?: unknown }).node))
+        return {};
+      const { node } = ctx as { node: unknown };
+      const getAttribute = hasGetAttribute(node)
+        ? (
+            node as { getAttribute: (n: string) => string | null }
+          ).getAttribute.bind(node)
+        : undefined;
+      const dataAs = getAttribute?.('data-as') ?? '';
+      if (dataAs === 'p') {
+        return {
+          postprocess: ({ content }: { content: string }) =>
+            `\n\n${content.trim()}\n\n`,
+        };
+      }
+      return {};
+    },
     pre: (ctx: unknown) => {
       if (!isObject(ctx) || !isObject((ctx as { node?: unknown }).node)) {
         return buildPreTranslator(ctx);

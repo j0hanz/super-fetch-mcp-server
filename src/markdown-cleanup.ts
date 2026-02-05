@@ -288,9 +288,10 @@ function normalizeSpacing(text: string): string {
     .replace(/\]\([^)]+\)(?=[A-Za-z0-9])/g, '$& ')
     .replace(/`[^`]+`(?=[A-Za-z0-9])/g, '$& ')
     .replace(/(`[^`]+`)\s*\\-\s*/g, '$1 - ')
-    .replace(/\\([[]])/g, '$1')
-    .replace(/([^\n])\n([-*+] )/g, '$1\n\n$2')
-    .replace(/(\S)\n(\d+\. )/g, '$1\n\n$2')
+    .replace(/\\([[\].])/g, '$1')
+    .replace(/\]\([^)]*%5[Ff][^)]*\)/g, (m) => m.replace(/%5[Ff]/g, '_'))
+    .replace(/^((?![-*+] |\d+\. |[ \t]).+)\n([-*+] )/gm, '$1\n\n$2')
+    .replace(/^((?![-*+] |\d+\. |[ \t]).+)\n(\d+\. )/gm, '$1\n\n$2')
     .replace(REGEX.DOUBLE_NEWLINE_REDUCER, '\n\n');
 }
 
