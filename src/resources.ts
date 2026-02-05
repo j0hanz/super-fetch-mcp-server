@@ -8,11 +8,24 @@ import { stableStringify } from './json.js';
  * Configuration Resource
  * ------------------------------------------------------------------------------------------------- */
 
+const REDACTED = '<REDACTED>' as const;
+const CONFIG_RESOURCE_NAME = 'config' as const;
+const CONFIG_RESOURCE_URI = 'internal://config' as const;
+const JSON_MIME = 'application/json' as const;
+
+function redactIfPresent(value: string | undefined): string | undefined {
+  return value ? REDACTED : undefined;
+}
+
+function redactArray(values: readonly string[]): string[] {
+  return values.map(() => REDACTED);
+}
+
 function scrubAuth(auth: typeof config.auth): typeof config.auth {
   return {
     ...auth,
-    clientSecret: auth.clientSecret ? '<REDACTED>' : undefined,
-    staticTokens: auth.staticTokens.map(() => '<REDACTED>'),
+    clientSecret: redactIfPresent(auth.clientSecret),
+    staticTokens: redactArray(auth.staticTokens),
   };
 }
 
@@ -21,7 +34,7 @@ function scrubSecurity(
 ): typeof config.security {
   return {
     ...security,
-    apiKey: security.apiKey ? '<REDACTED>' : undefined,
+    apiKey: redactIfPresent(security.apiKey),
   };
 }
 
@@ -35,12 +48,12 @@ function scrubConfig(source: typeof config): typeof config {
 
 export function registerConfigResource(server: McpServer): void {
   server.registerResource(
-    'config',
-    new ResourceTemplate('internal://config', { list: undefined }),
+    CONFIG_RESOURCE_NAME,
+    new ResourceTemplate(CONFIG_RESOURCE_URI, { list: undefined }),
     {
       title: 'Server Configuration',
       description: 'Current runtime configuration (secrets redacted)',
-      mimeType: 'application/json',
+      mimeType: JSON_MIME,
     },
     (uri) => {
       const scrubbed = scrubConfig(config);
@@ -48,7 +61,7 @@ export function registerConfigResource(server: McpServer): void {
         contents: [
           {
             uri: uri.href,
-            mimeType: 'application/json',
+            mimeType: JSON_MIME,
             text: stableStringify(scrubbed),
           },
         ],

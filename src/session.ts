@@ -4,8 +4,6 @@ import type { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/se
 
 import { logInfo, logWarn } from './observability.js';
 
-// --- Types ---
-
 export interface SessionEntry {
   readonly transport: StreamableHTTPServerTransport;
   createdAt: number;
@@ -33,8 +31,6 @@ export interface SlotTracker {
   readonly isInitialized: () => boolean;
 }
 
-// --- Close Handlers ---
-
 export type CloseHandler = (() => void) | undefined;
 
 export function composeCloseHandlers(
@@ -53,12 +49,18 @@ export function composeCloseHandlers(
   };
 }
 
-/* -------------------------------------------------------------------------------------------------
- * Cleanup loop
- * ------------------------------------------------------------------------------------------------- */
+const MIN_CLEANUP_INTERVAL_MS = 10_000;
+const MAX_CLEANUP_INTERVAL_MS = 60_000;
 
 function getCleanupIntervalMs(sessionTtlMs: number): number {
-  return Math.min(Math.max(Math.floor(sessionTtlMs / 2), 10_000), 60_000);
+  return Math.min(
+    Math.max(Math.floor(sessionTtlMs / 2), MIN_CLEANUP_INTERVAL_MS),
+    MAX_CLEANUP_INTERVAL_MS
+  );
+}
+
+function formatError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function isAbortError(error: unknown): boolean {
@@ -67,10 +69,7 @@ function isAbortError(error: unknown): boolean {
 
 function handleSessionCleanupError(error: unknown): void {
   if (isAbortError(error)) return;
-
-  logWarn('Session cleanup loop failed', {
-    error: error instanceof Error ? error.message : 'Unknown error',
-  });
+  logWarn('Session cleanup loop failed', { error: formatError(error) });
 }
 
 function isSessionExpired(
@@ -78,6 +77,7 @@ function isSessionExpired(
   now: number,
   sessionTtlMs: number
 ): boolean {
+  if (sessionTtlMs <= 0) return false;
   return now - session.lastSeen > sessionTtlMs;
 }
 
@@ -96,17 +96,19 @@ class SessionCleanupLoop {
   private async run(signal: AbortSignal): Promise<void> {
     const intervalMs = getCleanupIntervalMs(this.sessionTtlMs);
 
-    for await (const getNow of setIntervalPromise(intervalMs, Date.now, {
+    const ticks = setIntervalPromise(intervalMs, Date.now, {
       signal,
       ref: false,
-    })) {
+    });
+
+    for await (const getNow of ticks) {
       const now = getNow();
       const evicted = this.store.evictExpired();
 
       for (const session of evicted) {
         void session.transport.close().catch((err: unknown) => {
           logWarn('Failed to close expired session', {
-            error: err instanceof Error ? err : new Error(String(err)),
+            error: formatError(err),
           });
         });
       }
@@ -128,10 +130,6 @@ export function startSessionCleanupLoop(
   return new SessionCleanupLoop(store, sessionTtlMs).start();
 }
 
-/* -------------------------------------------------------------------------------------------------
- * Session store (in-memory, Map order used for LRU)
- * ------------------------------------------------------------------------------------------------- */
-
 function moveSessionToEnd(
   sessions: Map<string, SessionEntry>,
   sessionId: string,
@@ -148,10 +146,13 @@ class InMemorySessionStore implements SessionStore {
   constructor(private readonly sessionTtlMs: number) {}
 
   get(sessionId: string): SessionEntry | undefined {
+    if (!sessionId) return undefined;
     return this.sessions.get(sessionId);
   }
 
   touch(sessionId: string): void {
+    if (!sessionId) return;
+
     const session = this.sessions.get(sessionId);
     if (!session) return;
 
@@ -160,10 +161,13 @@ class InMemorySessionStore implements SessionStore {
   }
 
   set(sessionId: string, entry: SessionEntry): void {
-    this.sessions.set(sessionId, entry);
+    if (!sessionId) return;
+    moveSessionToEnd(this.sessions, sessionId, entry);
   }
 
   remove(sessionId: string): SessionEntry | undefined {
+    if (!sessionId) return undefined;
+
     const session = this.sessions.get(sessionId);
     this.sessions.delete(sessionId);
     return session;
@@ -182,7 +186,7 @@ class InMemorySessionStore implements SessionStore {
   }
 
   decrementInFlight(): void {
-    if (this.inflight > 0) this.inflight -= 1;
+    this.inflight = Math.max(0, this.inflight - 1);
   }
 
   clear(): SessionEntry[] {
@@ -196,10 +200,9 @@ class InMemorySessionStore implements SessionStore {
     const evicted: SessionEntry[] = [];
 
     for (const [id, session] of this.sessions.entries()) {
-      if (isSessionExpired(session, now, this.sessionTtlMs)) {
-        this.sessions.delete(id);
-        evicted.push(session);
-      }
+      if (!isSessionExpired(session, now, this.sessionTtlMs)) continue;
+      this.sessions.delete(id);
+      evicted.push(session);
     }
 
     return evicted;
@@ -219,10 +222,6 @@ class InMemorySessionStore implements SessionStore {
 export function createSessionStore(sessionTtlMs: number): SessionStore {
   return new InMemorySessionStore(sessionTtlMs);
 }
-
-/* -------------------------------------------------------------------------------------------------
- * Slot tracker
- * ------------------------------------------------------------------------------------------------- */
 
 class SessionSlotTracker implements SlotTracker {
   private slotReleased = false;
@@ -249,23 +248,23 @@ export function createSlotTracker(store: SessionStore): SlotTracker {
   return new SessionSlotTracker(store);
 }
 
+function currentLoad(store: SessionStore): number {
+  return store.size() + store.inFlight();
+}
+
 export function reserveSessionSlot(
   store: SessionStore,
   maxSessions: number
 ): boolean {
-  if (store.size() + store.inFlight() >= maxSessions) {
-    return false;
-  }
+  if (maxSessions <= 0) return false;
+  if (currentLoad(store) >= maxSessions) return false;
+
   store.incrementInFlight();
   return true;
 }
 
-/* -------------------------------------------------------------------------------------------------
- * Capacity policy
- * ------------------------------------------------------------------------------------------------- */
-
 function isAtCapacity(store: SessionStore, maxSessions: number): boolean {
-  return store.size() + store.inFlight() >= maxSessions;
+  return currentLoad(store) >= maxSessions;
 }
 
 export function ensureSessionCapacity({
@@ -277,6 +276,8 @@ export function ensureSessionCapacity({
   maxSessions: number;
   evictOldest: (store: SessionStore) => boolean;
 }): boolean {
+  if (maxSessions <= 0) return false;
+
   const currentSize = store.size();
   const inflight = store.inFlight();
 
@@ -285,9 +286,8 @@ export function ensureSessionCapacity({
   const canFreeSlot =
     currentSize >= maxSessions && currentSize - 1 + inflight < maxSessions;
 
-  if (canFreeSlot && evictOldest(store)) {
-    return !isAtCapacity(store, maxSessions);
-  }
+  if (!canFreeSlot) return false;
+  if (!evictOldest(store)) return false;
 
-  return false;
+  return !isAtCapacity(store, maxSessions);
 }

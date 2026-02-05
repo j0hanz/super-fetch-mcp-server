@@ -26,35 +26,69 @@ export function runWithRequestContext<T>(
   return requestContext.run(context, fn);
 }
 
+function getRequestContext(): RequestContext | undefined {
+  return requestContext.getStore();
+}
+
 export function getRequestId(): string | undefined {
-  return requestContext.getStore()?.requestId;
+  return getRequestContext()?.requestId;
 }
 
 function getSessionId(): string | undefined {
-  return requestContext.getStore()?.sessionId;
+  return getRequestContext()?.sessionId;
 }
 
 export function getOperationId(): string | undefined {
-  return requestContext.getStore()?.operationId;
+  return getRequestContext()?.operationId;
+}
+
+function isDebugEnabled(): boolean {
+  return config.logging.level === 'debug';
 }
 
 function buildContextMetadata(): LogMetadata {
-  const requestId = getRequestId();
-  const sessionId = getSessionId();
-  const operationId = getOperationId();
+  const ctx = getRequestContext();
+  if (!ctx) return {};
 
-  const contextMeta: LogMetadata = {};
-  if (requestId) contextMeta.requestId = requestId;
-  if (sessionId && config.logging.level === 'debug')
-    contextMeta.sessionId = sessionId;
-  if (operationId) contextMeta.operationId = operationId;
+  const meta: LogMetadata = {};
 
-  return contextMeta;
+  // Preserve existing behavior: only include truthy IDs.
+  if (ctx.requestId) meta.requestId = ctx.requestId;
+  if (ctx.operationId) meta.operationId = ctx.operationId;
+  if (ctx.sessionId && isDebugEnabled()) meta.sessionId = ctx.sessionId;
+
+  return meta;
+}
+
+function mergeMetadata(meta?: LogMetadata): LogMetadata | undefined {
+  const merged: LogMetadata = { ...buildContextMetadata(), ...(meta ?? {}) };
+  return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
+function safeJsonStringify(value: unknown): string | undefined {
+  try {
+    const seen = new WeakSet();
+    const replacer = (_key: string, v: unknown): unknown => {
+      if (typeof v === 'bigint') return v.toString();
+      if (typeof v !== 'object' || v === null) return v;
+      const obj = v;
+      if (seen.has(obj)) return '[Circular]';
+      seen.add(obj);
+      return obj;
+    };
+    return JSON.stringify(value, replacer);
+  } catch {
+    return undefined;
+  }
 }
 
 function formatMetadata(meta?: LogMetadata): string {
-  const merged = { ...buildContextMetadata(), ...meta };
-  return Object.keys(merged).length > 0 ? ` ${JSON.stringify(merged)}` : '';
+  const merged = mergeMetadata(meta);
+  if (!merged) return '';
+
+  const json =
+    safeJsonStringify(merged) ?? '{"_meta":"[unserializable metadata]"}';
+  return ` ${json}`;
 }
 
 function createTimestamp(): string {
@@ -71,7 +105,7 @@ function formatLogEntry(
 
 function shouldLog(level: LogLevel): boolean {
   // Debug logs only when LOG_LEVEL=debug
-  if (level === 'debug') return config.logging.level === 'debug';
+  if (level === 'debug') return isDebugEnabled();
   // All other levels always log
   return true;
 }
@@ -92,21 +126,57 @@ function mapToMcpLevel(
   }
 }
 
+function safeWriteStderr(line: string): void {
+  try {
+    process.stderr.write(line);
+  } catch {
+    // Logging must never take down the process (e.g. EPIPE).
+  }
+}
+
 function writeLog(level: LogLevel, message: string, meta?: LogMetadata): void {
   if (!shouldLog(level)) return;
-  process.stderr.write(`${formatLogEntry(level, message, meta)}\n`);
 
-  if (mcpServer) {
-    const sessionId = getSessionId();
-    mcpServer.server
+  safeWriteStderr(`${formatLogEntry(level, message, meta)}\n`);
+
+  const server = mcpServer;
+  if (!server) return;
+
+  const sessionId = getSessionId();
+
+  try {
+    server.server
       .sendLoggingMessage(
         {
           level: mapToMcpLevel(level),
+          // Preserve existing behavior: MCP payload includes only message + provided meta (not ALS context meta).
           data: meta ? { message, ...meta } : message,
         },
         sessionId
       )
-      .catch(() => {});
+      .catch((err: unknown) => {
+        if (!isDebugEnabled()) return;
+
+        let errorText = 'unknown error';
+        if (err instanceof Error) {
+          errorText = err.message;
+        } else if (typeof err === 'string') {
+          errorText = err;
+        }
+
+        safeWriteStderr(
+          `[${createTimestamp()}] WARN: Failed to forward log to MCP${
+            sessionId ? ` (sessionId=${sessionId})` : ''
+          }: ${errorText}\n`
+        );
+      });
+  } catch (err: unknown) {
+    if (!isDebugEnabled()) return;
+
+    const errorText = err instanceof Error ? err.message : 'unknown error';
+    safeWriteStderr(
+      `[${createTimestamp()}] WARN: Failed to forward log to MCP (sync error): ${errorText}\n`
+    );
   }
 }
 

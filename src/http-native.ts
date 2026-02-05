@@ -45,10 +45,6 @@ import {
 import { getTransformPoolStats } from './transform.js';
 import { isObject } from './type-guards.js';
 
-/* -------------------------------------------------------------------------------------------------
- * Transport adaptation
- * ------------------------------------------------------------------------------------------------- */
-
 function createTransportAdapter(
   transportImpl: StreamableHTTPServerTransport
 ): Transport {
@@ -60,21 +56,26 @@ function createTransportAdapter(
   const noopOnError: OnError = () => {};
   const noopOnMessage: OnMessage = () => {};
 
-  let oncloseHandler = noopOnClose;
-  let onerrorHandler = noopOnError;
-  let onmessageHandler = noopOnMessage;
+  // Preserve any existing onclose handler (e.g., session cleanup).
+  const baseOnClose = transportImpl.onclose;
+
+  let oncloseHandler: OnClose = noopOnClose;
+  let onerrorHandler: OnError = noopOnError;
+  let onmessageHandler: OnMessage = noopOnMessage;
 
   return {
     start: () => transportImpl.start(),
     send: (message, options) => transportImpl.send(message, options),
     close: () => transportImpl.close(),
+
     get onclose() {
       return oncloseHandler;
     },
     set onclose(handler: OnClose) {
       oncloseHandler = handler;
-      transportImpl.onclose = handler;
+      transportImpl.onclose = composeCloseHandlers(baseOnClose, handler);
     },
+
     get onerror() {
       return onerrorHandler;
     },
@@ -82,6 +83,7 @@ function createTransportAdapter(
       onerrorHandler = handler;
       transportImpl.onerror = handler;
     },
+
     get onmessage() {
       return onmessageHandler;
     },
@@ -91,10 +93,6 @@ function createTransportAdapter(
     },
   };
 }
-
-/* -------------------------------------------------------------------------------------------------
- * Shim types
- * ------------------------------------------------------------------------------------------------- */
 
 interface ShimResponse extends ServerResponse {
   status(code: number): this;
@@ -139,46 +137,52 @@ function shimResponse(res: ServerResponse): ShimResponse {
   return shim;
 }
 
-/* -------------------------------------------------------------------------------------------------
- * Request parsing helpers
- * ------------------------------------------------------------------------------------------------- */
-
 class JsonBodyReader {
   async read(req: IncomingMessage, limit = 1024 * 1024): Promise<unknown> {
-    const contentType = req.headers['content-type'];
+    const contentType = getHeaderValue(req, 'content-type');
     if (!contentType?.includes('application/json')) return undefined;
 
-    return new Promise((resolve, reject) => {
-      let size = 0;
-      const chunks: Buffer[] = [];
+    const body = await this.readBody(req, limit);
+    if (!body) return undefined;
 
-      req.on('data', (chunk: Buffer) => {
-        size += chunk.length;
+    try {
+      return JSON.parse(body);
+    } catch (err: unknown) {
+      throw err instanceof Error ? err : new Error(String(err));
+    }
+  }
+
+  private async readBody(
+    req: IncomingMessage,
+    limit: number
+  ): Promise<string | undefined> {
+    let size = 0;
+    const chunks: Buffer[] = [];
+
+    try {
+      for await (const chunk of req as AsyncIterable<
+        Buffer | Uint8Array | string
+      >) {
+        const buf = this.normalizeChunk(chunk);
+        size += buf.length;
         if (size > limit) {
           req.destroy();
-          reject(new Error('Payload too large'));
-          return;
+          throw new Error('Payload too large');
         }
-        chunks.push(chunk);
-      });
+        chunks.push(buf);
+      }
+    } catch (err: unknown) {
+      throw err instanceof Error ? err : new Error(String(err));
+    }
 
-      req.on('end', () => {
-        try {
-          const body = Buffer.concat(chunks).toString();
-          if (!body) {
-            resolve(undefined);
-            return;
-          }
-          resolve(JSON.parse(body));
-        } catch (err) {
-          reject(err instanceof Error ? err : new Error(String(err)));
-        }
-      });
+    if (chunks.length === 0) return undefined;
+    return Buffer.concat(chunks).toString();
+  }
 
-      req.on('error', (err) => {
-        reject(err instanceof Error ? err : new Error(String(err)));
-      });
-    });
+  private normalizeChunk(chunk: Buffer | Uint8Array | string): Buffer {
+    if (typeof chunk === 'string') return Buffer.from(chunk);
+    if (Buffer.isBuffer(chunk)) return chunk;
+    return Buffer.from(chunk);
   }
 }
 
@@ -205,9 +209,24 @@ function getHeaderValue(req: IncomingMessage, name: string): string | null {
   return val;
 }
 
-/* -------------------------------------------------------------------------------------------------
- * CORS & Host/Origin policy
- * ------------------------------------------------------------------------------------------------- */
+function getMcpSessionId(req: IncomingMessage): string | null {
+  // Back-compat: accept both session headers.
+  return (
+    getHeaderValue(req, 'mcp-session-id') ??
+    getHeaderValue(req, 'x-mcp-session-id')
+  );
+}
+
+async function closeTransportBestEffort(
+  transport: { close: () => Promise<unknown> },
+  context: string
+): Promise<void> {
+  try {
+    await transport.close();
+  } catch (error) {
+    logWarn('Transport close failed', { context, error });
+  }
+}
 
 class CorsPolicy {
   handle(req: IncomingMessage, res: ServerResponse): boolean {
@@ -215,7 +234,7 @@ class CorsPolicy {
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, DELETE');
     res.setHeader(
       'Access-Control-Allow-Headers',
-      'Content-Type, Authorization, X-API-Key, MCP-Protocol-Version, X-MCP-Session-ID'
+      'Content-Type, Authorization, X-API-Key, MCP-Protocol-Version, MCP-Session-ID, X-MCP-Session-ID'
     );
 
     if (req.method === 'OPTIONS') {
@@ -296,10 +315,6 @@ class HostOriginPolicy {
 
 const hostOriginPolicy = new HostOriginPolicy();
 
-/* -------------------------------------------------------------------------------------------------
- * HTTP mode configuration assertions
- * ------------------------------------------------------------------------------------------------- */
-
 function assertHttpModeConfiguration(): void {
   const configuredHost = normalizeHost(config.server.host);
   const isLoopback =
@@ -322,10 +337,6 @@ function assertHttpModeConfiguration(): void {
     );
   }
 }
-
-/* -------------------------------------------------------------------------------------------------
- * Rate limiting (same semantics, encapsulated)
- * ------------------------------------------------------------------------------------------------- */
 
 interface RateLimitEntry {
   count: number;
@@ -422,15 +433,11 @@ function createRateLimitManagerImpl(
   return new RateLimiter(options);
 }
 
-/* -------------------------------------------------------------------------------------------------
- * Auth (static + OAuth introspection)
- * ------------------------------------------------------------------------------------------------- */
-
 const STATIC_TOKEN_TTL_SECONDS = 60 * 60 * 24;
 
 class AuthService {
   async authenticate(req: ShimRequest): Promise<AuthInfo> {
-    const authHeader = req.headers.authorization;
+    const authHeader = getHeaderValue(req, 'authorization');
     if (!authHeader) {
       return this.authenticateWithApiKey(req);
     }
@@ -592,10 +599,6 @@ class AuthService {
 
 const authService = new AuthService();
 
-/* -------------------------------------------------------------------------------------------------
- * MCP routing + session gateway
- * ------------------------------------------------------------------------------------------------- */
-
 function sendError(
   res: ShimResponse,
   code: number,
@@ -651,7 +654,7 @@ class McpSessionGateway {
     logInfo('[MCP POST]', {
       method: body.method,
       id: body.id,
-      sessionId: getHeaderValue(req, 'mcp-session-id'),
+      sessionId: getMcpSessionId(req),
     });
 
     const transport = await this.getOrCreateTransport(req, res, requestId);
@@ -663,7 +666,7 @@ class McpSessionGateway {
   async handleGet(req: ShimRequest, res: ShimResponse): Promise<void> {
     if (!ensureMcpProtocolVersion(req, res)) return;
 
-    const sessionId = getHeaderValue(req, 'mcp-session-id');
+    const sessionId = getMcpSessionId(req);
     if (!sessionId) {
       sendError(res, -32600, 'Missing session ID');
       return;
@@ -688,7 +691,7 @@ class McpSessionGateway {
   async handleDelete(req: ShimRequest, res: ShimResponse): Promise<void> {
     if (!ensureMcpProtocolVersion(req, res)) return;
 
-    const sessionId = getHeaderValue(req, 'mcp-session-id');
+    const sessionId = getMcpSessionId(req);
     if (!sessionId) {
       sendError(res, -32600, 'Missing session ID');
       return;
@@ -708,7 +711,7 @@ class McpSessionGateway {
     res: ShimResponse,
     requestId: JsonRpcId
   ): Promise<StreamableHTTPServerTransport | null> {
-    const sessionId = getHeaderValue(req, 'mcp-session-id');
+    const sessionId = getMcpSessionId(req);
 
     if (sessionId) {
       const session = this.store.get(sessionId);
@@ -738,7 +741,7 @@ class McpSessionGateway {
       evictOldest: (s) => {
         const evicted = s.evictOldest();
         if (evicted) {
-          void evicted.transport.close().catch(() => {});
+          void closeTransportBestEffort(evicted.transport, 'session-eviction');
           return true;
         }
         return false;
@@ -763,7 +766,7 @@ class McpSessionGateway {
     const initTimeout = setTimeout(() => {
       if (!tracker.isInitialized()) {
         tracker.releaseSlot();
-        void transportImpl.close().catch(() => {});
+        void closeTransportBestEffort(transportImpl, 'session-init-timeout');
       }
     }, config.server.sessionInitTimeoutMs);
 
@@ -778,7 +781,7 @@ class McpSessionGateway {
     } catch (err) {
       clearTimeout(initTimeout);
       tracker.releaseSlot();
-      void transportImpl.close().catch(() => {});
+      void closeTransportBestEffort(transportImpl, 'session-connect-failed');
       throw err;
     }
 
@@ -805,10 +808,6 @@ class McpSessionGateway {
   }
 }
 
-/* -------------------------------------------------------------------------------------------------
- * Downloads + dispatcher
- * ------------------------------------------------------------------------------------------------- */
-
 function checkDownloadRoute(
   path: string
 ): { namespace: string; hash: string } | null {
@@ -833,16 +832,14 @@ class HttpDispatcher {
     const { method } = req;
 
     try {
-      // 1) Health endpoint bypasses auth (preserve existing behavior)
+      // /health is intentionally unauthenticated.
       if (method === 'GET' && path === '/health') {
         this.handleHealthCheck(res);
         return;
       }
 
-      // 2) Auth required for everything else (preserve existing behavior)
       if (!(await this.authenticateRequest(req, res))) return;
 
-      // 3) Downloads
       if (method === 'GET') {
         const download = checkDownloadRoute(path);
         if (download) {
@@ -851,7 +848,6 @@ class HttpDispatcher {
         }
       }
 
-      // 4) MCP routes
       if (path === '/mcp') {
         if (await this.handleMcpRoutes(req, res, method)) {
           return;
@@ -925,10 +921,7 @@ class HttpDispatcher {
   }
 }
 
-/* -------------------------------------------------------------------------------------------------
- * Request pipeline (order is part of behavior)
- * ------------------------------------------------------------------------------------------------- */
-
+// Pipeline order is behavior.
 class HttpRequestPipeline {
   constructor(
     private readonly rateLimiter: RateLimitManagerImpl,
@@ -939,18 +932,23 @@ class HttpRequestPipeline {
     const res = shimResponse(rawRes);
     const req = rawReq as ShimRequest;
 
-    // 1. Basic setup
-    const url = new URL(req.url ?? '', 'http://localhost');
+    let url: URL;
+    try {
+      // The base is only used to resolve relative request URLs.
+      // Host/origin allowlisting is enforced later by HostOriginPolicy.
+      url = new URL(req.url ?? '', 'http://localhost');
+    } catch {
+      res.status(400).json({ error: 'Invalid request URL' });
+      return;
+    }
 
     req.query = parseQuery(url);
     if (req.socket.remoteAddress) req.ip = req.socket.remoteAddress;
     req.params = {};
 
-    // 2. Host/Origin + CORS (preserve exact order)
     if (!hostOriginPolicy.validate(req, res)) return;
     if (corsPolicy.handle(req, res)) return;
 
-    // 3. Body parsing
     try {
       req.body = await jsonBodyReader.read(req);
     } catch {
@@ -958,17 +956,11 @@ class HttpRequestPipeline {
       return;
     }
 
-    // 4. Rate limit
     if (!this.rateLimiter.check(req, res)) return;
 
-    // 5. Dispatch
     await this.dispatcher.dispatch(req, res, url);
   }
 }
-
-/* -------------------------------------------------------------------------------------------------
- * Server lifecycle
- * ------------------------------------------------------------------------------------------------- */
 
 export async function startHttpServer(): Promise<{
   shutdown: (signal: string) => Promise<void>;
@@ -992,16 +984,37 @@ export async function startHttpServer(): Promise<{
   const pipeline = new HttpRequestPipeline(rateLimiter, dispatcher);
 
   const server = createServer((req, res) => {
-    void pipeline.handle(req, res);
+    void pipeline.handle(req, res).catch((error: unknown) => {
+      logError(
+        'Request pipeline failed',
+        error instanceof Error ? error : new Error(String(error))
+      );
+      if (res.writableEnded) return;
+
+      if (!res.headersSent) {
+        res.statusCode = 500;
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ error: 'Internal Server Error' }));
+        return;
+      }
+
+      res.end();
+    });
   });
 
   applyHttpServerTuning(server);
 
-  await new Promise<void>((resolve, reject) => {
-    server.listen(config.server.port, config.server.host, () => {
+  await new Promise<void>((resolve, reject): void => {
+    function onError(error: Error): void {
+      server.off('error', onError);
+      reject(error);
+    }
+
+    server.once('error', onError);
+    server.listen(config.server.port, config.server.host, (): void => {
+      server.off('error', onError);
       resolve();
     });
-    server.on('error', reject);
   });
 
   const addr = server.address();
@@ -1013,7 +1026,7 @@ export async function startHttpServer(): Promise<{
   return {
     port,
     host: config.server.host,
-    shutdown: async (signal) => {
+    shutdown: async (signal: string): Promise<void> => {
       logInfo(`Stopping HTTP server (${signal})...`);
 
       rateLimiter.stop();
@@ -1022,16 +1035,21 @@ export async function startHttpServer(): Promise<{
 
       const sessions = sessionStore.clear();
       await Promise.all(
-        sessions.map(async (s) => {
-          try {
-            await s.transport.close();
-          } catch {
-            /* ignore */
-          }
-        })
+        sessions.map(
+          (session): Promise<void> =>
+            closeTransportBestEffort(
+              session.transport,
+              'shutdown-session-close'
+            )
+        )
       );
 
-      server.close();
+      await new Promise<void>((resolve, reject): void => {
+        server.close((err): void => {
+          if (err) reject(err);
+          else resolve();
+        });
+      });
       await mcpServer.close();
     },
   };

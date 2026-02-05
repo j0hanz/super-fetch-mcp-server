@@ -9,16 +9,27 @@ const ALLOWED_HASH_ALGORITHMS: ReadonlySet<AllowedHashAlgorithm> = new Set([
   'sha512',
 ]);
 
+function byteLengthUtf8(input: string): number {
+  // Avoid allocating (unlike TextEncoder().encode()).
+  return Buffer.byteLength(input, 'utf8');
+}
+
 function byteLength(input: string | Uint8Array): number {
-  return typeof input === 'string'
-    ? new TextEncoder().encode(input).length
-    : input.byteLength;
+  return typeof input === 'string' ? byteLengthUtf8(input) : input.byteLength;
+}
+
+function assertAllowedAlgorithm(
+  algorithm: AllowedHashAlgorithm
+): asserts algorithm is AllowedHashAlgorithm {
+  // Defensive: protects against `any` / unchecked external inputs.
+  if (!ALLOWED_HASH_ALGORITHMS.has(algorithm)) {
+    throw new Error(`Hash algorithm not allowed: ${algorithm}`);
+  }
 }
 
 export function timingSafeEqualUtf8(a: string, b: string): boolean {
-  const encoder = new TextEncoder();
-  const aBuffer = encoder.encode(a);
-  const bBuffer = encoder.encode(b);
+  const aBuffer = Buffer.from(a, 'utf8');
+  const bBuffer = Buffer.from(b, 'utf8');
   if (aBuffer.length !== bBuffer.length) return false;
   return timingSafeEqual(aBuffer, bBuffer);
 }
@@ -27,9 +38,7 @@ function hashHex(
   algorithm: AllowedHashAlgorithm,
   input: string | Uint8Array
 ): string {
-  if (!ALLOWED_HASH_ALGORITHMS.has(algorithm)) {
-    throw new Error(`Hash algorithm not allowed: ${algorithm}`);
-  }
+  assertAllowedAlgorithm(algorithm);
 
   if (byteLength(input) <= MAX_HASH_INPUT_BYTES) {
     return oneShotHash(algorithm, input, 'hex');

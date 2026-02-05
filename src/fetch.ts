@@ -16,10 +16,6 @@ import {
 } from './observability.js';
 import { isObject } from './type-guards.js';
 
-/* -------------------------------------------------------------------------------------------------
- * Public types
- * ------------------------------------------------------------------------------------------------- */
-
 export interface FetchOptions {
   signal?: AbortSignal;
 }
@@ -29,10 +25,6 @@ export interface TransformResult {
   readonly transformed: boolean;
   readonly platform?: string;
 }
-
-/* -------------------------------------------------------------------------------------------------
- * Internal ports (DIP)
- * ------------------------------------------------------------------------------------------------- */
 
 interface Logger {
   debug(message: string, data?: Record<string, unknown>): void;
@@ -70,10 +62,6 @@ const defaultRedactor: UrlRedactor = {
 };
 
 const defaultFetch: FetchLike = (input, init) => fetch(input, init);
-
-/* -------------------------------------------------------------------------------------------------
- * SSRF / IP blocking
- * ------------------------------------------------------------------------------------------------- */
 
 type IpSegment = number | string;
 
@@ -166,10 +154,6 @@ class IpBlocker {
     return list;
   }
 }
-
-/* -------------------------------------------------------------------------------------------------
- * URL normalization & hostname policy
- * ------------------------------------------------------------------------------------------------- */
 
 const VALIDATION_ERROR_CODE = 'VALIDATION_ERROR';
 
@@ -288,10 +272,6 @@ class UrlNormalizer {
     );
   }
 }
-
-/* -------------------------------------------------------------------------------------------------
- * Raw URL transformation
- * ------------------------------------------------------------------------------------------------- */
 
 interface TransformRule {
   readonly name: string;
@@ -447,10 +427,6 @@ class RawUrlTransformer {
   }
 }
 
-/* -------------------------------------------------------------------------------------------------
- * Safe DNS lookup (preflight)
- * ------------------------------------------------------------------------------------------------- */
-
 const DNS_LOOKUP_TIMEOUT_MS = 5000;
 
 async function withTimeout<T>(
@@ -514,15 +490,22 @@ class SafeDnsResolver {
   }
 }
 
-/* -------------------------------------------------------------------------------------------------
- * Fetch error mapping (request-level)
- * ------------------------------------------------------------------------------------------------- */
-
 function parseRetryAfter(header: string | null): number {
   if (!header) return 60;
 
-  const parsed = Number.parseInt(header, 10);
-  return Number.isNaN(parsed) ? 60 : parsed;
+  const trimmed = header.trim();
+
+  // Retry-After can be seconds or an HTTP-date.
+  const seconds = Number.parseInt(trimmed, 10);
+  if (!Number.isNaN(seconds) && seconds >= 0) return seconds;
+
+  const dateMs = Date.parse(trimmed);
+  if (Number.isNaN(dateMs)) return 60;
+
+  const deltaMs = dateMs - Date.now();
+  if (deltaMs <= 0) return 0;
+
+  return Math.ceil(deltaMs / 1000);
 }
 
 class FetchErrorFactory {
@@ -613,13 +596,41 @@ function mapFetchError(
       : fetchErrors.canceled(url);
   }
 
+  // Keep explicit validation/preflight failures.
+  if (error instanceof Error && isSystemError(error)) {
+    const { code } = error;
+
+    // DNS ETIMEOUT maps to gateway timeout.
+    if (code === 'ETIMEOUT') {
+      return new FetchError(error.message, url, 504, { code });
+    }
+
+    // Policy/SSRF blocks should stay clear.
+    if (
+      code === VALIDATION_ERROR_CODE ||
+      code === 'EBADREDIRECT' ||
+      code === 'EBLOCKED' ||
+      code === 'ENODATA' ||
+      code === 'EINVAL'
+    ) {
+      return new FetchError(error.message, url, 400, { code });
+    }
+
+    // Other failures are transport errors; include the code.
+    return new FetchError(
+      `Network error: Could not reach ${url}`,
+      url,
+      undefined,
+      {
+        code,
+        message: error.message,
+      }
+    );
+  }
+
   if (error instanceof Error) return fetchErrors.network(url, error.message);
   return fetchErrors.unknown(url, 'Unexpected error');
 }
-
-/* -------------------------------------------------------------------------------------------------
- * Telemetry (diagnostics channel + logging)
- * ------------------------------------------------------------------------------------------------- */
 
 type FetchChannelEvent =
   | {
@@ -666,12 +677,28 @@ export interface FetchTelemetryContext {
 
 const SLOW_REQUEST_THRESHOLD_MS = 5000;
 
+function withContextIds(fields: {
+  contextRequestId?: string;
+  operationId?: string;
+}): Record<string, string> {
+  return {
+    ...(fields.contextRequestId
+      ? { contextRequestId: fields.contextRequestId }
+      : {}),
+    ...(fields.operationId ? { operationId: fields.operationId } : {}),
+  };
+}
+
 class FetchTelemetry {
   constructor(
     private readonly logger: Logger,
     private readonly context: RequestContextAccessor,
     private readonly redactor: UrlRedactor
   ) {}
+
+  redact(url: string): string {
+    return this.redactor.redact(url);
+  }
 
   start(url: string, method: string): FetchTelemetryContext {
     const safeUrl = this.redactor.redact(url);
@@ -693,20 +720,14 @@ class FetchTelemetry {
       requestId: ctx.requestId,
       method: ctx.method,
       url: ctx.url,
-      ...(ctx.contextRequestId
-        ? { contextRequestId: ctx.contextRequestId }
-        : {}),
-      ...(ctx.operationId ? { operationId: ctx.operationId } : {}),
+      ...withContextIds(ctx),
     });
 
     this.logger.debug('HTTP Request', {
       requestId: ctx.requestId,
       method: ctx.method,
       url: ctx.url,
-      ...(ctx.contextRequestId
-        ? { contextRequestId: ctx.contextRequestId }
-        : {}),
-      ...(ctx.operationId ? { operationId: ctx.operationId } : {}),
+      ...withContextIds(ctx),
     });
 
     return ctx;
@@ -726,10 +747,7 @@ class FetchTelemetry {
       requestId: context.requestId,
       status: response.status,
       duration,
-      ...(context.contextRequestId
-        ? { contextRequestId: context.contextRequestId }
-        : {}),
-      ...(context.operationId ? { operationId: context.operationId } : {}),
+      ...withContextIds(context),
     });
 
     const contentType = response.headers.get('content-type') ?? undefined;
@@ -743,10 +761,7 @@ class FetchTelemetry {
       status: response.status,
       url: context.url,
       duration: durationLabel,
-      ...(context.contextRequestId
-        ? { contextRequestId: context.contextRequestId }
-        : {}),
-      ...(context.operationId ? { operationId: context.operationId } : {}),
+      ...withContextIds(context),
       ...(contentType ? { contentType } : {}),
       ...(size ? { size } : {}),
     });
@@ -756,10 +771,7 @@ class FetchTelemetry {
         requestId: context.requestId,
         url: context.url,
         duration: durationLabel,
-        ...(context.contextRequestId
-          ? { contextRequestId: context.contextRequestId }
-          : {}),
-        ...(context.operationId ? { operationId: context.operationId } : {}),
+        ...withContextIds(context),
       });
     }
   }
@@ -782,20 +794,13 @@ class FetchTelemetry {
       duration,
       ...(code !== undefined ? { code } : {}),
       ...(status !== undefined ? { status } : {}),
-      ...(context.contextRequestId
-        ? { contextRequestId: context.contextRequestId }
-        : {}),
-      ...(context.operationId ? { operationId: context.operationId } : {}),
+      ...withContextIds(context),
     });
 
     const log =
       status === 429
-        ? (message: string, data?: Record<string, unknown>) => {
-            this.logger.warn(message, data);
-          }
-        : (message: string, data?: Record<string, unknown>) => {
-            this.logger.error(message, data);
-          };
+        ? this.logger.warn.bind(this.logger)
+        : this.logger.error.bind(this.logger);
 
     log('HTTP Request Error', {
       requestId: context.requestId,
@@ -803,10 +808,7 @@ class FetchTelemetry {
       status,
       code,
       error: err.message,
-      ...(context.contextRequestId
-        ? { contextRequestId: context.contextRequestId }
-        : {}),
-      ...(context.operationId ? { operationId: context.operationId } : {}),
+      ...withContextIds(context),
     });
   }
 
@@ -816,14 +818,10 @@ class FetchTelemetry {
     try {
       fetchChannel.publish(event);
     } catch {
-      // Best-effort; subscriber failures must not crash request path.
+      // Best-effort telemetry; never crash request path.
     }
   }
 }
-
-/* -------------------------------------------------------------------------------------------------
- * Redirect handling
- * ------------------------------------------------------------------------------------------------- */
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
@@ -835,17 +833,18 @@ function cancelResponseBody(response: Response): void {
   const cancelPromise = response.body?.cancel();
   if (!cancelPromise) return;
 
-  cancelPromise.catch(() => {
-    /* ignore */
-  });
+  cancelPromise.catch(() => undefined);
 }
 
 type NormalizeUrl = (urlString: string) => string;
 
+type RedirectPreflight = (url: string) => Promise<void>;
+
 class RedirectFollower {
   constructor(
     private readonly fetchFn: FetchLike,
-    private readonly normalizeUrl: NormalizeUrl
+    private readonly normalizeUrl: NormalizeUrl,
+    private readonly preflight?: RedirectPreflight
   ) {}
 
   async fetchWithRedirects(
@@ -863,8 +862,15 @@ class RedirectFollower {
     ) {
       const { response, nextUrl } = await this.withRedirectErrorContext(
         currentUrl,
-        async () =>
-          this.performFetchCycle(currentUrl, init, redirectLimit, redirectCount)
+        async () => {
+          if (this.preflight) await this.preflight(currentUrl);
+          return this.performFetchCycle(
+            currentUrl,
+            init,
+            redirectLimit,
+            redirectCount
+          );
+        }
       );
 
       if (!nextUrl) return { response, url: currentUrl };
@@ -910,7 +916,6 @@ class RedirectFollower {
     redirectCount: number
   ): void {
     if (redirectCount < redirectLimit) return;
-
     cancelResponseBody(response);
     throw fetchErrors.tooManyRedirects(currentUrl);
   }
@@ -957,10 +962,6 @@ class RedirectFollower {
   }
 }
 
-/* -------------------------------------------------------------------------------------------------
- * Response reading (max size + abort-aware streaming)
- * ------------------------------------------------------------------------------------------------- */
-
 function assertContentLengthWithinLimit(
   response: Response,
   url: string,
@@ -977,6 +978,17 @@ function assertContentLengthWithinLimit(
 }
 
 class ResponseTextReader {
+  private createAbortError(url: string): FetchError {
+    return new FetchError(
+      'Request was aborted during response read',
+      url,
+      499,
+      {
+        reason: 'aborted',
+      }
+    );
+  }
+
   async read(
     response: Response,
     url: string,
@@ -985,7 +997,14 @@ class ResponseTextReader {
   ): Promise<{ text: string; size: number }> {
     assertContentLengthWithinLimit(response, url, maxBytes);
 
+    if (signal?.aborted) {
+      cancelResponseBody(response);
+      throw this.createAbortError(url);
+    }
+
     if (!response.body) {
+      if (signal?.aborted) throw fetchErrors.canceled(url);
+
       const text = await response.text();
       const size = Buffer.byteLength(text);
       if (size > maxBytes) throw fetchErrors.sizeLimit(url, maxBytes);
@@ -993,6 +1012,55 @@ class ResponseTextReader {
     }
 
     return this.readStreamWithLimit(response.body, url, maxBytes, signal);
+  }
+
+  private createAbortRace(
+    signal: AbortSignal | undefined,
+    url: string
+  ): {
+    abortPromise: Promise<never> | null;
+    cleanup: () => void;
+  } {
+    if (!signal) {
+      return { abortPromise: null, cleanup: () => {} };
+    }
+
+    if (signal.aborted) {
+      return {
+        abortPromise: Promise.reject(this.createAbortError(url)),
+        cleanup: () => {},
+      };
+    }
+
+    let onAbort: (() => void) | null = null;
+
+    const abortPromise = new Promise<never>((_, reject) => {
+      onAbort = () => {
+        reject(this.createAbortError(url));
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+    });
+
+    const cleanup = (): void => {
+      if (!onAbort) return;
+      try {
+        signal.removeEventListener('abort', onAbort);
+      } catch {
+        // Best-effort cleanup.
+      }
+      onAbort = null;
+    };
+
+    return { abortPromise, cleanup };
+  }
+
+  private async readNext(
+    reader: ReadableStreamDefaultReader<Uint8Array>,
+    abortPromise: Promise<never> | null
+  ): Promise<ReadableStreamReadResult<Uint8Array>> {
+    return abortPromise
+      ? await Promise.race([reader.read(), abortPromise])
+      : await reader.read();
   }
 
   private async readStreamWithLimit(
@@ -1006,10 +1074,10 @@ class ResponseTextReader {
     let total = 0;
 
     const reader = stream.getReader();
-    try {
-      await this.throwIfAborted(signal, url, reader);
+    const abortRace = this.createAbortRace(signal, url);
 
-      let result = await reader.read();
+    try {
+      let result = await this.readNext(reader, abortRace.abortPromise);
       while (!result.done) {
         total += result.value.byteLength;
         if (total > maxBytes) throw fetchErrors.sizeLimit(url, maxBytes);
@@ -1017,11 +1085,13 @@ class ResponseTextReader {
         const decoded = decoder.decode(result.value, { stream: true });
         if (decoded) parts.push(decoded);
 
-        await this.throwIfAborted(signal, url, reader);
-        result = await reader.read();
+        result = await this.readNext(reader, abortRace.abortPromise);
       }
     } catch (error: unknown) {
       await this.cancelReaderQuietly(reader);
+
+      // Preserve explicit FetchErrors (abort/limits).
+      if (error instanceof FetchError) throw error;
 
       if (signal?.aborted) {
         throw new FetchError(
@@ -1036,6 +1106,7 @@ class ResponseTextReader {
 
       throw error;
     } finally {
+      abortRace.cleanup();
       reader.releaseLock();
     }
 
@@ -1045,33 +1116,16 @@ class ResponseTextReader {
     return { text: parts.join(''), size: total };
   }
 
-  private async throwIfAborted(
-    signal: AbortSignal | undefined,
-    url: string,
-    reader: ReadableStreamDefaultReader<Uint8Array>
-  ): Promise<void> {
-    if (!signal?.aborted) return;
-
-    await this.cancelReaderQuietly(reader);
-    throw new FetchError('Request was aborted during response read', url, 499, {
-      reason: 'aborted',
-    });
-  }
-
   private async cancelReaderQuietly(
     reader: ReadableStreamDefaultReader<Uint8Array>
   ): Promise<void> {
     try {
       await reader.cancel();
     } catch {
-      // ignore
+      // Best-effort cleanup.
     }
   }
 }
-
-/* -------------------------------------------------------------------------------------------------
- * HTTP fetcher (headers, signals, response handling)
- * ------------------------------------------------------------------------------------------------- */
 
 const DEFAULT_HEADERS = {
   'User-Agent': config.fetcher.userAgent,
@@ -1089,16 +1143,22 @@ function buildHeaders(): Record<string, string> {
 function buildRequestSignal(
   timeoutMs: number,
   external?: AbortSignal
-): AbortSignal {
+): AbortSignal | undefined {
+  if (timeoutMs <= 0) return external;
+
   const timeoutSignal = AbortSignal.timeout(timeoutMs);
   return external ? AbortSignal.any([external, timeoutSignal]) : timeoutSignal;
 }
 
 function buildRequestInit(
   headers: HeadersInit,
-  signal: AbortSignal
+  signal?: AbortSignal
 ): RequestInit {
-  return { method: 'GET', headers, signal };
+  return {
+    method: 'GET',
+    headers,
+    ...(signal ? { signal } : {}),
+  };
 }
 
 function resolveResponseError(
@@ -1144,6 +1204,22 @@ async function handleFetchResponse(
 
 type FetcherConfig = typeof config.fetcher;
 
+type HostnamePreflight = (url: string) => Promise<void>;
+
+function extractHostname(url: string): string {
+  if (!URL.canParse(url)) {
+    throw createErrorWithCode('Invalid URL', 'EINVAL');
+  }
+  return new URL(url).hostname;
+}
+
+function createDnsPreflight(dnsResolver: SafeDnsResolver): HostnamePreflight {
+  return async (url: string) => {
+    const hostname = extractHostname(url);
+    await dnsResolver.assertSafeHostname(hostname);
+  };
+}
+
 class HttpFetcher {
   constructor(
     private readonly fetcherConfig: FetcherConfig,
@@ -1157,7 +1233,7 @@ class HttpFetcher {
     normalizedUrl: string,
     options?: FetchOptions
   ): Promise<string> {
-    const { hostname } = new URL(normalizedUrl);
+    const hostname = extractHostname(normalizedUrl);
     await this.dnsResolver.assertSafeHostname(hostname);
 
     const timeoutMs = this.fetcherConfig.timeout;
@@ -1175,7 +1251,7 @@ class HttpFetcher {
           this.fetcherConfig.maxRedirects
         );
 
-      ctx.url = finalUrl;
+      ctx.url = this.telemetry.redact(finalUrl);
 
       return await handleFetchResponse(
         response,
@@ -1188,16 +1264,12 @@ class HttpFetcher {
       );
     } catch (error: unknown) {
       const mapped = mapFetchError(error, normalizedUrl, timeoutMs);
-      ctx.url = mapped.url;
+      ctx.url = this.telemetry.redact(mapped.url);
       this.telemetry.recordError(ctx, mapped, mapped.statusCode);
       throw mapped;
     }
   }
 }
-
-/* -------------------------------------------------------------------------------------------------
- * Wiring (composition root)
- * ------------------------------------------------------------------------------------------------- */
 
 const ipBlocker = new IpBlocker(config.security);
 const urlNormalizer = new UrlNormalizer(
@@ -1213,21 +1285,27 @@ const telemetry = new FetchTelemetry(
   defaultContext,
   defaultRedactor
 );
+
+// Legacy redirect follower (no per-hop DNS preflight).
 const redirectFollower = new RedirectFollower(defaultFetch, (u) =>
   urlNormalizer.validateAndNormalize(u)
 );
+
+// Redirect follower with per-hop DNS preflight.
+const secureRedirectFollower = new RedirectFollower(
+  defaultFetch,
+  (u) => urlNormalizer.validateAndNormalize(u),
+  createDnsPreflight(dnsResolver)
+);
+
 const responseReader = new ResponseTextReader();
 const httpFetcher = new HttpFetcher(
   config.fetcher,
   dnsResolver,
-  redirectFollower,
+  secureRedirectFollower,
   responseReader,
   telemetry
 );
-
-/* -------------------------------------------------------------------------------------------------
- * Backwards-compatible exports (public API)
- * ------------------------------------------------------------------------------------------------- */
 
 export function isBlockedIp(ip: string): boolean {
   return ipBlocker.isBlockedIp(ip);

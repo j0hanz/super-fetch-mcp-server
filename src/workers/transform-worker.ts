@@ -4,6 +4,7 @@ import { z } from 'zod';
 
 import { FetchError, getErrorMessage } from '../errors.js';
 import type {
+  MarkdownTransformResult,
   TransformWorkerCancelMessage,
   TransformWorkerErrorMessage,
   TransformWorkerOutgoingMessage,
@@ -11,10 +12,16 @@ import type {
 } from '../transform-types.js';
 import { transformHtmlToMarkdownInProcess } from '../transform.js';
 
-const controllers = new Map<string, AbortController>();
+const port =
+  parentPort ??
+  (() => {
+    throw new Error('transform-worker started without parentPort');
+  })();
+
+const controllersById = new Map<string, AbortController>();
 
 function post(message: TransformWorkerOutgoingMessage): void {
-  parentPort?.postMessage(message);
+  port.postMessage(message);
 }
 
 function postError(
@@ -32,19 +39,60 @@ function validateTransformMessage(
   return null;
 }
 
+function toValidationWorkerError(
+  message: TransformWorkerTransformMessage,
+  reason: string
+): TransformWorkerErrorMessage['error'] {
+  return {
+    name: 'ValidationError',
+    message: reason,
+    url: message.url,
+  };
+}
+
+function toFetchWorkerError(
+  error: FetchError
+): TransformWorkerErrorMessage['error'] {
+  return {
+    name: error.name,
+    message: error.message,
+    url: error.url,
+    statusCode: error.statusCode,
+    details: { ...error.details },
+  };
+}
+
+function toUnknownWorkerError(
+  message: TransformWorkerTransformMessage,
+  error: unknown
+): TransformWorkerErrorMessage['error'] {
+  return {
+    name: error instanceof Error ? error.name : 'Error',
+    message: getErrorMessage(error),
+    url: message.url,
+  };
+}
+
+function toOutgoingResult(result: MarkdownTransformResult): {
+  markdown: string;
+  title?: string;
+  truncated: boolean;
+} {
+  const { markdown, title, truncated } = result;
+  return title === undefined
+    ? { markdown, truncated }
+    : { markdown, title, truncated };
+}
+
 function handleTransform(message: TransformWorkerTransformMessage): void {
   const validationError = validateTransformMessage(message);
   if (validationError) {
-    postError(message.id, {
-      name: 'ValidationError',
-      message: validationError,
-      url: message.url,
-    });
+    postError(message.id, toValidationWorkerError(message, validationError));
     return;
   }
 
   const controller = new AbortController();
-  controllers.set(message.id, controller);
+  controllersById.set(message.id, controller);
 
   try {
     const result = transformHtmlToMarkdownInProcess(message.html, message.url, {
@@ -55,42 +103,26 @@ function handleTransform(message: TransformWorkerTransformMessage): void {
     post({
       type: 'result',
       id: message.id,
-      result: {
-        markdown: result.markdown,
-        ...(result.title === undefined ? {} : { title: result.title }),
-        truncated: result.truncated,
-      },
+      result: toOutgoingResult(result),
     });
   } catch (error: unknown) {
     if (error instanceof FetchError) {
-      postError(message.id, {
-        name: error.name,
-        message: error.message,
-        url: error.url,
-        statusCode: error.statusCode,
-        details: { ...error.details },
-      });
+      postError(message.id, toFetchWorkerError(error));
       return;
     }
 
-    postError(message.id, {
-      name: error instanceof Error ? error.name : 'Error',
-      message: getErrorMessage(error),
-      url: message.url,
-    });
+    postError(message.id, toUnknownWorkerError(message, error));
   } finally {
-    controllers.delete(message.id);
+    controllersById.delete(message.id);
   }
 }
 
 function handleCancel(message: TransformWorkerCancelMessage): void {
-  const controller = controllers.get(message.id);
+  const controller = controllersById.get(message.id);
   if (!controller) return;
-  controller.abort(new Error('Canceled'));
-}
 
-if (!parentPort) {
-  throw new Error('transform-worker started without parentPort');
+  // Note: cancellation only interrupts work if the transform function yields and respects AbortSignal.
+  controller.abort(new Error('Canceled'));
 }
 
 const TransformMessageSchema = z.object({
@@ -111,17 +143,16 @@ const IncomingMessageSchema = z.discriminatedUnion('type', [
   CancelMessageSchema,
 ]);
 
-parentPort.on('message', (raw: unknown) => {
-  const result = IncomingMessageSchema.safeParse(raw);
-  if (!result.success) return;
+port.on('message', (raw: unknown) => {
+  const parsed = IncomingMessageSchema.safeParse(raw);
+  if (!parsed.success) return;
 
-  const message = result.data;
+  const message = parsed.data;
 
   if (message.type === 'cancel') {
     handleCancel(message);
     return;
   }
 
-  // message is discriminated union, so type is narrowed to 'transform'
   handleTransform(message);
 });

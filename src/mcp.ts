@@ -28,6 +28,10 @@ import {
 import { shutdownTransformWorkerPool } from './transform.js';
 import { isObject } from './type-guards.js';
 
+/* -------------------------------------------------------------------------------------------------
+ * Icons + server info
+ * ------------------------------------------------------------------------------------------------- */
+
 async function getLocalIcons(): Promise<McpIcon[] | undefined> {
   try {
     const iconPath = new URL('../assets/logo.svg', import.meta.url);
@@ -42,20 +46,6 @@ async function getLocalIcons(): Promise<McpIcon[] | undefined> {
   } catch {
     return undefined;
   }
-}
-
-async function createServerInfo(): Promise<{
-  name: string;
-  version: string;
-  icons?: McpIcon[];
-}> {
-  const localIcons = await getLocalIcons();
-
-  return {
-    name: config.server.name,
-    version: config.server.version,
-    ...(localIcons ? { icons: localIcons } : {}),
-  };
 }
 
 function createServerCapabilities(): {
@@ -102,6 +92,18 @@ async function createServerInstructions(
   }
 }
 
+function createServerInfo(icons?: McpIcon[]): {
+  name: string;
+  version: string;
+  icons?: McpIcon[];
+} {
+  return {
+    name: config.server.name,
+    version: config.server.version,
+    ...(icons ? { icons } : {}),
+  };
+}
+
 function registerInstructionsResource(
   server: McpServer,
   instructions: string
@@ -126,11 +128,15 @@ function registerInstructionsResource(
   );
 }
 
-// Schemas based on methods strings
+/* -------------------------------------------------------------------------------------------------
+ * Tasks API schemas
+ * ------------------------------------------------------------------------------------------------- */
+
 const TaskGetSchema = z.object({
   method: z.literal('tasks/get'),
   params: z.object({ taskId: z.string() }),
 });
+
 const TaskListSchema = z.object({
   method: z.literal('tasks/list'),
   params: z
@@ -139,102 +145,75 @@ const TaskListSchema = z.object({
     })
     .optional(),
 });
+
 const TaskCancelSchema = z.object({
   method: z.literal('tasks/cancel'),
   params: z.object({ taskId: z.string() }),
 });
+
 const TaskResultSchema = z.object({
   method: z.literal('tasks/result'),
   params: z.object({ taskId: z.string() }),
 });
 
-// Type for interception
+/* -------------------------------------------------------------------------------------------------
+ * Tool call interception (tools/call) with task support
+ * ------------------------------------------------------------------------------------------------- */
+
 interface ExtendedCallToolRequest {
   method: 'tools/call';
   params: {
     name: string;
-    arguments?: Record<string, unknown>;
-    task?: {
-      ttl?: number;
-    };
-    _meta?: {
-      progressToken?: string | number;
-      'io.modelcontextprotocol/related-task'?: { taskId: string };
-    };
+    arguments?: Record<string, unknown> | undefined;
+    task?:
+      | {
+          ttl?: number | undefined;
+        }
+      | undefined;
+    _meta?:
+      | {
+          progressToken?: string | number | undefined;
+          'io.modelcontextprotocol/related-task'?:
+            | { taskId: string }
+            | undefined;
+          [key: string]: unknown;
+        }
+      | undefined;
+    [key: string]: unknown;
   };
+  [key: string]: unknown;
 }
 
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === 'string' && value.length > 0;
-}
+const ExtendedCallToolRequestSchema: z.ZodType<ExtendedCallToolRequest> =
+  z.looseObject({
+    method: z.literal('tools/call'),
+    params: z.looseObject({
+      name: z.string().min(1),
+      arguments: z.record(z.string(), z.unknown()).optional(),
+      task: z
+        .object({
+          ttl: z.number().optional(),
+        })
+        .optional(),
+      _meta: z
+        .looseObject({
+          progressToken: z.union([z.string(), z.number()]).optional(),
+          'io.modelcontextprotocol/related-task': z
+            .object({
+              taskId: z.string(),
+            })
+            .optional(),
+        })
+        .optional(),
+    }),
+  });
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return isObject(value);
-}
-
-function isValidTask(task: unknown): boolean {
-  if (task === undefined) return true;
-  if (!isRecord(task)) return false;
-  const { ttl } = task as { ttl?: unknown };
-  return ttl === undefined || typeof ttl === 'number';
-}
-
-function isValidMeta(meta: unknown): boolean {
-  if (meta === undefined) return true;
-  if (!isRecord(meta)) return false;
-
-  const { progressToken } = meta as { progressToken?: unknown };
-  if (
-    progressToken !== undefined &&
-    typeof progressToken !== 'string' &&
-    typeof progressToken !== 'number'
-  ) {
-    return false;
-  }
-
-  const related = (
-    meta as {
-      'io.modelcontextprotocol/related-task'?: unknown;
-    }
-  )['io.modelcontextprotocol/related-task'];
-
-  if (related === undefined) return true;
-  if (!isRecord(related)) return false;
-
-  const { taskId } = related as { taskId?: unknown };
-  return typeof taskId === 'string';
-}
-
-function isExtendedCallToolRequest(
+function parseExtendedCallToolRequest(
   request: unknown
-): request is ExtendedCallToolRequest {
-  if (!isRecord(request)) return false;
-  const { method, params } = request as {
-    method?: unknown;
-    params?: unknown;
-  };
-
-  if (method !== 'tools/call') return false;
-  if (!isRecord(params)) return false;
-
-  const {
-    name,
-    arguments: args,
-    task,
-    _meta,
-  } = params as {
-    name?: unknown;
-    arguments?: unknown;
-    task?: unknown;
-    _meta?: unknown;
-  };
-
-  return (
-    isNonEmptyString(name) &&
-    (args === undefined || isRecord(args)) &&
-    isValidTask(task) &&
-    isValidMeta(_meta)
-  );
+): ExtendedCallToolRequest {
+  const parsed = ExtendedCallToolRequestSchema.safeParse(request);
+  if (parsed.success) return parsed.data;
+  throw new McpError(ErrorCode.InvalidParams, 'Invalid tool request');
 }
 
 interface HandlerExtra {
@@ -250,6 +229,10 @@ interface ToolCallContext {
   signal?: AbortSignal;
   requestId?: string | number;
   sendNotification?: (notification: ProgressNotification) => Promise<void>;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return isObject(value);
 }
 
 function resolveTaskOwnerKey(extra?: HandlerExtra): string {
@@ -326,6 +309,34 @@ function buildCreateTaskResult(
   };
 }
 
+/**
+ * Track in-flight task executions so `tasks/cancel` can actually abort work.
+ * This is intentionally local to this module (no new files, no global singletons elsewhere).
+ */
+const taskAbortControllers = new Map<string, AbortController>();
+
+function attachAbortController(taskId: string): AbortController {
+  const existing = taskAbortControllers.get(taskId);
+  if (existing) {
+    // Defensive: should not happen, but avoid leaking the old controller.
+    taskAbortControllers.delete(taskId);
+  }
+  const controller = new AbortController();
+  taskAbortControllers.set(taskId, controller);
+  return controller;
+}
+
+function abortTaskExecution(taskId: string): void {
+  const controller = taskAbortControllers.get(taskId);
+  if (!controller) return;
+  controller.abort();
+  taskAbortControllers.delete(taskId);
+}
+
+function clearTaskExecution(taskId: string): void {
+  taskAbortControllers.delete(taskId);
+}
+
 async function runFetchTaskExecution(params: {
   taskId: string;
   args: { url: string };
@@ -334,8 +345,9 @@ async function runFetchTaskExecution(params: {
 }): Promise<void> {
   const { taskId, args, meta, sendNotification } = params;
 
+  const controller = attachAbortController(taskId);
+
   try {
-    const controller = new AbortController();
     const relatedMeta = buildRelatedTaskMeta(taskId, meta);
 
     const result = await fetchUrlToolHandler(args, {
@@ -346,9 +358,7 @@ async function runFetchTaskExecution(params: {
     });
 
     const isToolError =
-      typeof (result as { isError?: boolean }).isError === 'boolean'
-        ? (result as { isError?: boolean }).isError
-        : false;
+      isRecord(result) && typeof result.isError === 'boolean' && result.isError;
 
     taskManager.updateTask(taskId, {
       status: isToolError ? 'failed' : 'completed',
@@ -361,7 +371,7 @@ async function runFetchTaskExecution(params: {
         : {}),
       result,
     });
-  } catch (error) {
+  } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     const errorPayload =
       error instanceof McpError
@@ -374,11 +384,14 @@ async function runFetchTaskExecution(params: {
             code: ErrorCode.InternalError,
             message: errorMessage,
           };
+
     taskManager.updateTask(taskId, {
       status: 'failed',
       statusMessage: errorMessage,
       error: errorPayload,
     });
+  } finally {
+    clearTaskExecution(taskId);
   }
 }
 
@@ -388,27 +401,21 @@ function handleTaskToolCall(
 ): CreateTaskResult {
   requireFetchUrlToolName(params.name);
   const validArgs = requireFetchUrlArgs(params.arguments);
+
   const task = taskManager.createTask(
     params.task?.ttl !== undefined ? { ttl: params.task.ttl } : undefined,
     'Task started',
     context.ownerKey
   );
 
-  const executionParams: {
-    taskId: string;
-    args: { url: string };
-    meta?: ExtendedCallToolRequest['params']['_meta'];
-    sendNotification?: (notification: ProgressNotification) => Promise<void>;
-  } = {
+  void runFetchTaskExecution({
     taskId: task.taskId,
     args: validArgs,
     ...(params._meta ? { meta: params._meta } : {}),
     ...(context.sendNotification
       ? { sendNotification: context.sendNotification }
       : {}),
-  };
-
-  void runFetchTaskExecution(executionParams);
+  });
 
   return buildCreateTaskResult({
     taskId: task.taskId,
@@ -426,11 +433,14 @@ async function handleDirectToolCall(
   context: ToolCallContext
 ): Promise<ServerResult> {
   const args = requireFetchUrlArgs(params.arguments);
+
   return fetchUrlToolHandler(
     { url: args.url },
     {
       ...(context.signal ? { signal: context.signal } : {}),
-      ...(context.requestId ? { requestId: context.requestId } : {}),
+      ...(context.requestId !== undefined
+        ? { requestId: context.requestId }
+        : {}),
       ...(context.sendNotification
         ? { sendNotification: context.sendNotification }
         : {}),
@@ -456,16 +466,17 @@ async function handleToolCallRequest(
   throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${params.name}`);
 }
 
+/* -------------------------------------------------------------------------------------------------
+ * Register handlers
+ * ------------------------------------------------------------------------------------------------- */
+
 function registerTaskHandlers(server: McpServer): void {
   server.server.setRequestHandler(
     CallToolRequestSchema,
     async (request, extra) => {
       const context = resolveToolCallContext(extra as HandlerExtra | undefined);
-      if (!isExtendedCallToolRequest(request)) {
-        throw new McpError(ErrorCode.InvalidParams, 'Invalid tool request');
-      }
-      const result = await handleToolCallRequest(request, context);
-      return result;
+      const parsed = parseExtendedCallToolRequest(request);
+      return handleToolCallRequest(parsed, context);
     }
   );
 
@@ -474,9 +485,7 @@ function registerTaskHandlers(server: McpServer): void {
     const ownerKey = resolveTaskOwnerKey(extra as HandlerExtra | undefined);
     const task = taskManager.getTask(taskId, ownerKey);
 
-    if (!task) {
-      throwTaskNotFound();
-    }
+    if (!task) throwTaskNotFound();
 
     return Promise.resolve({
       taskId: task.taskId,
@@ -492,15 +501,15 @@ function registerTaskHandlers(server: McpServer): void {
   server.server.setRequestHandler(TaskResultSchema, async (request, extra) => {
     const { taskId } = request.params;
     const ownerKey = resolveTaskOwnerKey(extra as HandlerExtra | undefined);
+
     const task = await taskManager.waitForTerminalTask(
       taskId,
       ownerKey,
       (extra as HandlerExtra | undefined)?.signal
     );
 
-    if (!task) {
-      throwTaskNotFound();
-    }
+    if (!task) throwTaskNotFound();
+
     if (task.status === 'failed') {
       if (task.error) {
         throw new McpError(
@@ -509,6 +518,7 @@ function registerTaskHandlers(server: McpServer): void {
           task.error.data
         );
       }
+
       const failedResult = (task.result ?? null) as ServerResult | null;
       const fallback: ServerResult = failedResult ?? {
         content: [
@@ -519,6 +529,7 @@ function registerTaskHandlers(server: McpServer): void {
         ],
         isError: true,
       };
+
       return Promise.resolve({
         ...fallback,
         _meta: {
@@ -527,10 +538,13 @@ function registerTaskHandlers(server: McpServer): void {
         },
       });
     }
+
     if (task.status === 'cancelled') {
       throw new McpError(ErrorCode.InvalidRequest, 'Task was cancelled');
     }
+
     const result = (task.result ?? { content: [] }) as ServerResult;
+
     return Promise.resolve({
       ...result,
       _meta: {
@@ -543,9 +557,11 @@ function registerTaskHandlers(server: McpServer): void {
   server.server.setRequestHandler(TaskListSchema, async (request, extra) => {
     const ownerKey = resolveTaskOwnerKey(extra as HandlerExtra | undefined);
     const cursor = request.params?.cursor;
+
     const { tasks, nextCursor } = taskManager.listTasks(
       cursor === undefined ? { ownerKey } : { ownerKey, cursor }
     );
+
     return Promise.resolve({
       tasks: tasks.map((t) => ({
         taskId: t.taskId,
@@ -564,9 +580,10 @@ function registerTaskHandlers(server: McpServer): void {
     const ownerKey = resolveTaskOwnerKey(extra as HandlerExtra | undefined);
 
     const task = taskManager.cancelTask(taskId, ownerKey);
-    if (!task) {
-      throwTaskNotFound();
-    }
+    if (!task) throwTaskNotFound();
+
+    // Make cancellation actionable: abort any in-flight execution.
+    abortTaskExecution(taskId);
 
     return Promise.resolve({
       taskId: task.taskId,
@@ -580,16 +597,24 @@ function registerTaskHandlers(server: McpServer): void {
   });
 }
 
+/* -------------------------------------------------------------------------------------------------
+ * Server lifecycle
+ * ------------------------------------------------------------------------------------------------- */
+
 export async function createMcpServer(): Promise<McpServer> {
-  const instructions = await createServerInstructions(config.server.version);
-  const serverInfo = await createServerInfo();
+  const [instructions, localIcons] = await Promise.all([
+    createServerInstructions(config.server.version),
+    getLocalIcons(),
+  ]);
+
+  const serverInfo = createServerInfo(localIcons);
   const server = new McpServer(serverInfo, {
     capabilities: createServerCapabilities(),
     instructions,
   });
 
   setMcpServer(server);
-  const localIcons = await getLocalIcons();
+
   registerTools(server);
   registerCachedContentResource(server, localIcons);
   registerInstructionsResource(server, instructions);
@@ -605,22 +630,19 @@ function attachServerErrorHandler(server: McpServer): void {
   };
 }
 
-function handleShutdownSignal(server: McpServer, signal: string): void {
+async function shutdownServer(
+  server: McpServer,
+  signal: string
+): Promise<void> {
   process.stderr.write(
     `\n${signal} received, shutting down superFetch MCP server...\n`
   );
 
-  Promise.resolve()
-    .then(async () => {
-      await shutdownTransformWorkerPool();
-      await server.close();
-    })
-    .catch((err: unknown) => {
-      logError('Error during shutdown', err instanceof Error ? err : undefined);
-    })
-    .finally(() => {
-      process.exit(0);
-    });
+  // Ensure any in-flight tool executions are aborted promptly.
+  for (const taskId of taskAbortControllers.keys()) abortTaskExecution(taskId);
+
+  await shutdownTransformWorkerPool();
+  await server.close();
 }
 
 function createShutdownHandler(server: McpServer): (signal: string) => void {
@@ -638,7 +660,18 @@ function createShutdownHandler(server: McpServer): (signal: string) => void {
 
     shuttingDown = true;
     initialSignal = signal;
-    handleShutdownSignal(server, signal);
+
+    Promise.resolve()
+      .then(() => shutdownServer(server, signal))
+      .catch((err: unknown) => {
+        logError(
+          'Error during shutdown',
+          err instanceof Error ? err : undefined
+        );
+      })
+      .finally(() => {
+        process.exit(0);
+      });
   };
 }
 

@@ -1,10 +1,10 @@
 import { isIP } from 'node:net';
 
 export function normalizeHost(value: string): string | null {
-  const trimmed = value.trim().toLowerCase();
-  if (!trimmed) return null;
+  const trimmedLower = value.trim().toLowerCase();
+  if (!trimmedLower) return null;
 
-  const first = takeFirstHostValue(trimmed);
+  const first = takeFirstHostValue(trimmedLower);
   if (!first) return null;
 
   const ipv6 = stripIpv6Brackets(first);
@@ -18,8 +18,11 @@ export function normalizeHost(value: string): string | null {
 }
 
 function takeFirstHostValue(value: string): string | null {
-  const first = value.split(',')[0];
+  // Faster than split(',') for large forwarded headers; preserves behavior.
+  const commaIndex = value.indexOf(',');
+  const first = commaIndex === -1 ? value : value.slice(0, commaIndex);
   if (!first) return null;
+
   const trimmed = first.trim();
   return trimmed ? trimmed : null;
 }
@@ -42,9 +45,8 @@ function isIpV6Literal(value: string): boolean {
 }
 
 function stripTrailingDots(value: string): string {
+  // Keep loop (rather than regex) to preserve exact behavior and avoid hidden allocations.
   let result = value;
-  while (result.endsWith('.')) {
-    result = result.slice(0, -1);
-  }
+  while (result.endsWith('.')) result = result.slice(0, -1);
   return result;
 }

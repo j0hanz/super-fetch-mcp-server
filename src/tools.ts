@@ -111,6 +111,8 @@ export interface ProgressNotification {
 export interface ToolHandlerExtra {
   signal?: AbortSignal;
   requestId?: string | number;
+  sessionId?: unknown;
+  requestInfo?: unknown;
   _meta?: RequestMeta;
   sendNotification?: (notification: ProgressNotification) => Promise<void>;
 }
@@ -181,19 +183,73 @@ interface ProgressReporter {
 }
 
 /* -------------------------------------------------------------------------------------------------
+ * Small runtime helpers
+ * ------------------------------------------------------------------------------------------------- */
+
+type JsonRecord = Record<string, unknown>;
+
+function asRecord(value: unknown): JsonRecord | undefined {
+  return isObject(value) ? (value as JsonRecord) : undefined;
+}
+
+function readUnknown(obj: unknown, key: string): unknown {
+  const record = asRecord(obj);
+  return record ? record[key] : undefined;
+}
+
+function readString(obj: unknown, key: string): string | undefined {
+  const value = readUnknown(obj, key);
+  return typeof value === 'string' ? value : undefined;
+}
+
+function readNestedRecord(
+  obj: unknown,
+  keys: readonly string[]
+): JsonRecord | undefined {
+  let current: unknown = obj;
+  for (const key of keys) {
+    current = readUnknown(current, key);
+    if (current === undefined) return undefined;
+  }
+  return asRecord(current);
+}
+
+function safeJsonParse(value: string): unknown {
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+function withSignal(
+  signal?: AbortSignal
+): { signal: AbortSignal } | Record<string, never> {
+  return signal === undefined ? {} : { signal };
+}
+
+function buildToolAbortSignal(
+  extraSignal: AbortSignal | undefined
+): AbortSignal | undefined {
+  const { timeoutMs } = config.tools;
+  if (timeoutMs <= 0) return extraSignal;
+
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  if (!extraSignal) return timeoutSignal;
+
+  return AbortSignal.any([extraSignal, timeoutSignal]);
+}
+
+/* -------------------------------------------------------------------------------------------------
  * Progress reporting
  * ------------------------------------------------------------------------------------------------- */
 
 function resolveRelatedTaskMeta(
   meta?: RequestMeta
 ): { taskId: string } | undefined {
-  if (!meta) return undefined;
-  const related = (
-    meta as { 'io.modelcontextprotocol/related-task'?: unknown }
-  )['io.modelcontextprotocol/related-task'];
-  if (!isObject(related)) return undefined;
-  const { taskId } = related as { taskId?: unknown };
-  return typeof taskId === 'string' ? { taskId } : undefined;
+  const related = readUnknown(meta, 'io.modelcontextprotocol/related-task');
+  const taskId = readString(related, 'taskId');
+  return taskId ? { taskId } : undefined;
 }
 
 class ToolProgressReporter implements ProgressReporter {
@@ -218,45 +274,51 @@ class ToolProgressReporter implements ProgressReporter {
   }
 
   async report(progress: number, message: string): Promise<void> {
-    try {
-      let timeoutId: NodeJS.Timeout | undefined;
-      const timeoutPromise = new Promise<void>((_, reject) => {
-        timeoutId = setTimeout(() => {
-          reject(new Error('Progress notification timeout'));
-        }, PROGRESS_NOTIFICATION_TIMEOUT_MS);
-        timeoutId.unref();
-      });
+    const notification: ProgressNotification = {
+      method: 'notifications/progress',
+      params: {
+        progressToken: this.token,
+        progress,
+        total: FETCH_PROGRESS_TOTAL,
+        message,
+        ...(this.relatedTaskMeta
+          ? {
+              _meta: {
+                'io.modelcontextprotocol/related-task': this.relatedTaskMeta,
+              },
+            }
+          : {}),
+      },
+    };
 
-      const sendPromise = this.sendNotification({
-        method: 'notifications/progress',
-        params: {
-          progressToken: this.token,
-          progress,
-          total: FETCH_PROGRESS_TOTAL,
-          message,
-          ...(this.relatedTaskMeta
-            ? {
-                _meta: {
-                  'io.modelcontextprotocol/related-task': this.relatedTaskMeta,
-                },
-              }
-            : {}),
-        },
-      }).finally(() => {
+    let timeoutId: NodeJS.Timeout | undefined;
+    const timeout = new Promise<{ timeout: true }>((resolve) => {
+      timeoutId = setTimeout(() => {
+        resolve({ timeout: true });
+      }, PROGRESS_NOTIFICATION_TIMEOUT_MS);
+      timeoutId.unref();
+    });
+
+    const sendOutcome = this.sendNotification(notification)
+      .then(() => ({ ok: true as const }))
+      .catch((error: unknown) => ({ ok: false as const, error }))
+      .finally(() => {
         if (timeoutId) clearTimeout(timeoutId);
       });
 
-      await Promise.race([sendPromise, timeoutPromise]);
-    } catch (error: unknown) {
-      const isTimeout =
-        error instanceof Error &&
-        error.message === 'Progress notification timeout';
-      const logMessage = isTimeout
-        ? 'Progress notification timed out'
-        : 'Failed to send progress notification';
+    const outcome = await Promise.race([sendOutcome, timeout]);
 
-      logWarn(logMessage, {
-        error: getErrorMessage(error),
+    if ('timeout' in outcome) {
+      logWarn('Progress notification timed out', {
+        progress,
+        message,
+      });
+      return;
+    }
+
+    if (!outcome.ok) {
+      logWarn('Failed to send progress notification', {
+        error: getErrorMessage(outcome.error),
         progress,
         message,
       });
@@ -285,6 +347,17 @@ interface InlineContentResult {
 
 export type InlineResult = ReturnType<InlineContentLimiter['apply']>;
 
+function truncateWithMarker(
+  content: string,
+  limit: number,
+  marker: string
+): string {
+  if (content.length <= limit) return content;
+
+  const maxContentLength = Math.max(0, limit - marker.length);
+  return `${content.substring(0, maxContentLength)}${marker}`;
+}
+
 class InlineContentLimiter {
   apply(content: string, cacheKey: string | null): InlineContentResult {
     const contentSize = content.length;
@@ -294,39 +367,19 @@ class InlineContentLimiter {
       return { content, contentSize };
     }
 
-    const resourceUri = this.resolveResourceUri(cacheKey);
-    if (!resourceUri) {
-      return this.buildTruncatedFallback(content, contentSize, inlineLimit);
+    const resourceUri =
+      cache.isEnabled() && cacheKey ? cache.toResourceUri(cacheKey) : null;
+
+    if (resourceUri) {
+      return {
+        contentSize,
+        resourceUri,
+        resourceMimeType: 'text/markdown',
+      };
     }
 
     return {
-      contentSize,
-      resourceUri,
-      resourceMimeType: 'text/markdown',
-    };
-  }
-
-  private resolveResourceUri(cacheKey: string | null): string | null {
-    if (!cache.isEnabled() || !cacheKey) return null;
-    return cache.toResourceUri(cacheKey);
-  }
-
-  private buildTruncatedFallback(
-    content: string,
-    contentSize: number,
-    inlineLimit: number
-  ): InlineContentResult {
-    const maxContentLength = Math.max(
-      0,
-      inlineLimit - TRUNCATION_MARKER.length
-    );
-    const truncatedContent =
-      content.length > inlineLimit
-        ? `${content.substring(0, maxContentLength)}${TRUNCATION_MARKER}`
-        : content;
-
-    return {
-      content: truncatedContent,
+      content: truncateWithMarker(content, inlineLimit, TRUNCATION_MARKER),
       contentSize,
       truncated: true,
     };
@@ -346,18 +399,12 @@ function applyInlineContentLimit(
  * Tool response blocks (text + optional resource + optional link)
  * ------------------------------------------------------------------------------------------------- */
 
-function serializeStructuredContent(
-  structuredContent: Record<string, unknown>
-): string {
-  return JSON.stringify(structuredContent);
-}
-
 function buildTextBlock(
   structuredContent: Record<string, unknown>
 ): ToolContentBlock {
   return {
     type: 'text',
-    text: serializeStructuredContent(structuredContent),
+    text: JSON.stringify(structuredContent),
   };
 }
 
@@ -427,25 +474,25 @@ function appendResourceBlocks(params: {
 
 type ToolContentBlocks = ReturnType<typeof buildToolContentBlocks>;
 
-function buildToolContentBlocks(
-  structuredContent: Record<string, unknown>,
-  _fromCache: boolean,
-  inlineResult: InlineResult,
-  resourceName: string,
-  _cacheKey?: string | null,
-  fullContent?: string,
-  url?: string,
-  title?: string
-): ToolContentBlockUnion[] {
-  const blocks: ToolContentBlockUnion[] = [buildTextBlock(structuredContent)];
+function buildToolContentBlocks(params: {
+  structuredContent: Record<string, unknown>;
+  inlineResult: InlineResult;
+  resourceName: string;
+  url?: string;
+  title?: string;
+  fullContent?: string;
+}): ToolContentBlockUnion[] {
+  const blocks: ToolContentBlockUnion[] = [
+    buildTextBlock(params.structuredContent),
+  ];
 
   appendResourceBlocks({
     blocks,
-    inlineResult,
-    resourceName,
-    url,
-    title,
-    fullContent,
+    inlineResult: params.inlineResult,
+    resourceName: params.resourceName,
+    url: params.url,
+    title: params.title,
+    fullContent: params.fullContent,
   });
 
   return blocks;
@@ -455,20 +502,19 @@ function buildToolContentBlocks(
  * Fetch pipeline executor (normalize → raw-transform → cache → fetch → transform → persist)
  * ------------------------------------------------------------------------------------------------- */
 
-function resolveNormalizedUrl(url: string): {
+interface UrlResolution {
   normalizedUrl: string;
   originalUrl: string;
   transformed: boolean;
-} {
+}
+
+function resolveNormalizedUrl(url: string): UrlResolution {
   const { normalizedUrl: validatedUrl } = normalizeUrl(url);
   const { url: normalizedUrl, transformed } = transformToRawUrl(validatedUrl);
   return { normalizedUrl, originalUrl: validatedUrl, transformed };
 }
 
-function logRawUrlTransformation(resolvedUrl: {
-  originalUrl: string;
-  transformed: boolean;
-}): void {
+function logRawUrlTransformation(resolvedUrl: UrlResolution): void {
   if (!resolvedUrl.transformed) return;
 
   logDebug('Using transformed raw content URL', {
@@ -477,20 +523,22 @@ function logRawUrlTransformation(resolvedUrl: {
 }
 
 function extractTitle(value: unknown): string | undefined {
-  if (!isObject(value)) return undefined;
-  const { title } = value;
+  const record = asRecord(value);
+  const title = record ? record.title : undefined;
   return typeof title === 'string' ? title : undefined;
 }
 
 function logCacheMiss(
   reason: string,
   cacheNamespace: string,
-  normalizedUrl: string
+  normalizedUrl: string,
+  error?: unknown
 ): void {
-  const log = reason === 'deserialize failure' ? logWarn : logDebug;
+  const log = reason.startsWith('deserialize') ? logWarn : logDebug;
   log(`Cache miss due to ${reason}`, {
     namespace: cacheNamespace,
     url: normalizedUrl,
+    ...(error ? { error: getErrorMessage(error) } : {}),
   });
 }
 
@@ -511,7 +559,14 @@ function attemptCacheRetrieval<T>(params: {
     return null;
   }
 
-  const data = deserialize(cached.content);
+  let data: T | undefined;
+  try {
+    data = deserialize(cached.content);
+  } catch (error: unknown) {
+    logCacheMiss('deserialize exception', cacheNamespace, normalizedUrl, error);
+    return null;
+  }
+
   if (data === undefined) {
     logCacheMiss('deserialize failure', cacheNamespace, normalizedUrl);
     return null;
@@ -533,19 +588,27 @@ function persistCache<T>(params: {
   data: T;
   serialize: ((result: T) => string) | undefined;
   normalizedUrl: string;
+  cacheNamespace: string;
 }): void {
-  const { cacheKey, data, serialize, normalizedUrl } = params;
+  const { cacheKey, data, serialize, normalizedUrl, cacheNamespace } = params;
   if (!cacheKey) return;
 
   const serializer = serialize ?? JSON.stringify;
   const title = extractTitle(data);
-
   const metadata = {
     url: normalizedUrl,
     ...(title === undefined ? {} : { title }),
   };
 
-  cache.set(cacheKey, serializer(data), metadata);
+  try {
+    cache.set(cacheKey, serializer(data), metadata);
+  } catch (error: unknown) {
+    logWarn('Failed to persist cache entry', {
+      namespace: cacheNamespace,
+      url: normalizedUrl,
+      error: getErrorMessage(error),
+    });
+  }
 }
 
 export async function executeFetchPipeline<T>(
@@ -569,12 +632,10 @@ export async function executeFetchPipeline<T>(
   if (cachedResult) return cachedResult;
 
   logDebug('Fetching URL', { url: resolvedUrl.normalizedUrl });
-  const fetchOptions =
-    options.signal === undefined ? {} : { signal: options.signal };
 
   const html = await fetchNormalizedUrl(
     resolvedUrl.normalizedUrl,
-    fetchOptions
+    withSignal(options.signal)
   );
   const data = await options.transform(html, resolvedUrl.normalizedUrl);
 
@@ -584,6 +645,7 @@ export async function executeFetchPipeline<T>(
       data,
       serialize: options.serialize,
       normalizedUrl: resolvedUrl.normalizedUrl,
+      cacheNamespace: options.cacheNamespace,
     });
   }
 
@@ -624,7 +686,7 @@ export async function performSharedFetch<T extends { content: string }>(
   const pipelineOptions: FetchPipelineOptions<T> = {
     url: options.url,
     cacheNamespace: 'markdown',
-    ...(options.signal === undefined ? {} : { signal: options.signal }),
+    ...withSignal(options.signal),
     transform: options.transform,
     ...(options.serialize ? { serialize: options.serialize } : {}),
     ...(options.deserialize ? { deserialize: options.deserialize } : {}),
@@ -697,57 +759,35 @@ type MarkdownPipelineResult = MarkdownTransformResult & {
   readonly content: string;
 };
 
-function parseJsonRecord(input: string): Record<string, unknown> | undefined {
-  try {
-    const parsed: unknown = JSON.parse(input);
-    return isObject(parsed) ? parsed : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function resolveMarkdownContent(
-  parsed: Record<string, unknown>
-): string | undefined {
-  const { markdown } = parsed;
-  if (typeof markdown === 'string') return markdown;
-
-  const { content } = parsed;
-  if (typeof content === 'string') return content;
-
-  return undefined;
-}
-
-function resolveOptionalTitle(
-  parsed: Record<string, unknown>
-): string | undefined {
-  const { title } = parsed;
-  if (title === undefined) return undefined;
-  return typeof title === 'string' ? title : undefined;
-}
-
-function resolveTruncatedFlag(parsed: Record<string, unknown>): boolean {
-  const { truncated } = parsed;
-  return typeof truncated === 'boolean' ? truncated : false;
-}
+const cachedMarkdownSchema = z
+  .object({
+    markdown: z.string().optional(),
+    content: z.string().optional(),
+    title: z.string().optional(),
+    truncated: z.boolean().optional(),
+  })
+  .catchall(z.unknown())
+  .refine(
+    (value) =>
+      typeof value.markdown === 'string' || typeof value.content === 'string',
+    { message: 'Missing markdown/content' }
+  );
 
 export function parseCachedMarkdownResult(
   cached: string
 ): MarkdownPipelineResult | undefined {
-  const parsed = parseJsonRecord(cached);
-  if (!parsed) return undefined;
+  const parsed = safeJsonParse(cached);
+  const result = cachedMarkdownSchema.safeParse(parsed);
+  if (!result.success) return undefined;
 
-  const resolvedContent = resolveMarkdownContent(parsed);
-  if (resolvedContent === undefined) return undefined;
-
-  const title = resolveOptionalTitle(parsed);
-  if (parsed.title !== undefined && title === undefined) return undefined;
+  const markdown = result.data.markdown ?? result.data.content;
+  if (typeof markdown !== 'string') return undefined;
 
   return {
-    content: resolvedContent,
-    markdown: resolvedContent,
-    title,
-    truncated: resolveTruncatedFlag(parsed),
+    content: markdown,
+    markdown,
+    title: result.data.title,
+    truncated: result.data.truncated ?? false,
   };
 }
 
@@ -758,7 +798,7 @@ const markdownTransform = async (
 ): Promise<MarkdownPipelineResult> => {
   const result = await transformHtmlToMarkdown(html, url, {
     includeMetadata: true,
-    ...(signal === undefined ? {} : { signal }),
+    ...withSignal(signal),
   });
   return { ...result, content: result.markdown };
 };
@@ -794,16 +834,14 @@ function buildFetchUrlContentBlocks(
   pipeline: PipelineResult<MarkdownPipelineResult>,
   inlineResult: InlineResult
 ): ToolContentBlocks {
-  return buildToolContentBlocks(
+  return buildToolContentBlocks({
     structuredContent,
-    pipeline.fromCache,
     inlineResult,
-    'Fetched markdown',
-    pipeline.cacheKey,
-    pipeline.data.content,
-    pipeline.url,
-    pipeline.data.title
-  );
+    resourceName: 'Fetched markdown',
+    url: pipeline.url,
+    ...(pipeline.data.title !== undefined && { title: pipeline.data.title }),
+    fullContent: pipeline.data.content,
+  });
 }
 
 function buildResponse(
@@ -838,7 +876,7 @@ async function fetchPipeline(
 }> {
   return performSharedFetch<MarkdownPipelineResult>({
     url,
-    ...(signal === undefined ? {} : { signal }),
+    ...withSignal(signal),
     transform: async (html, normalizedUrl) => {
       if (progress) {
         void progress.report(3, 'Transforming content');
@@ -859,25 +897,13 @@ async function executeFetch(
     return createToolErrorResponse('URL is required', '');
   }
 
-  const { signal: extraSignal } = extra ?? {};
-  const { timeoutMs } = config.tools;
-
-  const signal =
-    timeoutMs > 0
-      ? AbortSignal.any([
-          ...(extraSignal ? [extraSignal] : []),
-          AbortSignal.timeout(timeoutMs),
-        ])
-      : extraSignal;
-
+  const signal = buildToolAbortSignal(extra?.signal);
   const progress = createProgressReporter(extra);
 
   void progress.report(1, 'Validating URL');
-
   logDebug('Fetching URL', { url });
 
   void progress.report(2, 'Fetching content');
-
   const { pipeline, inlineResult } = await fetchPipeline(url, signal, progress);
 
   if (pipeline.fromCache) {
@@ -889,7 +915,6 @@ async function executeFetch(
   }
 
   void progress.report(4, 'Finalizing response');
-
   return buildResponse(pipeline, inlineResult, url);
 }
 
@@ -950,6 +975,7 @@ export function withRequestContextIfMissing<TParams, TResult, TExtra = unknown>(
 
     const derivedRequestId = resolveRequestIdFromExtra(extra) ?? randomUUID();
     const derivedSessionId = resolveSessionIdFromExtra(extra);
+
     return runWithRequestContext(
       {
         requestId: derivedRequestId,
@@ -963,46 +989,41 @@ export function withRequestContextIfMissing<TParams, TResult, TExtra = unknown>(
 
 function resolveRequestIdFromExtra(extra: unknown): string | undefined {
   if (!isObject(extra)) return undefined;
-  const { requestId } = extra as { requestId?: unknown };
 
+  const { requestId } = extra as { requestId?: unknown };
   if (typeof requestId === 'string') return requestId;
   if (typeof requestId === 'number') return String(requestId);
+
   return undefined;
 }
 
 function resolveSessionIdFromExtra(extra: unknown): string | undefined {
   if (!isObject(extra)) return undefined;
+
   const { sessionId } = extra as { sessionId?: unknown };
   if (typeof sessionId === 'string') return sessionId;
 
-  const { requestInfo } = extra as { requestInfo?: unknown };
-  if (!isObject(requestInfo)) return undefined;
-  const { headers } = requestInfo as { headers?: unknown };
-  if (!isObject(headers)) return undefined;
-  const headerValue = (headers as { 'mcp-session-id'?: unknown })[
-    'mcp-session-id'
-  ];
+  const headers = readNestedRecord(extra, ['requestInfo', 'headers']);
+  const headerValue = headers ? headers['mcp-session-id'] : undefined;
+
   return typeof headerValue === 'string' ? headerValue : undefined;
 }
 
 export function registerTools(server: McpServer): void {
-  if (config.tools.enabled.includes(FETCH_URL_TOOL_NAME)) {
-    server.registerTool(
-      TOOL_DEFINITION.name,
-      {
-        title: TOOL_DEFINITION.title,
-        description: TOOL_DEFINITION.description,
-        inputSchema: TOOL_DEFINITION.inputSchema,
-        outputSchema: TOOL_DEFINITION.outputSchema,
-        annotations: TOOL_DEFINITION.annotations,
-        execution: TOOL_DEFINITION.execution,
-        // Use specific tool icon here
-        icons: [TOOL_ICON],
-      } as { inputSchema: typeof fetchUrlInputSchema } & Record<
-        string,
-        unknown
-      >,
-      withRequestContextIfMissing(TOOL_DEFINITION.handler)
-    );
-  }
+  if (!config.tools.enabled.includes(FETCH_URL_TOOL_NAME)) return;
+
+  server.registerTool(
+    TOOL_DEFINITION.name,
+    {
+      title: TOOL_DEFINITION.title,
+      description: TOOL_DEFINITION.description,
+      inputSchema: TOOL_DEFINITION.inputSchema,
+      outputSchema: TOOL_DEFINITION.outputSchema,
+      annotations: TOOL_DEFINITION.annotations,
+      execution: TOOL_DEFINITION.execution,
+      // Use specific tool icon here
+      icons: [TOOL_ICON],
+    } as { inputSchema: typeof fetchUrlInputSchema } & Record<string, unknown>,
+    withRequestContextIfMissing(TOOL_DEFINITION.handler)
+  );
 }

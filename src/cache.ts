@@ -42,7 +42,7 @@ export interface CacheKeyParts {
 export interface McpIcon {
   src: string;
   mimeType: string;
-  sizes: string[];
+  sizes?: string[];
 }
 
 /* -------------------------------------------------------------------------------------------------
@@ -256,6 +256,7 @@ class InMemoryCacheStore {
   }
 
   keys(): readonly string[] {
+    if (!this.isEnabled()) return [];
     return [...this.cache.keys()];
   }
 
@@ -333,7 +334,16 @@ class InMemoryCacheStore {
     if (!parts) return;
 
     const event: CacheUpdateEvent = { cacheKey, ...parts };
-    for (const listener of this.listeners) listener(event);
+    for (const listener of this.listeners) {
+      try {
+        listener(event);
+      } catch (error: unknown) {
+        logWarn('Cache update listener failed', {
+          key: cacheKey.length > 100 ? cacheKey.slice(0, 100) : cacheKey,
+          error: getErrorMessage(error),
+        });
+      }
+    }
   }
 
   private logError(message: string, cacheKey: string, error: unknown): void {
@@ -571,12 +581,23 @@ function requireCacheEntry(cacheKey: string): { content: string } {
   return cached;
 }
 
+function resolveCachedMarkdownText(raw: string): string | null {
+  if (!raw) return null;
+
+  const payload = parseCachedPayload(raw);
+  if (payload) return resolveCachedPayloadContent(payload);
+
+  const trimmed = raw.trimStart();
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) return null;
+
+  return raw;
+}
+
 function buildMarkdownContentResponse(
   uri: URL,
   content: string
 ): { contents: { uri: string; mimeType: string; text: string }[] } {
-  const payload = parseCachedPayload(content);
-  const resolvedContent = payload ? resolveCachedPayloadContent(payload) : null;
+  const resolvedContent = resolveCachedMarkdownText(content);
 
   if (!resolvedContent) {
     throw new McpError(
@@ -727,6 +748,10 @@ function sanitizeFilename(name: string, extension: string): string {
     sanitized = sanitized.substring(0, maxBase);
   }
 
+  if (!sanitized) {
+    return `download-${Date.now()}${extension}`;
+  }
+
   return `${sanitized}${extension}`;
 }
 
@@ -840,6 +865,7 @@ function resolveDownloadPayload(
 
   const safeTitle =
     typeof payload.title === 'string' ? payload.title : undefined;
+
   const fileName = generateSafeFilename(
     cacheEntry.url,
     cacheEntry.title ?? safeTitle,
