@@ -1,3 +1,5 @@
+import { types } from 'node:util';
+
 import { isObject } from './type-guards.js';
 
 const DEFAULT_HTTP_STATUS = 502;
@@ -23,7 +25,7 @@ export class FetchError extends Error {
 }
 
 export function getErrorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message;
+  if (types.isNativeError(error)) return error.message;
   if (typeof error === 'string' && error.length > 0) return error;
   if (isErrorWithMessage(error)) return error.message;
   return 'Unknown error';
@@ -44,7 +46,7 @@ export function createErrorWithCode(
 }
 
 export function isSystemError(error: unknown): error is NodeJS.ErrnoException {
-  if (!(error instanceof Error)) return false;
+  if (!types.isNativeError(error)) return false;
   if (!('code' in error)) return false;
   const { code } = error as { code?: unknown };
   return typeof code === 'string';

@@ -1,8 +1,12 @@
+import { Buffer } from 'node:buffer';
 import { randomUUID } from 'node:crypto';
 import diagnosticsChannel from 'node:diagnostics_channel';
 import dns from 'node:dns';
 import { BlockList, isIP } from 'node:net';
 import { performance } from 'node:perf_hooks';
+import { setTimeout as delay } from 'node:timers/promises';
+import { URL } from 'node:url';
+import { types } from 'node:util';
 
 import { config } from './config.js';
 import { createErrorWithCode, FetchError, isSystemError } from './errors.js';
@@ -372,16 +376,26 @@ class RawUrlTransformer {
     return { url: match.url, transformed: true, platform: match.platform };
   }
 
-  isRawTextContentUrl(url: string): boolean {
-    if (!url) return false;
-    if (this.isRawUrl(url)) return true;
+  isRawTextContentUrl(urlString: string): boolean {
+    if (!urlString) return false;
+    if (this.isRawUrl(urlString)) return true;
 
-    const { base } = this.splitParams(url);
-    const lowerBase = base.toLowerCase();
-    const lastDot = lowerBase.lastIndexOf('.');
-    if (lastDot === -1) return false;
+    try {
+      const url = new URL(urlString);
+      const pathname = url.pathname.toLowerCase();
+      const lastDot = pathname.lastIndexOf('.');
+      if (lastDot === -1) return false;
 
-    return RAW_TEXT_EXTENSIONS.has(lowerBase.slice(lastDot));
+      return RAW_TEXT_EXTENSIONS.has(pathname.slice(lastDot));
+    } catch {
+      // Fallback for invalid URLs or relative paths
+      const { base } = this.splitParams(urlString);
+      const lowerBase = base.toLowerCase();
+      const lastDot = lowerBase.lastIndexOf('.');
+      if (lastDot === -1) return false;
+
+      return RAW_TEXT_EXTENSIONS.has(lowerBase.slice(lastDot));
+    }
   }
 
   private isRawUrl(url: string): boolean {
@@ -394,16 +408,22 @@ class RawUrlTransformer {
     );
   }
 
-  private splitParams(url: string): { base: string; hash: string } {
-    const hashIndex = url.indexOf('#');
-    const queryIndex = url.indexOf('?');
-    const endIndex = Math.min(
-      queryIndex === -1 ? url.length : queryIndex,
-      hashIndex === -1 ? url.length : hashIndex
-    );
+  private splitParams(urlString: string): { base: string; hash: string } {
+    try {
+      const url = new URL(urlString);
+      const base = url.origin + url.pathname;
+      return { base, hash: url.hash };
+    } catch {
+      const hashIndex = urlString.indexOf('#');
+      const queryIndex = urlString.indexOf('?');
+      const endIndex = Math.min(
+        queryIndex === -1 ? urlString.length : queryIndex,
+        hashIndex === -1 ? urlString.length : hashIndex
+      );
 
-    const hash = hashIndex !== -1 ? url.slice(hashIndex) : '';
-    return { base: url.slice(0, endIndex), hash };
+      const hash = hashIndex !== -1 ? urlString.slice(hashIndex) : '';
+      return { base: urlString.slice(0, endIndex), hash };
+    }
   }
 
   private applyRules(
@@ -475,14 +495,17 @@ async function withTimeout<T>(
   signal?: AbortSignal,
   onAbort?: () => Error
 ): Promise<T> {
-  let timer: NodeJS.Timeout | undefined;
-
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
-      reject(onTimeout());
-    }, timeoutMs);
-    timer.unref();
-  });
+  const controller = new AbortController();
+  const timeoutPromise = delay(timeoutMs, null, {
+    ref: false,
+    signal: controller.signal,
+  })
+    .then(() => Promise.reject(onTimeout()))
+    .catch((err: unknown) => {
+      if (types.isNativeError(err) && err.name === 'AbortError')
+        return new Promise<never>(() => {});
+      throw err;
+    });
 
   const abortRace = createAbortRace(
     signal,
@@ -492,11 +515,11 @@ async function withTimeout<T>(
   try {
     return await Promise.race(
       abortRace.abortPromise
-        ? [promise, timeout, abortRace.abortPromise]
-        : [promise, timeout]
+        ? [promise, timeoutPromise, abortRace.abortPromise]
+        : [promise, timeoutPromise]
     );
   } finally {
-    if (timer) clearTimeout(timer);
+    controller.abort();
     abortRace.cleanup();
   }
 }
@@ -626,13 +649,13 @@ function createAbortedFetchError(url: string): FetchError {
 
 function isAbortError(error: unknown): boolean {
   return (
-    error instanceof Error &&
+    types.isNativeError(error) &&
     (error.name === 'AbortError' || error.name === 'TimeoutError')
   );
 }
 
 function isTimeoutError(error: unknown): boolean {
-  return error instanceof Error && error.name === 'TimeoutError';
+  return types.isNativeError(error) && error.name === 'TimeoutError';
 }
 
 function resolveErrorUrl(error: unknown, fallback: string): string {
@@ -658,7 +681,7 @@ function mapFetchError(
       : createCanceledFetchError(url);
   }
 
-  if (!(error instanceof Error))
+  if (!types.isNativeError(error))
     return createUnknownFetchError(url, 'Unexpected error');
 
   if (!isSystemError(error)) return createNetworkFetchError(url, error.message);
@@ -839,7 +862,7 @@ class FetchTelemetry {
     status?: number
   ): void {
     const duration = performance.now() - context.startTime;
-    const err = error instanceof Error ? error : new Error(String(error));
+    const err = types.isNativeError(error) ? error : new Error(String(error));
     const code = isSystemError(err) ? err.code : undefined;
 
     this.publish({
@@ -1158,33 +1181,61 @@ function resolveEncoding(
 }
 
 const BINARY_SIGNATURES = [
-  [0x25, 0x50, 0x44, 0x46], // PDF
-  [0x89, 0x50, 0x4e, 0x47], // PNG
-  [0x47, 0x49, 0x46, 0x38], // GIF8
-  [0xff, 0xd8, 0xff], // JPEG
-  [0x50, 0x4b, 0x03, 0x04], // ZIP/JAR/APK
-  [0x7f, 0x45, 0x4c, 0x46], // ELF
+  [0x25, 0x50, 0x44, 0x46],
+  [0x89, 0x50, 0x4e, 0x47],
+  [0x47, 0x49, 0x46, 0x38],
+  [0xff, 0xd8, 0xff],
+  [0x52, 0x49, 0x46, 0x46],
+  [0x42, 0x4d],
+  [0x49, 0x49, 0x2a, 0x00],
+  [0x4d, 0x4d, 0x00, 0x2a],
+  [0x00, 0x00, 0x01, 0x00],
+  [0x50, 0x4b, 0x03, 0x04],
+  [0x1f, 0x8b],
+  [0x42, 0x5a, 0x68],
+  [0x52, 0x61, 0x72, 0x21],
+  [0x37, 0x7a, 0xbc, 0xaf],
+  [0x7f, 0x45, 0x4c, 0x46],
+  [0x4d, 0x5a],
+  [0xcf, 0xfa, 0xed, 0xfe],
+  [0x00, 0x61, 0x73, 0x6d],
+  [0x1a, 0x45, 0xdf, 0xa3],
+  [0x66, 0x74, 0x79, 0x70],
+  [0x46, 0x4c, 0x56],
+  [0x49, 0x44, 0x33],
+  [0xff, 0xfb],
+  [0xff, 0xfa],
+  [0x4f, 0x67, 0x67, 0x53],
+  [0x66, 0x4c, 0x61, 0x43],
+  [0x4d, 0x54, 0x68, 0x64],
+  [0x77, 0x4f, 0x46, 0x46],
+  [0x00, 0x01, 0x00, 0x00],
+  [0x4f, 0x54, 0x54, 0x4f],
+  [0x53, 0x51, 0x4c, 0x69],
 ] as const;
 
-function startsWithBytes(buffer: Uint8Array, signature: readonly number[]): boolean {
+function startsWithBytes(
+  buffer: Uint8Array,
+  signature: readonly number[]
+): boolean {
   if (buffer.length < signature.length) return false;
   return signature.every((value, index) => buffer[index] === value);
 }
 
 function hasNullByte(buffer: Uint8Array, limit: number): boolean {
   const checkLen = Math.min(buffer.length, limit);
-  for (let i = 0; i < checkLen; i++) {
-    if (buffer[i] === 0x00) return true;
-  }
-  return false;
+  return Buffer.from(buffer.buffer, buffer.byteOffset, checkLen).includes(0x00);
 }
 
 function isBinaryContent(buffer: Uint8Array, encoding?: string): boolean {
-  if (BINARY_SIGNATURES.some((signature) => startsWithBytes(buffer, signature))) {
+  if (
+    BINARY_SIGNATURES.some((signature) => startsWithBytes(buffer, signature))
+  ) {
     return true;
   }
 
-  if (!isUnicodeWideEncoding(encoding) && hasNullByte(buffer, 1000)) return true;
+  if (!isUnicodeWideEncoding(encoding) && hasNullByte(buffer, 1000))
+    return true;
 
   return false;
 }
@@ -1197,6 +1248,26 @@ class ResponseTextReader {
     signal?: AbortSignal,
     encoding?: string
   ): Promise<{ text: string; size: number }> {
+    const { buffer, encoding: effectiveEncoding } = await this.readBuffer(
+      response,
+      url,
+      maxBytes,
+      signal,
+      encoding
+    );
+
+    const decoder = createDecoder(effectiveEncoding);
+    const text = decoder.decode(buffer);
+    return { text, size: buffer.byteLength };
+  }
+
+  async readBuffer(
+    response: Response,
+    url: string,
+    maxBytes: number,
+    signal?: AbortSignal,
+    encoding?: string
+  ): Promise<{ buffer: Uint8Array; encoding: string; size: number }> {
     if (signal?.aborted) {
       cancelResponseBody(response);
       throw createAbortedFetchError(url);
@@ -1205,15 +1276,14 @@ class ResponseTextReader {
     if (!response.body) {
       if (signal?.aborted) throw createCanceledFetchError(url);
 
-      let buffer = await response.arrayBuffer();
-      if (buffer.byteLength > maxBytes) {
-        buffer = buffer.slice(0, maxBytes);
-      }
+      const arrayBuffer = await response.arrayBuffer();
+      const length = Math.min(arrayBuffer.byteLength, maxBytes);
+      const buffer = new Uint8Array(arrayBuffer, 0, length);
 
-      const uint8 = new Uint8Array(buffer);
-      const effectiveEncoding = resolveEncoding(encoding, uint8);
+      const effectiveEncoding =
+        resolveEncoding(encoding, buffer) ?? encoding ?? 'utf-8';
 
-      if (isBinaryContent(uint8, effectiveEncoding ?? encoding)) {
+      if (isBinaryContent(buffer, effectiveEncoding)) {
         throw new FetchError(
           'Detailed content type check failed: binary content detected',
           url,
@@ -1222,12 +1292,10 @@ class ResponseTextReader {
         );
       }
 
-      const decoder = createDecoder(effectiveEncoding ?? encoding);
-      const text = decoder.decode(buffer);
-      return { text, size: buffer.byteLength };
+      return { buffer, encoding: effectiveEncoding, size: buffer.byteLength };
     }
 
-    return this.readStreamWithLimit(
+    return this.readStreamToBuffer(
       response.body,
       url,
       maxBytes,
@@ -1245,15 +1313,16 @@ class ResponseTextReader {
       : await reader.read();
   }
 
-  private async readStreamWithLimit(
+  private async readStreamToBuffer(
     stream: ReadableStream<Uint8Array>,
     url: string,
     maxBytes: number,
     signal?: AbortSignal,
     encoding?: string
-  ): Promise<{ text: string; size: number }> {
+  ): Promise<{ buffer: Uint8Array; encoding: string; size: number }> {
+    let effectiveEncoding = encoding;
     let decoder: TextDecoder | null = null;
-    const parts: string[] = [];
+    const chunks: Uint8Array[] = [];
     let total = 0;
 
     const reader = stream.getReader();
@@ -1265,8 +1334,9 @@ class ResponseTextReader {
       let result = await this.readNext(reader, abortRace.abortPromise);
 
       if (!result.done) {
-        const effectiveEncoding = resolveEncoding(encoding, result.value);
-        decoder = createDecoder(effectiveEncoding ?? encoding);
+        effectiveEncoding =
+          resolveEncoding(encoding, result.value) ?? encoding ?? 'utf-8';
+        decoder = createDecoder(effectiveEncoding);
       }
 
       if (!result.done && isBinaryContent(result.value, decoder?.encoding)) {
@@ -1280,20 +1350,21 @@ class ResponseTextReader {
       }
 
       while (!result.done) {
-        decoder ??= createDecoder(encoding);
-        const { shouldBreak, newTotal } = this.processChunk(
-          result.value,
-          total,
-          maxBytes,
-          decoder,
-          parts
-        );
-        total = newTotal;
+        const chunk = result.value;
+        const newTotal = total + chunk.byteLength;
 
-        if (shouldBreak) {
+        if (newTotal > maxBytes) {
+          const remaining = maxBytes - total;
+          if (remaining > 0) {
+            chunks.push(chunk.subarray(0, remaining));
+            total += remaining;
+          }
           await this.cancelReaderQuietly(reader);
           break;
         }
+
+        chunks.push(chunk);
+        total = newTotal;
 
         result = await this.readNext(reader, abortRace.abortPromise);
       }
@@ -1305,36 +1376,18 @@ class ResponseTextReader {
       reader.releaseLock();
     }
 
-    decoder ??= createDecoder(encoding);
-    const final = decoder.decode();
-    if (final) parts.push(final);
-
-    return { text: parts.join(''), size: total };
-  }
-
-  private processChunk(
-    chunk: Uint8Array,
-    total: number,
-    maxBytes: number,
-    decoder: TextDecoder,
-    parts: string[]
-  ): { shouldBreak: boolean; newTotal: number } {
-    const newTotal = total + chunk.byteLength;
-
-    if (newTotal > maxBytes) {
-      const remaining = maxBytes - total;
-      if (remaining > 0) {
-        const partial = chunk.subarray(0, remaining);
-        const decoded = decoder.decode(partial, { stream: true });
-        if (decoded) parts.push(decoded);
-      }
-      return { shouldBreak: true, newTotal: total + remaining };
+    const resultBuffer = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      resultBuffer.set(chunk, offset);
+      offset += chunk.byteLength;
     }
 
-    const decoded = decoder.decode(chunk, { stream: true });
-    if (decoded) parts.push(decoded);
-
-    return { shouldBreak: false, newTotal };
+    return {
+      buffer: resultBuffer,
+      encoding: effectiveEncoding ?? 'utf-8',
+      size: total,
+    };
   }
 
   private handleReadingError(
@@ -1482,6 +1535,34 @@ async function handleFetchResponse(
   return text;
 }
 
+async function handleFetchResponseBuffer(
+  response: Response,
+  finalUrl: string,
+  ctx: FetchTelemetryContext,
+  telemetry: FetchTelemetry,
+  reader: ResponseTextReader,
+  maxBytes: number,
+  signal?: AbortSignal
+): Promise<{ buffer: Uint8Array; encoding: string }> {
+  const responseError = resolveResponseError(response, finalUrl);
+  if (responseError) {
+    cancelResponseBody(response);
+    throw responseError;
+  }
+
+  const contentType = response.headers.get('content-type');
+  assertSupportedContentType(contentType, finalUrl);
+  const encoding = getCharsetFromContentType(contentType ?? null);
+
+  const {
+    buffer,
+    encoding: detectedEncoding,
+    size,
+  } = await reader.readBuffer(response, finalUrl, maxBytes, signal, encoding);
+  telemetry.recordResponse(ctx, response, size);
+  return { buffer, encoding: detectedEncoding };
+}
+
 type FetcherConfig = typeof config.fetcher;
 
 type HostnamePreflight = (url: string, signal?: AbortSignal) => Promise<void>;
@@ -1535,6 +1616,48 @@ class HttpFetcher {
       ctx.url = this.telemetry.redact(finalUrl);
 
       return await handleFetchResponse(
+        response,
+        finalUrl,
+        ctx,
+        this.telemetry,
+        this.reader,
+        this.fetcherConfig.maxContentLength,
+        init.signal ?? undefined
+      );
+    } catch (error: unknown) {
+      const mapped = mapFetchError(error, normalizedUrl, timeoutMs);
+      ctx.url = this.telemetry.redact(mapped.url);
+      this.telemetry.recordError(ctx, mapped, mapped.statusCode);
+      throw mapped;
+    }
+  }
+
+  async fetchNormalizedUrlBuffer(
+    normalizedUrl: string,
+    options?: FetchOptions
+  ): Promise<{ buffer: Uint8Array; encoding: string }> {
+    const hostname = extractHostname(normalizedUrl);
+
+    const timeoutMs = this.fetcherConfig.timeout;
+    const headers = buildHeaders();
+    const signal = buildRequestSignal(timeoutMs, options?.signal);
+    const init = buildRequestInit(headers, signal);
+
+    const ctx = this.telemetry.start(normalizedUrl, 'GET');
+
+    try {
+      await this.dnsResolver.assertSafeHostname(hostname, signal ?? undefined);
+
+      const { response, url: finalUrl } =
+        await this.redirectFollower.fetchWithRedirects(
+          normalizedUrl,
+          init,
+          this.fetcherConfig.maxRedirects
+        );
+
+      ctx.url = this.telemetry.redact(finalUrl);
+
+      return await handleFetchResponseBuffer(
         response,
         finalUrl,
         ctx,
@@ -1656,9 +1779,26 @@ export async function readResponseText(
   return responseReader.read(response, url, maxBytes, signal, encoding);
 }
 
+export async function readResponseBuffer(
+  response: Response,
+  url: string,
+  maxBytes: number,
+  signal?: AbortSignal,
+  encoding?: string
+): Promise<{ buffer: Uint8Array; encoding: string; size: number }> {
+  return responseReader.readBuffer(response, url, maxBytes, signal, encoding);
+}
+
 export async function fetchNormalizedUrl(
   normalizedUrl: string,
   options?: FetchOptions
 ): Promise<string> {
   return httpFetcher.fetchNormalizedUrl(normalizedUrl, options);
+}
+
+export async function fetchNormalizedUrlBuffer(
+  normalizedUrl: string,
+  options?: FetchOptions
+): Promise<{ buffer: Uint8Array; encoding: string }> {
+  return httpFetcher.fetchNormalizedUrlBuffer(normalizedUrl, options);
 }

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 
 import { z } from 'zod';
@@ -16,7 +17,12 @@ import {
 
 import { type McpIcon, registerCachedContentResource } from './cache.js';
 import { config } from './config.js';
-import { logError, logInfo, setMcpServer } from './observability.js';
+import {
+  logError,
+  logInfo,
+  runWithRequestContext,
+  setMcpServer,
+} from './observability.js';
 import { registerConfigResource } from './resources.js';
 import { type CreateTaskResult, taskManager } from './tasks.js';
 import {
@@ -474,8 +480,20 @@ function registerTaskHandlers(server: McpServer): void {
     CallToolRequestSchema,
     async (request, extra) => {
       const context = resolveToolCallContext(extra as HandlerExtra | undefined);
-      const parsed = parseExtendedCallToolRequest(request);
-      return handleToolCallRequest(parsed, context);
+      const requestId =
+        context.requestId !== undefined
+          ? String(context.requestId)
+          : randomUUID();
+
+      const sessionId = (extra as HandlerExtra | undefined)?.sessionId;
+
+      return runWithRequestContext(
+        { requestId, ...(sessionId ? { sessionId } : {}) },
+        () => {
+          const parsed = parseExtendedCallToolRequest(request);
+          return handleToolCallRequest(parsed, context);
+        }
+      );
     }
   );
 

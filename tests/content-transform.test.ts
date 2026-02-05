@@ -130,4 +130,38 @@ describe('transformHtmlToMarkdown raw content detection', () => {
     assert.ok(result.error instanceof FetchError);
     assert.equal(result.error.statusCode, 499);
   });
+
+  it('rejects content with high replacement character ratio (binary indicator)', async () => {
+    // Simulate binary content that was decoded as UTF-8 with many replacement chars
+    const replacementChar = '\ufffd';
+    const binaryGarbage =
+      replacementChar.repeat(300) + 'some text' + replacementChar.repeat(300);
+
+    await assert.rejects(
+      () =>
+        transformHtmlToMarkdown(binaryGarbage, 'https://example.com/binary', {
+          includeMetadata: false,
+        }),
+      (error: unknown) =>
+        error instanceof FetchError &&
+        error.statusCode === 415 &&
+        error.message.includes('binary')
+    );
+  });
+
+  it('rejects content with null bytes (binary indicator)', async () => {
+    // Content with null bytes should trigger binary detection
+    const contentWithNull = '<html><body>\x00binary\x00data</body></html>';
+
+    await assert.rejects(
+      () =>
+        transformHtmlToMarkdown(contentWithNull, 'https://example.com/binary', {
+          includeMetadata: false,
+        }),
+      (error: unknown) =>
+        error instanceof FetchError &&
+        error.statusCode === 415 &&
+        error.message.includes('binary')
+    );
+  });
 });

@@ -90,7 +90,10 @@ describe('executeFetchPipeline', () => {
         const result = await executeFetchPipeline<CachedPayload>({
           url,
           cacheNamespace,
-          transform: async (html) => createCachedPayload(`fresh:${html}`),
+          transform: async (input) => {
+            const text = new TextDecoder(input.encoding).decode(input.buffer);
+            return createCachedPayload(`fresh:${text}`);
+          },
         });
 
         assert.equal(result.fromCache, false);
@@ -123,9 +126,10 @@ describe('executeFetchPipeline', () => {
           cacheVary,
           deserialize: deserializePayload,
           serialize: serializePayload,
-          transform: async (html) => {
+          transform: async (input) => {
+            const text = new TextDecoder(input.encoding).decode(input.buffer);
             transformCalls += 1;
-            return createCachedPayload(`fresh:${html}`);
+            return createCachedPayload(`fresh:${text}`);
           },
         });
 
@@ -135,9 +139,10 @@ describe('executeFetchPipeline', () => {
           cacheVary,
           deserialize: deserializePayload,
           serialize: serializePayload,
-          transform: async (html) => {
+          transform: async (input) => {
+            const text = new TextDecoder(input.encoding).decode(input.buffer);
             transformCalls += 1;
-            return createCachedPayload(`fresh:${html}`);
+            return createCachedPayload(`fresh:${text}`);
           },
         });
 
@@ -166,9 +171,10 @@ describe('executeFetchPipeline', () => {
         const result = await executeFetchPipeline<string>({
           url,
           cacheNamespace,
-          transform: async (html, normalizedUrl) => {
+          transform: async (input, normalizedUrl) => {
             assert.equal(normalizedUrl, expectedRaw);
-            return html;
+            const text = new TextDecoder(input.encoding).decode(input.buffer);
+            return text;
           },
         });
 

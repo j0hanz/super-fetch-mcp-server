@@ -1,7 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import diagnosticsChannel from 'node:diagnostics_channel';
 import { performance } from 'node:perf_hooks';
-import { Worker } from 'node:worker_threads';
+import {
+  type Transferable as NodeTransferable,
+  Worker,
+} from 'node:worker_threads';
 
 import { parseHTML } from 'linkedom';
 import {
@@ -46,6 +49,7 @@ import type {
   TransformOptions,
   TransformStageContext,
   TransformStageEvent,
+  TransformWorkerTransformMessage,
 } from './transform-types.js';
 import { isObject } from './type-guards.js';
 
@@ -759,7 +763,9 @@ function buildImageTranslator(ctx: unknown): TranslatorConfig {
     ? node.getAttribute.bind(node)
     : undefined;
 
-  const src = getAttribute?.('src') ?? '';
+  const srcRaw = getAttribute?.('src') ?? '';
+  const src = srcRaw.startsWith('data:') ? '[data URI removed]' : srcRaw;
+
   const existingAlt = getAttribute?.('alt') ?? '';
   const alt = existingAlt.trim() || deriveAltFromImageUrl(src);
 
@@ -1385,6 +1391,25 @@ function buildMarkdownFromContext(
   };
 }
 
+const REPLACEMENT_CHAR = '\ufffd';
+const BINARY_INDICATOR_THRESHOLD = 0.1;
+
+function hasBinaryIndicators(content: string): boolean {
+  if (!content || content.length === 0) return false;
+
+  if (content.includes('\x00')) return true;
+
+  const sampleSize = Math.min(content.length, 2000);
+  const sample = content.slice(0, sampleSize);
+  let replacementCount = 0;
+
+  for (const char of sample) {
+    if (char === REPLACEMENT_CHAR) replacementCount++;
+  }
+
+  return replacementCount > sampleSize * BINARY_INDICATOR_THRESHOLD;
+}
+
 export function transformHtmlToMarkdownInProcess(
   html: string,
   url: string,
@@ -1396,6 +1421,14 @@ export function transformHtmlToMarkdownInProcess(
 
   try {
     abortPolicy.throwIfAborted(signal, url, 'transform:begin');
+    if (hasBinaryIndicators(html)) {
+      throw new FetchError(
+        'Content appears to be binary data (high replacement character ratio or null bytes)',
+        url,
+        415,
+        { reason: 'binary_content_detected', stage: 'transform:validate' }
+      );
+    }
 
     const raw = stageTracker.run(url, 'transform:raw', () =>
       tryTransformRawContent({
@@ -1453,7 +1486,9 @@ const workerMessageSchema = z.discriminatedUnion('type', [
 
 interface PendingTask {
   id: string;
-  html: string;
+  html?: string;
+  htmlBuffer?: Uint8Array;
+  encoding?: string;
   url: string;
   includeMetadata: boolean;
   skipNoiseRemoval?: boolean;
@@ -1538,6 +1573,26 @@ class WorkerPool implements TransformWorkerPool {
       signal?: AbortSignal;
       skipNoiseRemoval?: boolean;
     }
+  ): Promise<MarkdownTransformResult>;
+  async transform(
+    htmlBuffer: Uint8Array,
+    url: string,
+    options: {
+      includeMetadata: boolean;
+      signal?: AbortSignal;
+      skipNoiseRemoval?: boolean;
+      encoding?: string;
+    }
+  ): Promise<MarkdownTransformResult>;
+  async transform(
+    htmlOrBuffer: string | Uint8Array,
+    url: string,
+    options: {
+      includeMetadata: boolean;
+      signal?: AbortSignal;
+      skipNoiseRemoval?: boolean;
+      encoding?: string;
+    }
   ): Promise<MarkdownTransformResult> {
     this.ensureOpen();
     if (options.signal?.aborted)
@@ -1551,7 +1606,13 @@ class WorkerPool implements TransformWorkerPool {
     }
 
     return new Promise<MarkdownTransformResult>((resolve, reject) => {
-      const task = this.createPendingTask(html, url, options, resolve, reject);
+      const task = this.createPendingTask(
+        htmlOrBuffer,
+        url,
+        options,
+        resolve,
+        reject
+      );
       this.queue.push(task);
       this.drainQueue();
     });
@@ -1616,12 +1677,13 @@ class WorkerPool implements TransformWorkerPool {
   }
 
   private createPendingTask(
-    html: string,
+    htmlOrBuffer: string | Uint8Array,
     url: string,
     options: {
       includeMetadata: boolean;
       signal?: AbortSignal;
       skipNoiseRemoval?: boolean;
+      encoding?: string;
     },
     resolve: (result: MarkdownTransformResult) => void,
     reject: (error: unknown) => void
@@ -1636,9 +1698,8 @@ class WorkerPool implements TransformWorkerPool {
       options.signal.addEventListener('abort', abortListener, { once: true });
     }
 
-    return {
+    const task: PendingTask = {
       id,
-      html,
       url,
       includeMetadata: options.includeMetadata,
       ...(options.skipNoiseRemoval ? { skipNoiseRemoval: true } : {}),
@@ -1647,6 +1708,17 @@ class WorkerPool implements TransformWorkerPool {
       resolve,
       reject,
     };
+
+    if (typeof htmlOrBuffer === 'string') {
+      task.html = htmlOrBuffer;
+    } else {
+      task.htmlBuffer = htmlOrBuffer;
+      if (options.encoding) {
+        task.encoding = options.encoding;
+      }
+    }
+
+    return task;
   }
 
   private onAbortSignal(
@@ -1916,14 +1988,25 @@ class WorkerPool implements TransformWorkerPool {
     });
 
     try {
-      slot.worker.postMessage({
+      const message: TransformWorkerTransformMessage = {
         type: 'transform',
         id: task.id,
-        html: task.html,
         url: task.url,
         includeMetadata: task.includeMetadata,
         ...(task.skipNoiseRemoval ? { skipNoiseRemoval: true } : {}),
-      });
+      };
+
+      const transferList: NodeTransferable[] = [];
+
+      if (task.htmlBuffer) {
+        message.htmlBuffer = task.htmlBuffer;
+        message.encoding = task.encoding;
+        transferList.push(task.htmlBuffer.buffer as ArrayBuffer);
+      } else {
+        message.html = task.html;
+      }
+
+      slot.worker.postMessage(message, transferList);
     } catch (error: unknown) {
       clearTimeout(timer);
       this.clearAbortListener(task.signal, task.abortListener);
@@ -2014,25 +2097,52 @@ function buildWorkerTransformOptions(options: TransformOptions): {
 }
 
 async function transformWithWorkerPool(
-  html: string,
+  htmlOrBuffer: string | Uint8Array,
   url: string,
-  options: TransformOptions
+  options: TransformOptions & { encoding?: string }
 ): Promise<MarkdownTransformResult> {
   const pool = getOrCreateWorkerPool();
   if (pool.getCapacity() === 0) {
+    let html = '';
+    if (typeof htmlOrBuffer === 'string') {
+      html = htmlOrBuffer;
+    } else {
+      const decoder = new TextDecoder(options.encoding ?? 'utf-8');
+      html = decoder.decode(htmlOrBuffer);
+    }
     return transformHtmlToMarkdownInProcess(html, url, options);
   }
-  return pool.transform(html, url, buildWorkerTransformOptions(options));
+
+  if (typeof htmlOrBuffer === 'string') {
+    return pool.transform(
+      htmlOrBuffer,
+      url,
+      buildWorkerTransformOptions(options)
+    );
+  }
+  return pool.transform(htmlOrBuffer, url, {
+    ...buildWorkerTransformOptions(options),
+    ...(options.encoding ? { encoding: options.encoding } : {}),
+  });
 }
 
 function resolveWorkerFallback(
   error: unknown,
-  html: string,
+  htmlOrBuffer: string | Uint8Array,
   url: string,
-  options: TransformOptions
+  options: TransformOptions & { encoding?: string }
 ): MarkdownTransformResult {
   if (error instanceof FetchError) throw error;
   abortPolicy.throwIfAborted(options.signal, url, 'transform:worker-fallback');
+
+  let html = '';
+  if (typeof htmlOrBuffer === 'string') {
+    html = htmlOrBuffer;
+  } else {
+    const decoder = new TextDecoder(options.encoding ?? 'utf-8');
+    html = decoder.decode(htmlOrBuffer);
+  }
+
   return transformHtmlToMarkdownInProcess(html, url, options);
 }
 
@@ -2054,6 +2164,35 @@ export async function transformHtmlToMarkdown(
       return result;
     } catch (error: unknown) {
       const fallback = resolveWorkerFallback(error, html, url, options);
+      completed = fallback;
+      return fallback;
+    } finally {
+      stageTracker.end(workerStage);
+    }
+  } finally {
+    if (completed)
+      stageTracker.end(totalStage, { truncated: completed.truncated });
+  }
+}
+
+export async function transformBufferToMarkdown(
+  htmlBuffer: Uint8Array,
+  url: string,
+  options: TransformOptions & { encoding?: string }
+): Promise<MarkdownTransformResult> {
+  const totalStage = stageTracker.start(url, 'transform:total');
+  let completed: MarkdownTransformResult | null = null;
+
+  try {
+    abortPolicy.throwIfAborted(options.signal, url, 'transform:begin');
+
+    const workerStage = stageTracker.start(url, 'transform:worker');
+    try {
+      const result = await transformWithWorkerPool(htmlBuffer, url, options);
+      completed = result;
+      return result;
+    } catch (error: unknown) {
+      const fallback = resolveWorkerFallback(error, htmlBuffer, url, options);
       completed = fallback;
       return fallback;
     } finally {

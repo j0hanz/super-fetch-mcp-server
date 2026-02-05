@@ -95,7 +95,13 @@ function handleTransform(message: TransformWorkerTransformMessage): void {
   controllersById.set(message.id, controller);
 
   try {
-    const result = transformHtmlToMarkdownInProcess(message.html, message.url, {
+    let html = message.html ?? '';
+    if (message.htmlBuffer) {
+      const decoder = new TextDecoder(message.encoding ?? 'utf-8');
+      html = decoder.decode(message.htmlBuffer);
+    }
+
+    const result = transformHtmlToMarkdownInProcess(html, message.url, {
       includeMetadata: message.includeMetadata,
       signal: controller.signal,
       ...(message.skipNoiseRemoval ? { skipNoiseRemoval: true } : {}),
@@ -129,7 +135,9 @@ function handleCancel(message: TransformWorkerCancelMessage): void {
 const TransformMessageSchema = z.object({
   type: z.literal('transform'),
   id: z.string(),
-  html: z.string(),
+  html: z.string().optional(),
+  htmlBuffer: z.instanceof(Uint8Array).optional(),
+  encoding: z.string().optional(),
   url: z.string(),
   includeMetadata: z.boolean(),
   skipNoiseRemoval: z.boolean().optional(),

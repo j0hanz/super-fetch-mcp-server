@@ -134,13 +134,13 @@ describe('readResponseText', () => {
   });
 
   it('allows responses with unhandled Content-Encoding header by ignoring it', async () => {
-    // 0x1f 0x8b 0x08 is gzip magic number
-    const buffer = new Uint8Array([0x1f, 0x8b, 0x08]);
+    // Use non-binary bytes that don't match any signature
+    const buffer = new Uint8Array([0x61, 0x62, 0x63, 0x64]); // "abcd"
     const response = new Response(buffer, {
       status: 200,
       headers: {
         'content-type': 'text/html',
-        'content-encoding': 'gzip',
+        'content-encoding': 'unknown-encoding',
       },
     });
 
@@ -149,7 +149,7 @@ describe('readResponseText', () => {
       'https://example.com',
       10000
     );
-    // It should not throw. Content will be garbage (decoded bytes) but that is expected if fetch didn't decompress.
+    // It should not throw. Content will be decoded as text.
     assert.ok(result.text.length > 0);
   });
 
@@ -188,6 +188,146 @@ describe('readResponseText', () => {
     );
   });
 
+  it('rejects WebP binary (RIFF signature) disguised as text', async () => {
+    // RIFF magic bytes (WebP, WAV, AVI)
+    const buffer = new Uint8Array([0x52, 0x49, 0x46, 0x46, 0x00, 0x00, 0x00]);
+    const response = new Response(buffer, {
+      status: 200,
+      headers: { 'content-type': 'text/plain' },
+    });
+
+    await assert.rejects(
+      () => readResponseText(response, 'https://example.com/image.webp', 1024),
+      (error) => {
+        assert.ok(error instanceof FetchError);
+        assert.equal(error.statusCode, 500);
+        assert.match(error.message, /binary content detected/);
+        return true;
+      }
+    );
+  });
+
+  it('rejects WebAssembly binary disguised as text', async () => {
+    // WASM magic bytes
+    const buffer = new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00]);
+    const response = new Response(buffer, {
+      status: 200,
+      headers: { 'content-type': 'text/plain' },
+    });
+
+    await assert.rejects(
+      () => readResponseText(response, 'https://example.com/module.wasm', 1024),
+      (error) => {
+        assert.ok(error instanceof FetchError);
+        assert.equal(error.statusCode, 500);
+        assert.match(error.message, /binary content detected/);
+        return true;
+      }
+    );
+  });
+
+  it('rejects GZIP compressed content', async () => {
+    const buffer = new Uint8Array([0x1f, 0x8b, 0x08, 0x00]);
+    const response = new Response(buffer, {
+      status: 200,
+      headers: { 'content-type': 'text/plain' },
+    });
+
+    await assert.rejects(
+      () => readResponseText(response, 'https://example.com/file.gz', 1024),
+      (error) => {
+        assert.ok(error instanceof FetchError);
+        assert.match(error.message, /binary content detected/);
+        return true;
+      }
+    );
+  });
+
+  it('rejects RAR archive', async () => {
+    const buffer = new Uint8Array([0x52, 0x61, 0x72, 0x21, 0x1a]);
+    const response = new Response(buffer, {
+      status: 200,
+      headers: { 'content-type': 'text/plain' },
+    });
+
+    await assert.rejects(
+      () => readResponseText(response, 'https://example.com/file.rar', 1024),
+      (error) => {
+        assert.ok(error instanceof FetchError);
+        assert.match(error.message, /binary content detected/);
+        return true;
+      }
+    );
+  });
+
+  it('rejects 7-Zip archive', async () => {
+    const buffer = new Uint8Array([0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c]);
+    const response = new Response(buffer, {
+      status: 200,
+      headers: { 'content-type': 'text/plain' },
+    });
+
+    await assert.rejects(
+      () => readResponseText(response, 'https://example.com/file.7z', 1024),
+      (error) => {
+        assert.ok(error instanceof FetchError);
+        assert.match(error.message, /binary content detected/);
+        return true;
+      }
+    );
+  });
+
+  it('rejects Windows executable', async () => {
+    const buffer = new Uint8Array([0x4d, 0x5a, 0x90, 0x00]);
+    const response = new Response(buffer, {
+      status: 200,
+      headers: { 'content-type': 'text/plain' },
+    });
+
+    await assert.rejects(
+      () => readResponseText(response, 'https://example.com/file.exe', 1024),
+      (error) => {
+        assert.ok(error instanceof FetchError);
+        assert.match(error.message, /binary content detected/);
+        return true;
+      }
+    );
+  });
+
+  it('rejects WOFF font', async () => {
+    const buffer = new Uint8Array([0x77, 0x4f, 0x46, 0x46, 0x00]);
+    const response = new Response(buffer, {
+      status: 200,
+      headers: { 'content-type': 'text/plain' },
+    });
+
+    await assert.rejects(
+      () => readResponseText(response, 'https://example.com/font.woff', 1024),
+      (error) => {
+        assert.ok(error instanceof FetchError);
+        assert.match(error.message, /binary content detected/);
+        return true;
+      }
+    );
+  });
+
+  it('rejects SQLite database', async () => {
+    const buffer = new Uint8Array([0x53, 0x51, 0x4c, 0x69, 0x74, 0x65]);
+    const response = new Response(buffer, {
+      status: 200,
+      headers: { 'content-type': 'text/plain' },
+    });
+
+    await assert.rejects(
+      () => readResponseText(response, 'https://example.com/db.sqlite', 1024),
+      (error) => {
+        assert.ok(error instanceof FetchError);
+        assert.match(error.message, /binary content detected/);
+        return true;
+      }
+    );
+  });
+
   it('detects UTF-16LE via BOM and avoids false binary detection', async () => {
     const text = 'Hello world';
     const utf16Body = Buffer.from(text, 'utf16le');
@@ -197,7 +337,11 @@ describe('readResponseText', () => {
       headers: { 'content-type': 'text/html' },
     });
 
-    const result = await readResponseText(response, 'https://example.com', 4096);
+    const result = await readResponseText(
+      response,
+      'https://example.com',
+      4096
+    );
     assert.equal(result.text.replace(/^\ufeff/, ''), text);
   });
 
@@ -209,7 +353,11 @@ describe('readResponseText', () => {
       headers: { 'content-type': 'text/html' },
     });
 
-    const result = await readResponseText(response, 'https://example.com', 4096);
+    const result = await readResponseText(
+      response,
+      'https://example.com',
+      4096
+    );
     assert.match(result.text, /café/);
   });
 });

@@ -29,7 +29,12 @@ import {
   type JsonRpcId,
 } from './mcp-validator.js';
 import { createMcpServer } from './mcp.js';
-import { logError, logInfo, logWarn } from './observability.js';
+import {
+  logError,
+  logInfo,
+  logWarn,
+  runWithRequestContext,
+} from './observability.js';
 import {
   applyHttpServerTuning,
   drainConnectionsOnShutdown,
@@ -255,9 +260,9 @@ class JsonBodyReader {
   }
 
   private normalizeChunk(chunk: Buffer | Uint8Array | string): Buffer {
-    if (typeof chunk === 'string') return Buffer.from(chunk);
     if (Buffer.isBuffer(chunk)) return chunk;
-    return Buffer.from(chunk);
+    if (typeof chunk === 'string') return Buffer.from(chunk);
+    return Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength);
   }
 }
 
@@ -1012,29 +1017,39 @@ class HttpRequestPipeline {
   ) {}
 
   async handle(rawReq: IncomingMessage, rawRes: ServerResponse): Promise<void> {
-    const ctx = buildRequestContext(rawReq, rawRes);
-    if (!ctx) return;
+    const requestId = getHeaderValue(rawReq, 'x-request-id') ?? randomUUID();
+    const sessionId = getMcpSessionId(rawReq) ?? undefined;
 
-    if (!hostOriginPolicy.validate(ctx)) return;
-    if (corsPolicy.handle(ctx)) return;
+    return runWithRequestContext(
+      { requestId, ...(sessionId ? { sessionId } : {}) },
+      async () => {
+        const ctx = buildRequestContext(rawReq, rawRes);
+        if (!ctx) return;
 
-    if (!this.rateLimiter.check(ctx)) {
-      rawReq.resume();
-      return;
-    }
+        if (!hostOriginPolicy.validate(ctx)) return;
+        if (corsPolicy.handle(ctx)) return;
 
-    try {
-      ctx.body = await jsonBodyReader.read(ctx.req);
-    } catch {
-      if (ctx.url.pathname === '/mcp' && ctx.method === 'POST') {
-        sendError(ctx.res, -32700, 'Parse error', 400, null);
-      } else {
-        sendJson(ctx.res, 400, { error: 'Invalid JSON or Payload too large' });
+        if (!this.rateLimiter.check(ctx)) {
+          rawReq.resume();
+          return;
+        }
+
+        try {
+          ctx.body = await jsonBodyReader.read(ctx.req);
+        } catch {
+          if (ctx.url.pathname === '/mcp' && ctx.method === 'POST') {
+            sendError(ctx.res, -32700, 'Parse error', 400, null);
+          } else {
+            sendJson(ctx.res, 400, {
+              error: 'Invalid JSON or Payload too large',
+            });
+          }
+          return;
+        }
+
+        await this.dispatcher.dispatch(ctx);
       }
-      return;
-    }
-
-    await this.dispatcher.dispatch(ctx);
+    );
   }
 }
 

@@ -96,7 +96,9 @@ export interface TransformStageContext {
 export interface TransformWorkerTransformMessage {
   type: 'transform';
   id: string;
-  html: string;
+  html?: string | undefined;
+  htmlBuffer?: Uint8Array | undefined;
+  encoding?: string | undefined;
   url: string;
   includeMetadata: boolean;
   skipNoiseRemoval?: boolean | undefined;

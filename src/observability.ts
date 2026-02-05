@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { inspect } from 'node:util';
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
@@ -65,30 +66,11 @@ function mergeMetadata(meta?: LogMetadata): LogMetadata | undefined {
   return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
-function safeJsonStringify(value: unknown): string | undefined {
-  try {
-    const seen = new WeakSet();
-    const replacer = (_key: string, v: unknown): unknown => {
-      if (typeof v === 'bigint') return v.toString();
-      if (typeof v !== 'object' || v === null) return v;
-      const obj = v;
-      if (seen.has(obj)) return '[Circular]';
-      seen.add(obj);
-      return obj;
-    };
-    return JSON.stringify(value, replacer);
-  } catch {
-    return undefined;
-  }
-}
-
 function formatMetadata(meta?: LogMetadata): string {
   const merged = mergeMetadata(meta);
   if (!merged) return '';
 
-  const json =
-    safeJsonStringify(merged) ?? '{"_meta":"[unserializable metadata]"}';
-  return ` ${json}`;
+  return ` ${inspect(merged, { breakLength: Infinity, colors: false, compact: true, sorted: true })}`;
 }
 
 function createTimestamp(): string {

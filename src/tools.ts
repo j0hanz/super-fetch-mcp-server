@@ -16,7 +16,7 @@ import * as cache from './cache.js';
 import { config } from './config.js';
 import { FetchError, getErrorMessage, isSystemError } from './errors.js';
 import {
-  fetchNormalizedUrl,
+  fetchNormalizedUrlBuffer,
   normalizeUrl,
   transformToRawUrl,
 } from './fetch.js';
@@ -28,7 +28,7 @@ import {
   runWithRequestContext,
 } from './observability.js';
 import type { MarkdownTransformResult } from './transform-types.js';
-import { transformHtmlToMarkdown } from './transform.js';
+import { transformBufferToMarkdown } from './transform.js';
 import { isObject } from './type-guards.js';
 
 export interface FetchUrlInput {
@@ -78,7 +78,10 @@ export interface FetchPipelineOptions<T> {
   cacheNamespace: string;
   signal?: AbortSignal;
   cacheVary?: Record<string, unknown> | string;
-  transform: (html: string, url: string) => T | Promise<T>;
+  transform: (
+    input: { buffer: Uint8Array; encoding: string },
+    url: string
+  ) => T | Promise<T>;
   serialize?: (result: T) => string;
   deserialize?: (cached: string) => T | undefined;
 }
@@ -724,11 +727,14 @@ export async function executeFetchPipeline<T>(
 
   logDebug('Fetching URL', { url: resolvedUrl.normalizedUrl });
 
-  const html = await fetchNormalizedUrl(
+  const { buffer, encoding } = await fetchNormalizedUrlBuffer(
     resolvedUrl.normalizedUrl,
     withSignal(options.signal)
   );
-  const data = await options.transform(html, resolvedUrl.normalizedUrl);
+  const data = await options.transform(
+    { buffer, encoding },
+    resolvedUrl.normalizedUrl
+  );
 
   if (cache.isEnabled()) {
     persistCache({
@@ -756,7 +762,10 @@ export async function executeFetchPipeline<T>(
 interface SharedFetchOptions<T extends { content: string }> {
   readonly url: string;
   readonly signal?: AbortSignal;
-  readonly transform: (html: string, normalizedUrl: string) => T | Promise<T>;
+  readonly transform: (
+    input: { buffer: Uint8Array; encoding: string },
+    normalizedUrl: string
+  ) => T | Promise<T>;
   readonly serialize?: (result: T) => string;
   readonly deserialize?: (cached: string) => T | undefined;
 }
@@ -905,13 +914,14 @@ export function parseCachedMarkdownResult(
 }
 
 const markdownTransform = async (
-  html: string,
+  input: { buffer: Uint8Array; encoding: string },
   url: string,
   signal?: AbortSignal,
   skipNoiseRemoval?: boolean
 ): Promise<MarkdownPipelineResult> => {
-  const result = await transformHtmlToMarkdown(html, url, {
+  const result = await transformBufferToMarkdown(input.buffer, url, {
     includeMetadata: true,
+    encoding: input.encoding,
     ...withSignal(signal),
     ...(skipNoiseRemoval ? { skipNoiseRemoval: true } : {}),
   });
@@ -996,11 +1006,16 @@ async function fetchPipeline(
   return performSharedFetch<MarkdownPipelineResult>({
     url,
     ...withSignal(signal),
-    transform: async (html, normalizedUrl) => {
+    transform: async ({ buffer, encoding }, normalizedUrl) => {
       if (progress) {
         void progress.report(3, 'Transforming content');
       }
-      return markdownTransform(html, normalizedUrl, signal, skipNoiseRemoval);
+      return markdownTransform(
+        { buffer, encoding },
+        normalizedUrl,
+        signal,
+        skipNoiseRemoval
+      );
     },
     serialize: serializeMarkdownResult,
     deserialize: parseCachedMarkdownResult,
