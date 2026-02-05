@@ -133,7 +133,7 @@ describe('readResponseText', () => {
     assert.equal(result.text, '\ufffd');
   });
 
-  it('rejects responses with unhandled Content-Encoding header', async () => {
+  it('allows responses with unhandled Content-Encoding header by ignoring it', async () => {
     // 0x1f 0x8b 0x08 is gzip magic number
     const buffer = new Uint8Array([0x1f, 0x8b, 0x08]);
     const response = new Response(buffer, {
@@ -144,16 +144,13 @@ describe('readResponseText', () => {
       },
     });
 
-    await assert.rejects(
-      () => readResponseText(response, 'https://example.com', 10000),
-      (error: unknown) => {
-        assert.ok(error instanceof FetchError);
-        assert.equal(error.statusCode, 500);
-        assert.match(error.message, /Content-Encoding/);
-        assert.match(error.message, /gzip/);
-        return true;
-      }
+    const result = await readResponseText(
+      response,
+      'https://example.com',
+      10000
     );
+    // It should not throw. Content will be garbage (decoded bytes) but that is expected if fetch didn't decompress.
+    assert.ok(result.text.length > 0);
   });
 
   it('allows responses with identity Content-Encoding', async () => {
@@ -168,5 +165,26 @@ describe('readResponseText', () => {
     const result = await readResponseText(response, 'https://example.com', 10);
     assert.equal(result.text, 'hello');
     assert.equal(result.size, 5);
+  });
+
+  it('rejects binary content disguised as text', async () => {
+    // JFIF magic bytes for JPEG
+    const buffer = new Uint8Array([0xff, 0xd8, 0xff, 0xe0]);
+    const response = new Response(buffer, {
+      status: 200,
+      headers: {
+        'content-type': 'text/plain',
+      },
+    });
+
+    await assert.rejects(
+      () => readResponseText(response, 'https://example.com/image.jpg', 1024),
+      (error) => {
+        assert.ok(error instanceof FetchError);
+        assert.equal(error.statusCode, 500);
+        assert.match(error.message, /binary content detected/);
+        return true;
+      }
+    );
   });
 });

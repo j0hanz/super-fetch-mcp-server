@@ -1053,6 +1053,86 @@ function createDecoder(encoding: string | undefined): TextDecoder {
   }
 }
 
+function isBinaryContent(buffer: Uint8Array): boolean {
+  // Check for common binary magic numbers
+  // PDF: %PDF
+  if (
+    buffer.length >= 4 &&
+    buffer[0] === 0x25 &&
+    buffer[1] === 0x50 &&
+    buffer[2] === 0x44 &&
+    buffer[3] === 0x46
+  ) {
+    return true;
+  }
+
+  // PNG: \x89PNG
+  if (
+    buffer.length >= 4 &&
+    buffer[0] === 0x89 &&
+    buffer[1] === 0x50 &&
+    buffer[2] === 0x4e &&
+    buffer[3] === 0x47
+  ) {
+    return true;
+  }
+
+  // GIF: GIF8
+  if (
+    buffer.length >= 4 &&
+    buffer[0] === 0x47 &&
+    buffer[1] === 0x49 &&
+    buffer[2] === 0x46 &&
+    buffer[3] === 0x38
+  ) {
+    return true;
+  }
+
+  // JPEG: \xFF\xD8\xFF
+  if (
+    buffer.length >= 3 &&
+    buffer[0] === 0xff &&
+    buffer[1] === 0xd8 &&
+    buffer[2] === 0xff
+  ) {
+    return true;
+  }
+
+  // ZIP/JAR/APK: PK\x03\x04
+  if (
+    buffer.length >= 4 &&
+    buffer[0] === 0x50 &&
+    buffer[1] === 0x4b &&
+    buffer[2] === 0x03 &&
+    buffer[3] === 0x04
+  ) {
+    return true;
+  }
+
+  // ELF: \x7fELF
+  if (
+    buffer.length >= 4 &&
+    buffer[0] === 0x7f &&
+    buffer[1] === 0x45 &&
+    buffer[2] === 0x4c &&
+    buffer[3] === 0x46
+  ) {
+    return true;
+  }
+
+  // Check for null bytes in the first 1000 bytes (heuristics)
+  const checkLen = Math.min(buffer.length, 1000);
+  for (let i = 0; i < checkLen; i++) {
+    if (buffer[i] === 0x00) {
+      // Allow UTF-16 BOM? Naive check usually assumes UTF-8/Ascii for web.
+      // But let's be safe: if we see nulls, it's likely binary.
+      return true;
+    }
+  }
+
+  return false;
+}
+
 class ResponseTextReader {
   async read(
     response: Response,
@@ -1061,20 +1141,6 @@ class ResponseTextReader {
     signal?: AbortSignal,
     encoding?: string
   ): Promise<{ text: string; size: number }> {
-    const contentEncoding = response.headers.get('content-encoding');
-    if (contentEncoding && contentEncoding.toLowerCase() !== 'identity') {
-      throw new FetchError(
-        `Response has unhandled Content-Encoding: ${contentEncoding}. Body may still be compressed.`,
-        url,
-        500,
-        {
-          reason: 'compression_error',
-          encoding: contentEncoding,
-          stage: 'response_decode',
-        }
-      );
-    }
-
     if (signal?.aborted) {
       cancelResponseBody(response);
       throw createAbortedFetchError(url);
@@ -1086,6 +1152,16 @@ class ResponseTextReader {
       let buffer = await response.arrayBuffer();
       if (buffer.byteLength > maxBytes) {
         buffer = buffer.slice(0, maxBytes);
+      }
+
+      const uint8 = new Uint8Array(buffer);
+      if (isBinaryContent(uint8)) {
+        throw new FetchError(
+          'Detailed content type check failed: binary content detected',
+          url,
+          500,
+          { reason: 'binary_content_detected' }
+        );
       }
 
       const decoder = createDecoder(encoding);
@@ -1129,25 +1205,31 @@ class ResponseTextReader {
 
     try {
       let result = await this.readNext(reader, abortRace.abortPromise);
-      while (!result.done) {
-        const chunk = result.value;
-        const newTotal = total + chunk.byteLength;
 
-        if (newTotal > maxBytes) {
-          const remaining = maxBytes - total;
-          if (remaining > 0) {
-            const partial = chunk.subarray(0, remaining);
-            const decoded = decoder.decode(partial, { stream: true });
-            if (decoded) parts.push(decoded);
-            total += remaining;
-          }
+      if (!result.done && isBinaryContent(result.value)) {
+        await this.cancelReaderQuietly(reader);
+        throw new FetchError(
+          'Detailed content type check failed: binary content detected',
+          url,
+          500,
+          { reason: 'binary_content_detected' }
+        );
+      }
+
+      while (!result.done) {
+        const { shouldBreak, newTotal } = this.processChunk(
+          result.value,
+          total,
+          maxBytes,
+          decoder,
+          parts
+        );
+        total = newTotal;
+
+        if (shouldBreak) {
           await this.cancelReaderQuietly(reader);
           break;
         }
-
-        total = newTotal;
-        const decoded = decoder.decode(chunk, { stream: true });
-        if (decoded) parts.push(decoded);
 
         result = await this.readNext(reader, abortRace.abortPromise);
       }
@@ -1163,6 +1245,31 @@ class ResponseTextReader {
     if (final) parts.push(final);
 
     return { text: parts.join(''), size: total };
+  }
+
+  private processChunk(
+    chunk: Uint8Array,
+    total: number,
+    maxBytes: number,
+    decoder: TextDecoder,
+    parts: string[]
+  ): { shouldBreak: boolean; newTotal: number } {
+    const newTotal = total + chunk.byteLength;
+
+    if (newTotal > maxBytes) {
+      const remaining = maxBytes - total;
+      if (remaining > 0) {
+        const partial = chunk.subarray(0, remaining);
+        const decoded = decoder.decode(partial, { stream: true });
+        if (decoded) parts.push(decoded);
+      }
+      return { shouldBreak: true, newTotal: total + remaining };
+    }
+
+    const decoded = decoder.decode(chunk, { stream: true });
+    if (decoded) parts.push(decoded);
+
+    return { shouldBreak: false, newTotal };
   }
 
   private handleReadingError(
