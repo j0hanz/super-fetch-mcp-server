@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import {
   createServer,
   type IncomingMessage,
+  type Server,
   type ServerResponse,
 } from 'node:http';
 import { setInterval as setIntervalPromise } from 'node:timers/promises';
@@ -56,7 +57,6 @@ function createTransportAdapter(
   const noopOnError: OnError = () => {};
   const noopOnMessage: OnMessage = () => {};
 
-  // Preserve any existing onclose handler (e.g., session cleanup).
   const baseOnClose = transportImpl.onclose;
 
   let oncloseHandler: OnClose = noopOnClose;
@@ -94,102 +94,40 @@ function createTransportAdapter(
   };
 }
 
-interface ShimResponse extends ServerResponse {
-  status(code: number): this;
-  json(body: unknown): this;
-  send(body: string | Buffer): this;
-  sendStatus(code: number): this;
+type QueryParams = Record<string, string | string[]>;
+
+interface RequestContext {
+  req: IncomingMessage;
+  res: ServerResponse;
+  url: URL;
+  method: string | undefined;
+  query: QueryParams;
+  ip: string | null;
+  body: unknown;
 }
 
-interface ShimRequest extends IncomingMessage {
-  query: Record<string, string | string[]>;
-  body?: unknown;
-  params: Record<string, string>;
-  auth?: AuthInfo;
-  ip?: string;
+interface AuthenticatedContext extends RequestContext {
+  auth: AuthInfo;
 }
 
-function shimResponse(res: ServerResponse): ShimResponse {
-  const shim = res as ShimResponse;
-
-  shim.status = function (code: number) {
-    this.statusCode = code;
-    return this;
-  };
-
-  shim.json = function (body: unknown) {
-    this.setHeader('Content-Type', 'application/json');
-    this.end(JSON.stringify(body));
-    return this;
-  };
-
-  shim.send = function (body: string | Buffer) {
-    this.end(body);
-    return this;
-  };
-
-  shim.sendStatus = function (code: number) {
-    this.statusCode = code;
-    this.end();
-    return this;
-  };
-
-  return shim;
+function sendJson(res: ServerResponse, status: number, body: unknown): void {
+  res.statusCode = status;
+  res.setHeader('Content-Type', 'application/json');
+  res.end(JSON.stringify(body));
 }
 
-class JsonBodyReader {
-  async read(req: IncomingMessage, limit = 1024 * 1024): Promise<unknown> {
-    const contentType = getHeaderValue(req, 'content-type');
-    if (!contentType?.includes('application/json')) return undefined;
-
-    const body = await this.readBody(req, limit);
-    if (!body) return undefined;
-
-    try {
-      return JSON.parse(body);
-    } catch (err: unknown) {
-      throw err instanceof Error ? err : new Error(String(err));
-    }
-  }
-
-  private async readBody(
-    req: IncomingMessage,
-    limit: number
-  ): Promise<string | undefined> {
-    let size = 0;
-    const chunks: Buffer[] = [];
-
-    try {
-      for await (const chunk of req as AsyncIterable<
-        Buffer | Uint8Array | string
-      >) {
-        const buf = this.normalizeChunk(chunk);
-        size += buf.length;
-        if (size > limit) {
-          req.destroy();
-          throw new Error('Payload too large');
-        }
-        chunks.push(buf);
-      }
-    } catch (err: unknown) {
-      throw err instanceof Error ? err : new Error(String(err));
-    }
-
-    if (chunks.length === 0) return undefined;
-    return Buffer.concat(chunks).toString();
-  }
-
-  private normalizeChunk(chunk: Buffer | Uint8Array | string): Buffer {
-    if (typeof chunk === 'string') return Buffer.from(chunk);
-    if (Buffer.isBuffer(chunk)) return chunk;
-    return Buffer.from(chunk);
-  }
+function sendText(res: ServerResponse, status: number, body: string): void {
+  res.statusCode = status;
+  res.end(body);
 }
 
-const jsonBodyReader = new JsonBodyReader();
+function sendEmpty(res: ServerResponse, status: number): void {
+  res.statusCode = status;
+  res.end();
+}
 
-function parseQuery(url: URL): Record<string, string | string[]> {
-  const query: Record<string, string | string[]> = {};
+function parseQuery(url: URL): QueryParams {
+  const query: QueryParams = {};
   for (const [key, value] of url.searchParams) {
     const existing = query[key];
     if (existing) {
@@ -210,11 +148,33 @@ function getHeaderValue(req: IncomingMessage, name: string): string | null {
 }
 
 function getMcpSessionId(req: IncomingMessage): string | null {
-  // Back-compat: accept both session headers.
   return (
     getHeaderValue(req, 'mcp-session-id') ??
     getHeaderValue(req, 'x-mcp-session-id')
   );
+}
+
+function buildRequestContext(
+  req: IncomingMessage,
+  res: ServerResponse
+): RequestContext | null {
+  let url: URL;
+  try {
+    url = new URL(req.url ?? '', 'http://localhost');
+  } catch {
+    sendJson(res, 400, { error: 'Invalid request URL' });
+    return null;
+  }
+
+  return {
+    req,
+    res,
+    url,
+    method: req.method,
+    query: parseQuery(url),
+    ip: req.socket.remoteAddress ?? null,
+    body: undefined,
+  };
 }
 
 async function closeTransportBestEffort(
@@ -228,27 +188,102 @@ async function closeTransportBestEffort(
   }
 }
 
+type JsonBodyErrorKind = 'payload-too-large' | 'invalid-json' | 'read-failed';
+
+class JsonBodyError extends Error {
+  readonly kind: JsonBodyErrorKind;
+
+  constructor(kind: JsonBodyErrorKind, message: string) {
+    super(message);
+    this.name = 'JsonBodyError';
+    this.kind = kind;
+  }
+}
+
+const DEFAULT_BODY_LIMIT_BYTES = 1024 * 1024;
+
+class JsonBodyReader {
+  async read(
+    req: IncomingMessage,
+    limit = DEFAULT_BODY_LIMIT_BYTES
+  ): Promise<unknown> {
+    const contentType = getHeaderValue(req, 'content-type');
+    if (!contentType?.includes('application/json')) return undefined;
+
+    const body = await this.readBody(req, limit);
+    if (!body) return undefined;
+
+    try {
+      return JSON.parse(body);
+    } catch (err: unknown) {
+      throw new JsonBodyError(
+        'invalid-json',
+        err instanceof Error ? err.message : String(err)
+      );
+    }
+  }
+
+  private async readBody(
+    req: IncomingMessage,
+    limit: number
+  ): Promise<string | undefined> {
+    let size = 0;
+    const chunks: Buffer[] = [];
+
+    try {
+      for await (const chunk of req as AsyncIterable<
+        Buffer | Uint8Array | string
+      >) {
+        const buf = this.normalizeChunk(chunk);
+        size += buf.length;
+        if (size > limit) {
+          req.destroy();
+          throw new JsonBodyError('payload-too-large', 'Payload too large');
+        }
+        chunks.push(buf);
+      }
+    } catch (err: unknown) {
+      if (err instanceof JsonBodyError) throw err;
+      throw new JsonBodyError(
+        'read-failed',
+        err instanceof Error ? err.message : String(err)
+      );
+    }
+
+    if (chunks.length === 0) return undefined;
+    return Buffer.concat(chunks).toString();
+  }
+
+  private normalizeChunk(chunk: Buffer | Uint8Array | string): Buffer {
+    if (typeof chunk === 'string') return Buffer.from(chunk);
+    if (Buffer.isBuffer(chunk)) return chunk;
+    return Buffer.from(chunk);
+  }
+}
+
+const jsonBodyReader = new JsonBodyReader();
+
 class CorsPolicy {
-  handle(req: IncomingMessage, res: ServerResponse): boolean {
+  handle(ctx: RequestContext): boolean {
+    const { req, res } = ctx;
     const origin = getHeaderValue(req, 'origin');
+
     if (origin) {
       res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Vary', 'Origin');
     } else {
       res.setHeader('Access-Control-Allow-Origin', '*');
     }
+
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, DELETE');
     res.setHeader(
       'Access-Control-Allow-Headers',
       'Content-Type, Authorization, X-API-Key, MCP-Protocol-Version, MCP-Session-ID, X-MCP-Session-ID'
     );
 
-    if (req.method === 'OPTIONS') {
-      res.writeHead(204);
-      res.end();
-      return true;
-    }
-    return false;
+    if (req.method !== 'OPTIONS') return false;
+    sendEmpty(res, 204);
+    return true;
   }
 }
 
@@ -280,19 +315,21 @@ function buildAllowedHosts(): ReadonlySet<string> {
 const ALLOWED_HOSTS = buildAllowedHosts();
 
 class HostOriginPolicy {
-  validate(req: IncomingMessage, res: ShimResponse): boolean {
+  validate(ctx: RequestContext): boolean {
+    const { req, res } = ctx;
     const host = this.resolveHostHeader(req);
+
     if (!host) return this.reject(res, 400, 'Missing or invalid Host header');
     if (!ALLOWED_HOSTS.has(host))
       return this.reject(res, 403, 'Host not allowed');
 
     const originHeader = getHeaderValue(req, 'origin');
-    if (originHeader) {
-      const originHost = this.resolveOriginHost(originHeader);
-      if (!originHost) return this.reject(res, 403, 'Invalid Origin header');
-      if (!ALLOWED_HOSTS.has(originHost))
-        return this.reject(res, 403, 'Origin not allowed');
-    }
+    if (!originHeader) return true;
+
+    const originHost = this.resolveOriginHost(originHeader);
+    if (!originHost) return this.reject(res, 403, 'Invalid Origin header');
+    if (!ALLOWED_HOSTS.has(originHost))
+      return this.reject(res, 403, 'Origin not allowed');
 
     return true;
   }
@@ -313,8 +350,12 @@ class HostOriginPolicy {
     }
   }
 
-  private reject(res: ShimResponse, status: number, message: string): boolean {
-    res.status(status).json({ error: message });
+  private reject(
+    res: ServerResponse,
+    status: number,
+    message: string
+  ): boolean {
+    sendJson(res, status, { error: message });
     return false;
   }
 }
@@ -362,7 +403,7 @@ function isAbortError(error: unknown): boolean {
 }
 
 interface RateLimitManagerImpl {
-  check(req: ShimRequest, res: ShimResponse): boolean;
+  check(ctx: RequestContext): boolean;
   stop(): void;
 }
 
@@ -384,12 +425,7 @@ class RateLimiter implements RateLimitManagerImpl {
     void (async () => {
       try {
         for await (const getNow of interval) {
-          const now = getNow();
-          for (const [key, entry] of this.store.entries()) {
-            if (now - entry.lastAccessed > this.options.windowMs * 2) {
-              this.store.delete(key);
-            }
-          }
+          this.cleanupEntries(getNow());
         }
       } catch (err) {
         if (!isAbortError(err)) {
@@ -399,10 +435,19 @@ class RateLimiter implements RateLimitManagerImpl {
     })();
   }
 
-  check(req: ShimRequest, res: ShimResponse): boolean {
-    if (!this.options.enabled || req.method === 'OPTIONS') return true;
+  private cleanupEntries(now: number): void {
+    const maxIdle = this.options.windowMs * 2;
+    for (const [key, entry] of this.store.entries()) {
+      if (now - entry.lastAccessed > maxIdle) {
+        this.store.delete(key);
+      }
+    }
+  }
 
-    const key = req.ip ?? 'unknown';
+  check(ctx: RequestContext): boolean {
+    if (!this.options.enabled || ctx.method === 'OPTIONS') return true;
+
+    const key = ctx.ip ?? 'unknown';
     const now = Date.now();
     let entry = this.store.get(key);
 
@@ -420,8 +465,8 @@ class RateLimiter implements RateLimitManagerImpl {
 
     if (entry.count > this.options.maxRequests) {
       const retryAfter = Math.max(1, Math.ceil((entry.resetTime - now) / 1000));
-      res.setHeader('Retry-After', String(retryAfter));
-      res.status(429).json({ error: 'Rate limit exceeded', retryAfter });
+      ctx.res.setHeader('Retry-After', String(retryAfter));
+      sendJson(ctx.res, 429, { error: 'Rate limit exceeded', retryAfter });
       return false;
     }
 
@@ -442,7 +487,7 @@ function createRateLimitManagerImpl(
 const STATIC_TOKEN_TTL_SECONDS = 60 * 60 * 24;
 
 class AuthService {
-  async authenticate(req: ShimRequest): Promise<AuthInfo> {
+  async authenticate(req: IncomingMessage): Promise<AuthInfo> {
     const authHeader = getHeaderValue(req, 'authorization');
     if (!authHeader) {
       return this.authenticateWithApiKey(req);
@@ -458,7 +503,7 @@ class AuthService {
       : Promise.resolve(this.verifyStaticToken(token));
   }
 
-  private authenticateWithApiKey(req: ShimRequest): AuthInfo {
+  private authenticateWithApiKey(req: IncomingMessage): AuthInfo {
     const apiKey = getHeaderValue(req, 'x-api-key');
 
     if (apiKey && config.auth.mode === 'static') {
@@ -532,8 +577,9 @@ class AuthService {
       'content-type': 'application/x-www-form-urlencoded',
     };
 
-    if (clientId)
+    if (clientId) {
       headers.authorization = this.buildBasicAuthHeader(clientId, clientSecret);
+    }
 
     return { body, headers };
   }
@@ -551,7 +597,9 @@ class AuthService {
     });
 
     if (!response.ok) {
-      await response.body?.cancel();
+      if (response.body) {
+        await response.body.cancel();
+      }
       throw new ServerError(`Token introspection failed: ${response.status}`);
     }
 
@@ -606,13 +654,13 @@ class AuthService {
 const authService = new AuthService();
 
 function sendError(
-  res: ShimResponse,
+  res: ServerResponse,
   code: number,
   message: string,
   status = 400,
   id: JsonRpcId = null
 ): void {
-  res.status(status).json({
+  sendJson(res, status, {
     jsonrpc: '2.0',
     error: { code, message },
     id,
@@ -622,8 +670,8 @@ function sendError(
 const MCP_PROTOCOL_VERSION = '2025-11-25';
 
 function ensureMcpProtocolVersion(
-  req: ShimRequest,
-  res: ShimResponse
+  req: IncomingMessage,
+  res: ServerResponse
 ): boolean {
   const version = getHeaderValue(req, 'mcp-protocol-version');
   if (!version) {
@@ -650,16 +698,16 @@ class McpSessionGateway {
     private readonly mcpServer: McpServer
   ) {}
 
-  async handlePost(req: ShimRequest, res: ShimResponse): Promise<void> {
-    if (!ensureMcpProtocolVersion(req, res)) return;
+  async handlePost(ctx: AuthenticatedContext): Promise<void> {
+    if (!ensureMcpProtocolVersion(ctx.req, ctx.res)) return;
 
-    const { body } = req;
+    const { body } = ctx;
     if (isJsonRpcBatchRequest(body)) {
-      sendError(res, -32600, 'Batch requests not supported');
+      sendError(ctx.res, -32600, 'Batch requests not supported');
       return;
     }
     if (!isMcpRequestBody(body)) {
-      sendError(res, -32600, 'Invalid request body');
+      sendError(ctx.res, -32600, 'Invalid request body');
       return;
     }
 
@@ -667,46 +715,46 @@ class McpSessionGateway {
     logInfo('[MCP POST]', {
       method: body.method,
       id: body.id,
-      sessionId: getMcpSessionId(req),
+      sessionId: getMcpSessionId(ctx.req),
     });
 
-    const transport = await this.getOrCreateTransport(req, res, requestId);
+    const transport = await this.getOrCreateTransport(ctx, requestId);
     if (!transport) return;
 
-    await transport.handleRequest(req, res, body);
+    await transport.handleRequest(ctx.req, ctx.res, body);
   }
 
-  async handleGet(req: ShimRequest, res: ShimResponse): Promise<void> {
-    if (!ensureMcpProtocolVersion(req, res)) return;
+  async handleGet(ctx: AuthenticatedContext): Promise<void> {
+    if (!ensureMcpProtocolVersion(ctx.req, ctx.res)) return;
 
-    const sessionId = getMcpSessionId(req);
+    const sessionId = getMcpSessionId(ctx.req);
     if (!sessionId) {
-      sendError(res, -32600, 'Missing session ID');
+      sendError(ctx.res, -32600, 'Missing session ID');
       return;
     }
 
     const session = this.store.get(sessionId);
     if (!session) {
-      sendError(res, -32600, 'Session not found', 404);
+      sendError(ctx.res, -32600, 'Session not found', 404);
       return;
     }
 
-    const acceptHeader = getHeaderValue(req, 'accept');
+    const acceptHeader = getHeaderValue(ctx.req, 'accept');
     if (!acceptsEventStream(acceptHeader)) {
-      res.status(405).json({ error: 'Method Not Allowed' });
+      sendJson(ctx.res, 405, { error: 'Method Not Allowed' });
       return;
     }
 
     this.store.touch(sessionId);
-    await session.transport.handleRequest(req, res);
+    await session.transport.handleRequest(ctx.req, ctx.res);
   }
 
-  async handleDelete(req: ShimRequest, res: ShimResponse): Promise<void> {
-    if (!ensureMcpProtocolVersion(req, res)) return;
+  async handleDelete(ctx: AuthenticatedContext): Promise<void> {
+    if (!ensureMcpProtocolVersion(ctx.req, ctx.res)) return;
 
-    const sessionId = getMcpSessionId(req);
+    const sessionId = getMcpSessionId(ctx.req);
     if (!sessionId) {
-      sendError(res, -32600, 'Missing session ID');
+      sendError(ctx.res, -32600, 'Missing session ID');
       return;
     }
 
@@ -716,75 +764,65 @@ class McpSessionGateway {
       this.store.remove(sessionId);
     }
 
-    res.status(200).send('Session closed');
+    sendText(ctx.res, 200, 'Session closed');
   }
 
   private async getOrCreateTransport(
-    req: ShimRequest,
-    res: ShimResponse,
+    ctx: AuthenticatedContext,
     requestId: JsonRpcId
   ): Promise<StreamableHTTPServerTransport | null> {
-    const sessionId = getMcpSessionId(req);
+    const sessionId = getMcpSessionId(ctx.req);
 
     if (sessionId) {
-      const session = this.store.get(sessionId);
-      if (!session) {
-        sendError(res, -32600, 'Session not found', 404, requestId);
-        return null;
-      }
-      const incomingFingerprint = buildAuthFingerprint(req.auth);
-      if (
-        !incomingFingerprint ||
-        session.authFingerprint !== incomingFingerprint
-      ) {
-        sendError(res, -32600, 'Session not found', 404, requestId);
-        return null;
-      }
-      this.store.touch(sessionId);
-      return session.transport;
+      const fingerprint = buildAuthFingerprint(ctx.auth);
+      return this.getExistingTransport(
+        sessionId,
+        fingerprint,
+        ctx.res,
+        requestId
+      );
     }
 
-    if (!isInitializeRequest(req.body)) {
-      sendError(res, -32600, 'Missing session ID', 400, requestId);
+    if (!isInitializeRequest(ctx.body)) {
+      sendError(ctx.res, -32600, 'Missing session ID', 400, requestId);
       return null;
     }
 
-    return this.createNewSession(req, res, requestId);
+    return this.createNewSession(ctx, requestId);
+  }
+
+  private getExistingTransport(
+    sessionId: string,
+    authFingerprint: string | null,
+    res: ServerResponse,
+    requestId: JsonRpcId
+  ): StreamableHTTPServerTransport | null {
+    const session = this.store.get(sessionId);
+    if (!session) {
+      sendError(res, -32600, 'Session not found', 404, requestId);
+      return null;
+    }
+
+    if (!authFingerprint || session.authFingerprint !== authFingerprint) {
+      sendError(res, -32600, 'Session not found', 404, requestId);
+      return null;
+    }
+
+    this.store.touch(sessionId);
+    return session.transport;
   }
 
   private async createNewSession(
-    req: ShimRequest,
-    res: ShimResponse,
+    ctx: AuthenticatedContext,
     requestId: JsonRpcId
   ): Promise<StreamableHTTPServerTransport | null> {
-    const authFingerprint = buildAuthFingerprint(req.auth);
+    const authFingerprint = buildAuthFingerprint(ctx.auth);
     if (!authFingerprint) {
-      sendError(res, -32603, 'Missing auth context', 500, requestId);
+      sendError(ctx.res, -32603, 'Missing auth context', 500, requestId);
       return null;
     }
 
-    const allowed = ensureSessionCapacity({
-      store: this.store,
-      maxSessions: config.server.maxSessions,
-      evictOldest: (s) => {
-        const evicted = s.evictOldest();
-        if (evicted) {
-          void closeTransportBestEffort(evicted.transport, 'session-eviction');
-          return true;
-        }
-        return false;
-      },
-    });
-
-    if (!allowed) {
-      sendError(res, -32000, 'Server busy', 503, requestId);
-      return null;
-    }
-
-    if (!reserveSessionSlot(this.store, config.server.maxSessions)) {
-      sendError(res, -32000, 'Server busy', 503, requestId);
-      return null;
-    }
+    if (!this.reserveCapacity(ctx.res, requestId)) return null;
 
     const tracker = createSlotTracker(this.store);
     const transportImpl = new StreamableHTTPServerTransport({
@@ -835,6 +873,33 @@ class McpSessionGateway {
 
     return transportImpl;
   }
+
+  private reserveCapacity(res: ServerResponse, requestId: JsonRpcId): boolean {
+    const allowed = ensureSessionCapacity({
+      store: this.store,
+      maxSessions: config.server.maxSessions,
+      evictOldest: (store) => {
+        const evicted = store.evictOldest();
+        if (evicted) {
+          void closeTransportBestEffort(evicted.transport, 'session-eviction');
+          return true;
+        }
+        return false;
+      },
+    });
+
+    if (!allowed) {
+      sendError(res, -32000, 'Server busy', 503, requestId);
+      return false;
+    }
+
+    if (!reserveSessionSlot(this.store, config.server.maxSessions)) {
+      sendError(res, -32000, 'Server busy', 503, requestId);
+      return false;
+    }
+
+    return true;
+  }
 }
 
 function checkDownloadRoute(
@@ -856,48 +921,44 @@ class HttpDispatcher {
     private readonly mcpGateway: McpSessionGateway
   ) {}
 
-  async dispatch(req: ShimRequest, res: ShimResponse, url: URL): Promise<void> {
-    const { pathname: path } = url;
-    const { method } = req;
-
+  async dispatch(ctx: RequestContext): Promise<void> {
     try {
-      // /health is intentionally unauthenticated.
-      if (method === 'GET' && path === '/health') {
-        this.handleHealthCheck(res);
+      if (ctx.method === 'GET' && ctx.url.pathname === '/health') {
+        this.handleHealthCheck(ctx.res);
         return;
       }
 
-      if (!(await this.authenticateRequest(req, res))) return;
+      const auth = await this.authenticateRequest(ctx);
+      if (!auth) return;
 
-      if (method === 'GET') {
-        const download = checkDownloadRoute(path);
+      const authCtx: AuthenticatedContext = { ...ctx, auth };
+
+      if (ctx.method === 'GET') {
+        const download = checkDownloadRoute(ctx.url.pathname);
         if (download) {
-          handleDownload(res, download.namespace, download.hash);
+          handleDownload(ctx.res, download.namespace, download.hash);
           return;
         }
       }
 
-      if (path === '/mcp') {
-        if (await this.handleMcpRoutes(req, res, method)) {
-          return;
-        }
+      if (ctx.url.pathname === '/mcp') {
+        const handled = await this.handleMcpRoutes(authCtx);
+        if (handled) return;
       }
 
-      res.status(404).json({ error: 'Not Found' });
+      sendJson(ctx.res, 404, { error: 'Not Found' });
     } catch (err) {
-      logError(
-        'Request failed',
-        err instanceof Error ? err : new Error(String(err))
-      );
-      if (!res.writableEnded) {
-        res.status(500).json({ error: 'Internal Server Error' });
+      const error = err instanceof Error ? err : new Error(String(err));
+      logError('Request failed', error);
+      if (!ctx.res.writableEnded) {
+        sendJson(ctx.res, 500, { error: 'Internal Server Error' });
       }
     }
   }
 
-  private handleHealthCheck(res: ShimResponse): void {
+  private handleHealthCheck(res: ServerResponse): void {
     const poolStats = getTransformPoolStats();
-    res.status(200).json({
+    sendJson(res, 200, {
       status: 'ok',
       version: serverVersion,
       uptime: Math.floor(process.uptime()),
@@ -914,43 +975,36 @@ class HttpDispatcher {
     });
   }
 
-  private async handleMcpRoutes(
-    req: ShimRequest,
-    res: ShimResponse,
-    method: string | undefined
-  ): Promise<boolean> {
-    if (method === 'POST') {
-      await this.mcpGateway.handlePost(req, res);
-      return true;
+  private async handleMcpRoutes(ctx: AuthenticatedContext): Promise<boolean> {
+    switch (ctx.method) {
+      case 'POST':
+        await this.mcpGateway.handlePost(ctx);
+        return true;
+      case 'GET':
+        await this.mcpGateway.handleGet(ctx);
+        return true;
+      case 'DELETE':
+        await this.mcpGateway.handleDelete(ctx);
+        return true;
+      default:
+        return false;
     }
-    if (method === 'GET') {
-      await this.mcpGateway.handleGet(req, res);
-      return true;
-    }
-    if (method === 'DELETE') {
-      await this.mcpGateway.handleDelete(req, res);
-      return true;
-    }
-    return false;
   }
 
   private async authenticateRequest(
-    req: ShimRequest,
-    res: ShimResponse
-  ): Promise<boolean> {
+    ctx: RequestContext
+  ): Promise<AuthInfo | null> {
     try {
-      req.auth = await authService.authenticate(req);
-      return true;
+      return await authService.authenticate(ctx.req);
     } catch (err) {
-      res.status(401).json({
+      sendJson(ctx.res, 401, {
         error: err instanceof Error ? err.message : 'Unauthorized',
       });
-      return false;
+      return null;
     }
   }
 }
 
-// Pipeline order is behavior.
 class HttpRequestPipeline {
   constructor(
     private readonly rateLimiter: RateLimitManagerImpl,
@@ -958,44 +1012,103 @@ class HttpRequestPipeline {
   ) {}
 
   async handle(rawReq: IncomingMessage, rawRes: ServerResponse): Promise<void> {
-    const res = shimResponse(rawRes);
-    const req = rawReq as ShimRequest;
+    const ctx = buildRequestContext(rawReq, rawRes);
+    if (!ctx) return;
 
-    let url: URL;
-    try {
-      // The base is only used to resolve relative request URLs.
-      // Host/origin allowlisting is enforced later by HostOriginPolicy.
-      url = new URL(req.url ?? '', 'http://localhost');
-    } catch {
-      res.status(400).json({ error: 'Invalid request URL' });
-      return;
-    }
+    if (!hostOriginPolicy.validate(ctx)) return;
+    if (corsPolicy.handle(ctx)) return;
 
-    req.query = parseQuery(url);
-    if (req.socket.remoteAddress) req.ip = req.socket.remoteAddress;
-    req.params = {};
-
-    if (!hostOriginPolicy.validate(req, res)) return;
-    if (corsPolicy.handle(req, res)) return;
-
-    if (!this.rateLimiter.check(req, res)) {
-      req.resume();
+    if (!this.rateLimiter.check(ctx)) {
+      rawReq.resume();
       return;
     }
 
     try {
-      req.body = await jsonBodyReader.read(req);
+      ctx.body = await jsonBodyReader.read(ctx.req);
     } catch {
-      if (url.pathname === '/mcp' && req.method === 'POST') {
-        sendError(res, -32700, 'Parse error', 400, null);
+      if (ctx.url.pathname === '/mcp' && ctx.method === 'POST') {
+        sendError(ctx.res, -32700, 'Parse error', 400, null);
       } else {
-        res.status(400).json({ error: 'Invalid JSON or Payload too large' });
+        sendJson(ctx.res, 400, { error: 'Invalid JSON or Payload too large' });
       }
       return;
     }
 
-    await this.dispatcher.dispatch(req, res, url);
+    await this.dispatcher.dispatch(ctx);
   }
+}
+
+function handlePipelineError(error: unknown, res: ServerResponse): void {
+  logError(
+    'Request pipeline failed',
+    error instanceof Error ? error : new Error(String(error))
+  );
+
+  if (res.writableEnded) return;
+
+  if (!res.headersSent) {
+    sendJson(res, 500, { error: 'Internal Server Error' });
+    return;
+  }
+
+  res.end();
+}
+
+async function listen(
+  server: Server,
+  host: string,
+  port: number
+): Promise<void> {
+  await new Promise<void>((resolve, reject): void => {
+    function onError(err: Error): void {
+      server.off('error', onError);
+      reject(err);
+    }
+
+    server.once('error', onError);
+    server.listen(port, host, (): void => {
+      server.off('error', onError);
+      resolve();
+    });
+  });
+}
+
+function resolveListeningPort(server: Server, fallback: number): number {
+  const addr = server.address();
+  if (addr && typeof addr === 'object') return addr.port;
+  return fallback;
+}
+
+function createShutdownHandler(options: {
+  server: Server;
+  rateLimiter: RateLimitManagerImpl;
+  sessionCleanup: AbortController;
+  sessionStore: SessionStore;
+  mcpServer: McpServer;
+}): (signal: string) => Promise<void> {
+  return async (signal: string): Promise<void> => {
+    logInfo(`Stopping HTTP server (${signal})...`);
+
+    options.rateLimiter.stop();
+    options.sessionCleanup.abort();
+    drainConnectionsOnShutdown(options.server);
+
+    const sessions = options.sessionStore.clear();
+    await Promise.all(
+      sessions.map((session) =>
+        closeTransportBestEffort(session.transport, 'shutdown-session-close')
+      )
+    );
+
+    await new Promise<void>((resolve, reject): void => {
+      options.server.close((err): void => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
+
+    await options.mcpServer.close();
+  };
 }
 
 export async function startHttpServer(): Promise<{
@@ -1021,72 +1134,25 @@ export async function startHttpServer(): Promise<{
 
   const server = createServer((req, res) => {
     void pipeline.handle(req, res).catch((error: unknown) => {
-      logError(
-        'Request pipeline failed',
-        error instanceof Error ? error : new Error(String(error))
-      );
-      if (res.writableEnded) return;
-
-      if (!res.headersSent) {
-        res.statusCode = 500;
-        res.setHeader('Content-Type', 'application/json');
-        res.end(JSON.stringify({ error: 'Internal Server Error' }));
-        return;
-      }
-
-      res.end();
+      handlePipelineError(error, res);
     });
   });
 
   applyHttpServerTuning(server);
+  await listen(server, config.server.host, config.server.port);
 
-  await new Promise<void>((resolve, reject): void => {
-    function onError(error: Error): void {
-      server.off('error', onError);
-      reject(error);
-    }
-
-    server.once('error', onError);
-    server.listen(config.server.port, config.server.host, (): void => {
-      server.off('error', onError);
-      resolve();
-    });
-  });
-
-  const addr = server.address();
-  const port =
-    typeof addr === 'object' && addr ? addr.port : config.server.port;
-
+  const port = resolveListeningPort(server, config.server.port);
   logInfo(`HTTP server listening on port ${port}`);
 
   return {
     port,
     host: config.server.host,
-    shutdown: async (signal: string): Promise<void> => {
-      logInfo(`Stopping HTTP server (${signal})...`);
-
-      rateLimiter.stop();
-      sessionCleanup.abort();
-      drainConnectionsOnShutdown(server);
-
-      const sessions = sessionStore.clear();
-      await Promise.all(
-        sessions.map(
-          (session): Promise<void> =>
-            closeTransportBestEffort(
-              session.transport,
-              'shutdown-session-close'
-            )
-        )
-      );
-
-      await new Promise<void>((resolve, reject): void => {
-        server.close((err): void => {
-          if (err) reject(err);
-          else resolve();
-        });
-      });
-      await mcpServer.close();
-    },
+    shutdown: createShutdownHandler({
+      server,
+      rateLimiter,
+      sessionCleanup,
+      sessionStore,
+      mcpServer,
+    }),
   };
 }
