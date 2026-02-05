@@ -400,12 +400,28 @@ export function addSourceToMarkdown(content: string, url: string): string {
   );
 }
 
+function countCommonTags(content: string, limit: number): number {
+  if (limit <= 0) return 0;
+
+  const regex = REGEX.COMMON_TAGS;
+  regex.lastIndex = 0;
+
+  let count = 0;
+  while (regex.exec(content)) {
+    count += 1;
+    if (count > limit) break;
+  }
+
+  regex.lastIndex = 0;
+  return count;
+}
+
 export function isRawTextContent(content: string): boolean {
   const trimmed = content.trim();
   if (REGEX.HTML_DOC_START.test(trimmed)) return false;
 
   const hasFm = Frontmatter.detect(trimmed) !== null;
-  const tagCount = Array.from(content.matchAll(REGEX.COMMON_TAGS)).length;
+  const tagCount = countCommonTags(content, 2);
 
   if (hasFm) return true;
   if (tagCount > 2) return false;
@@ -421,7 +437,7 @@ export function isLikelyHtmlContent(content: string): boolean {
   const trimmed = content.trim();
   if (!trimmed) return false;
   if (REGEX.HTML_DOC_START.test(trimmed)) return true;
-  const tagCount = Array.from(content.matchAll(REGEX.COMMON_TAGS)).length;
+  const tagCount = countCommonTags(content, 2);
   return tagCount > 2;
 }
 

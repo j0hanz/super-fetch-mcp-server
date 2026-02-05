@@ -178,7 +178,20 @@ class TaskManager {
     if (!task) return undefined;
     if (isTerminalStatus(task.status)) return task;
 
+    const createdAtMs = Date.parse(task.createdAt);
+    const deadlineMs = Number.isFinite(createdAtMs)
+      ? createdAtMs + task.ttl
+      : Number.NaN;
+
+    if (Number.isFinite(deadlineMs) && deadlineMs <= Date.now()) {
+      this.tasks.delete(taskId);
+      return undefined;
+    }
+
     return new Promise((resolve, reject) => {
+      let timeoutId: NodeJS.Timeout | undefined;
+      let waiter: ((updated: TaskState) => void) | null = null;
+
       const onAbort = (): void => {
         cleanup();
         removeWaiter();
@@ -188,6 +201,7 @@ class TaskManager {
       };
 
       const cleanup = (): void => {
+        if (timeoutId) clearTimeout(timeoutId);
         if (signal) {
           signal.removeEventListener('abort', onAbort);
         }
@@ -196,11 +210,11 @@ class TaskManager {
       const removeWaiter = (): void => {
         const waiters = this.waiters.get(taskId);
         if (!waiters) return;
-        waiters.delete(waiter);
+        if (waiter) waiters.delete(waiter);
         if (waiters.size === 0) this.waiters.delete(taskId);
       };
 
-      const waiter = (updated: TaskState): void => {
+      waiter = (updated: TaskState): void => {
         cleanup();
         resolve(updated);
       };
@@ -216,6 +230,25 @@ class TaskManager {
 
       if (signal) {
         signal.addEventListener('abort', onAbort, { once: true });
+      }
+
+      if (Number.isFinite(deadlineMs)) {
+        const timeoutMs = Math.max(0, deadlineMs - Date.now());
+        if (timeoutMs === 0) {
+          cleanup();
+          removeWaiter();
+          this.tasks.delete(taskId);
+          resolve(undefined);
+          return;
+        }
+
+        timeoutId = setTimeout(() => {
+          cleanup();
+          removeWaiter();
+          this.tasks.delete(taskId);
+          resolve(undefined);
+        }, timeoutMs);
+        timeoutId.unref();
       }
     });
   }

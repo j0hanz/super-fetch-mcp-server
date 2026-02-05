@@ -14,25 +14,29 @@ function processValue(
     throw new Error(`stableStringify: Max depth (${MAX_DEPTH}) exceeded`);
   }
 
-  // Cycle detection
+  // Cycle detection (track active recursion stack only).
   if (seen.has(obj)) {
     throw new Error('stableStringify: Circular reference detected');
   }
   seen.add(obj);
 
-  if (Array.isArray(obj)) {
-    return obj.map((item) => processValue(item, depth + 1, seen));
+  try {
+    if (Array.isArray(obj)) {
+      return obj.map((item) => processValue(item, depth + 1, seen));
+    }
+
+    const keys = Object.keys(obj).sort((a, b) => a.localeCompare(b));
+    const record = obj as Record<string, unknown>;
+    const sortedObj: Record<string, unknown> = {};
+
+    for (const key of keys) {
+      sortedObj[key] = processValue(record[key], depth + 1, seen);
+    }
+
+    return sortedObj;
+  } finally {
+    seen.delete(obj);
   }
-
-  const keys = Object.keys(obj).sort((a, b) => a.localeCompare(b));
-  const record = obj as Record<string, unknown>;
-  const sortedObj: Record<string, unknown> = {};
-
-  for (const key of keys) {
-    sortedObj[key] = processValue(record[key], depth + 1, seen);
-  }
-
-  return sortedObj;
 }
 
 export function stableStringify(
