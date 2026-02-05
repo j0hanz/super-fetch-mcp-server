@@ -973,25 +973,29 @@ function countCodeBlocksDom(htmlOrDocument: string | Document): number {
   return countDomSelector(htmlOrDocument, 'pre');
 }
 
-function stripNonVisibleNodes(doc: Document): void {
-  for (const el of doc.querySelectorAll('script,style,noscript')) el.remove();
+function stripNonVisibleNodes(root: ParentNode): void {
+  for (const el of root.querySelectorAll('script,style,noscript')) {
+    el.remove();
+  }
 }
 
-function resolveDocumentText(doc: Document): string {
-  const body = doc.body as HTMLElement | null;
-  const docElement = doc.documentElement as HTMLElement | null;
-  return body?.textContent ?? docElement?.textContent ?? '';
+function resolveNodeText(node: Node): string {
+  return node.textContent ?? '';
 }
 
 function getVisibleTextLength(htmlOrDocument: string | Document): number {
   const doc = resolveHtmlDocument(htmlOrDocument);
-  const workDoc =
-    typeof htmlOrDocument === 'string'
-      ? doc
-      : (doc.cloneNode(true) as Document);
+  const root = doc.body;
 
-  stripNonVisibleNodes(workDoc);
-  const text = resolveDocumentText(workDoc);
+  if (typeof htmlOrDocument === 'string') {
+    stripNonVisibleNodes(root);
+    const text = resolveNodeText(root);
+    return text.replace(/\s+/g, ' ').trim().length;
+  }
+
+  const workRoot = root.cloneNode(true) as HTMLElement;
+  stripNonVisibleNodes(workRoot);
+  const text = resolveNodeText(workRoot);
 
   return text.replace(/\s+/g, ' ').trim().length;
 }
@@ -1214,7 +1218,7 @@ function buildContentSource(params: {
   }
 
   if (document) {
-    removeNoiseFromHtml(html, document, url);
+    const cleanedHtml = removeNoiseFromHtml(html, document, url);
 
     const contentRoot = findContentRoot(document);
     if (contentRoot) {
@@ -1226,13 +1230,20 @@ function buildContentSource(params: {
         document,
       };
     }
+
+    return {
+      sourceHtml: cleanedHtml,
+      title: extractedMeta.title,
+      metadata,
+      skipNoiseRemoval: true,
+      document,
+    };
   }
 
   return {
     sourceHtml: html,
     title: extractedMeta.title,
     metadata,
-    ...(document ? { document } : {}),
   };
 }
 

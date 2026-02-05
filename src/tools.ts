@@ -841,7 +841,7 @@ async function fetchPipeline(
     ...(signal === undefined ? {} : { signal }),
     transform: async (html, normalizedUrl) => {
       if (progress) {
-        await progress.report(3, 'Transforming content');
+        void progress.report(3, 'Transforming content');
       }
       return markdownTransform(html, normalizedUrl, signal);
     },
@@ -872,23 +872,23 @@ async function executeFetch(
 
   const progress = createProgressReporter(extra);
 
-  await progress.report(1, 'Validating URL');
+  void progress.report(1, 'Validating URL');
 
   logDebug('Fetching URL', { url });
 
-  await progress.report(2, 'Fetching content');
+  void progress.report(2, 'Fetching content');
 
   const { pipeline, inlineResult } = await fetchPipeline(url, signal, progress);
 
   if (pipeline.fromCache) {
-    await progress.report(3, 'Using cached content');
+    void progress.report(3, 'Using cached content');
   }
 
   if (inlineResult.error) {
     return createToolErrorResponse(inlineResult.error, url);
   }
 
-  await progress.report(4, 'Finalizing response');
+  void progress.report(4, 'Finalizing response');
 
   return buildResponse(pipeline, inlineResult, url);
 }
