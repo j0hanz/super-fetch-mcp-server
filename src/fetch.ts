@@ -1063,6 +1063,16 @@ function assertContentLengthWithinLimit(
   throw createSizeLimitFetchError(url, maxBytes);
 }
 
+function createDecoder(encoding: string | undefined): TextDecoder {
+  if (!encoding) return new TextDecoder('utf-8');
+
+  try {
+    return new TextDecoder(encoding);
+  } catch {
+    return new TextDecoder('utf-8');
+  }
+}
+
 class ResponseTextReader {
   async read(
     response: Response,
@@ -1086,7 +1096,7 @@ class ResponseTextReader {
         throw createSizeLimitFetchError(url, maxBytes);
       }
 
-      const decoder = new TextDecoder(encoding ?? 'utf-8');
+      const decoder = createDecoder(encoding);
       const text = decoder.decode(buffer);
       return { text, size: buffer.byteLength };
     }
@@ -1116,7 +1126,7 @@ class ResponseTextReader {
     signal?: AbortSignal,
     encoding?: string
   ): Promise<{ text: string; size: number }> {
-    const decoder = new TextDecoder(encoding ?? 'utf-8');
+    const decoder = createDecoder(encoding);
     const parts: string[] = [];
     let total = 0;
 
@@ -1215,6 +1225,29 @@ function resolveResponseError(
     : createHttpFetchError(finalUrl, response.status, response.statusText);
 }
 
+function resolveMediaType(contentType: string | null): string | null {
+  if (!contentType) return null;
+  const [mediaType] = contentType.split(';', 1);
+  const trimmed = mediaType?.trim();
+  return trimmed ? trimmed.toLowerCase() : null;
+}
+
+function assertSupportedContentType(
+  contentType: string | null,
+  url: string
+): void {
+  const mediaType = resolveMediaType(contentType);
+  if (!mediaType) return;
+
+  if (mediaType.startsWith('image/')) {
+    throw new FetchError(`Unsupported content type: ${mediaType}`, url);
+  }
+
+  if (mediaType === 'application/pdf') {
+    throw new FetchError(`Unsupported content type: ${mediaType}`, url);
+  }
+}
+
 async function handleFetchResponse(
   response: Response,
   finalUrl: string,
@@ -1231,6 +1264,7 @@ async function handleFetchResponse(
   }
 
   const contentType = response.headers.get('content-type');
+  assertSupportedContentType(contentType, finalUrl);
   const encoding = getCharsetFromContentType(contentType ?? null);
 
   const { text, size } = await reader.read(

@@ -4,7 +4,7 @@ import { describe, it } from 'node:test';
 import { FetchError } from '../dist/errors.js';
 import { readResponseText } from '../dist/fetch.js';
 
-function createStreamResponse(text) {
+function createStreamResponse(text: string) {
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     start(controller) {
@@ -121,6 +121,26 @@ describe('readResponseText', () => {
     });
 
     const result = await readResponseText(response, 'https://example.com', 10);
+
+    // \ufffd is the replacement character
+    assert.equal(result.text, '\ufffd');
+  });
+
+  it('falls back to UTF-8 when an invalid encoding label is provided', async () => {
+    // 0xE9 is invalid in UTF-8 start byte
+    const buffer = new Uint8Array([0xe9]);
+    const response = new Response(buffer, {
+      status: 200,
+      headers: { 'content-length': '1' },
+    });
+
+    const result = await readResponseText(
+      response,
+      'https://example.com',
+      10,
+      undefined,
+      'unknown-charset'
+    );
 
     // \ufffd is the replacement character
     assert.equal(result.text, '\ufffd');

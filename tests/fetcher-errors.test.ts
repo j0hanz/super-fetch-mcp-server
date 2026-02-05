@@ -78,6 +78,30 @@ test('fetchNormalizedUrl maps network failures to FetchError', async () => {
   );
 });
 
+test('fetchNormalizedUrl rejects unsupported content types', async () => {
+  await withMockedFetch(
+    async () => {
+      return new Response(new Uint8Array([1, 2, 3]), {
+        status: 200,
+        headers: {
+          'content-type': 'image/png',
+          'content-length': '3',
+        },
+      });
+    },
+    async () => {
+      await assert.rejects(
+        () => fetchNormalizedUrl('https://example.com'),
+        (error: unknown) => {
+          assert.ok(error instanceof FetchError);
+          assert.equal(error.message, 'Unsupported content type: image/png');
+          return true;
+        }
+      );
+    }
+  );
+});
+
 test('fetchNormalizedUrl aborts during DNS preflight', async () => {
   const controller = new AbortController();
   controller.abort();
