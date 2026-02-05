@@ -83,45 +83,58 @@ const IPV6_FC00 = buildIpv6(['fc00', 0, 0, 0, 0, 0, 0, 0]);
 const IPV6_FE80 = buildIpv6(['fe80', 0, 0, 0, 0, 0, 0, 0]);
 const IPV6_FF00 = buildIpv6(['ff00', 0, 0, 0, 0, 0, 0, 0]);
 
-const BLOCKED_IPV4_SUBNETS: readonly { subnet: string; prefix: number }[] = [
-  { subnet: buildIpv4([0, 0, 0, 0]), prefix: 8 },
-  { subnet: buildIpv4([10, 0, 0, 0]), prefix: 8 },
-  { subnet: buildIpv4([100, 64, 0, 0]), prefix: 10 },
-  { subnet: buildIpv4([127, 0, 0, 0]), prefix: 8 },
-  { subnet: buildIpv4([169, 254, 0, 0]), prefix: 16 },
-  { subnet: buildIpv4([172, 16, 0, 0]), prefix: 12 },
-  { subnet: buildIpv4([192, 168, 0, 0]), prefix: 16 },
-  { subnet: buildIpv4([224, 0, 0, 0]), prefix: 4 },
-  { subnet: buildIpv4([240, 0, 0, 0]), prefix: 4 },
+type BlockedSubnet = Readonly<{
+  subnet: string;
+  prefix: number;
+  family: 'ipv4' | 'ipv6';
+}>;
+
+const BLOCKED_SUBNETS: readonly BlockedSubnet[] = [
+  { subnet: buildIpv4([0, 0, 0, 0]), prefix: 8, family: 'ipv4' },
+  { subnet: buildIpv4([10, 0, 0, 0]), prefix: 8, family: 'ipv4' },
+  { subnet: buildIpv4([100, 64, 0, 0]), prefix: 10, family: 'ipv4' },
+  { subnet: buildIpv4([127, 0, 0, 0]), prefix: 8, family: 'ipv4' },
+  { subnet: buildIpv4([169, 254, 0, 0]), prefix: 16, family: 'ipv4' },
+  { subnet: buildIpv4([172, 16, 0, 0]), prefix: 12, family: 'ipv4' },
+  { subnet: buildIpv4([192, 168, 0, 0]), prefix: 16, family: 'ipv4' },
+  { subnet: buildIpv4([224, 0, 0, 0]), prefix: 4, family: 'ipv4' },
+  { subnet: buildIpv4([240, 0, 0, 0]), prefix: 4, family: 'ipv4' },
+  { subnet: IPV6_ZERO, prefix: 128, family: 'ipv6' },
+  { subnet: IPV6_LOOPBACK, prefix: 128, family: 'ipv6' },
+  { subnet: IPV6_64_FF9B, prefix: 96, family: 'ipv6' },
+  { subnet: IPV6_64_FF9B_1, prefix: 48, family: 'ipv6' },
+  { subnet: IPV6_2001, prefix: 32, family: 'ipv6' },
+  { subnet: IPV6_2002, prefix: 16, family: 'ipv6' },
+  { subnet: IPV6_FC00, prefix: 7, family: 'ipv6' },
+  { subnet: IPV6_FE80, prefix: 10, family: 'ipv6' },
+  { subnet: IPV6_FF00, prefix: 8, family: 'ipv6' },
 ];
 
-const BLOCKED_IPV6_SUBNETS: readonly { subnet: string; prefix: number }[] = [
-  { subnet: IPV6_ZERO, prefix: 128 },
-  { subnet: IPV6_LOOPBACK, prefix: 128 },
-  { subnet: IPV6_64_FF9B, prefix: 96 },
-  { subnet: IPV6_64_FF9B_1, prefix: 48 },
-  { subnet: IPV6_2001, prefix: 32 },
-  { subnet: IPV6_2002, prefix: 16 },
-  { subnet: IPV6_FC00, prefix: 7 },
-  { subnet: IPV6_FE80, prefix: 10 },
-  { subnet: IPV6_FF00, prefix: 8 },
-];
+function createSubnetBlockList(subnets: readonly BlockedSubnet[]): BlockList {
+  const list = new BlockList();
+  for (const entry of subnets) {
+    list.addSubnet(entry.subnet, entry.prefix, entry.family);
+  }
+  return list;
+}
 
 type SecurityConfig = typeof config.security;
 
 class IpBlocker {
-  private cachedBlockList: BlockList | undefined;
+  private readonly blockList: BlockList;
 
-  constructor(private readonly security: SecurityConfig) {}
+  constructor(private readonly security: SecurityConfig) {
+    this.blockList = createSubnetBlockList(BLOCKED_SUBNETS);
+  }
 
   isBlockedIp(candidate: string): boolean {
     if (this.security.blockedHosts.has(candidate)) return true;
 
-    const ipType = this.resolveIpType(candidate);
-    if (!ipType) return false;
+    const ipType = isIP(candidate);
+    if (ipType !== 4 && ipType !== 6) return false;
 
     const normalized = candidate.toLowerCase();
-    if (this.isBlockedBySubnetList(normalized, ipType)) return true;
+    if (this.isBlockedBySubnet(normalized, ipType)) return true;
 
     return (
       this.security.blockedIpPattern.test(normalized) ||
@@ -129,29 +142,9 @@ class IpBlocker {
     );
   }
 
-  private resolveIpType(ip: string): 4 | 6 | null {
-    const ipType = isIP(ip);
-    return ipType === 4 || ipType === 6 ? ipType : null;
-  }
-
-  private isBlockedBySubnetList(ip: string, ipType: 4 | 6): boolean {
-    const list = this.getBlockList();
-    return ipType === 4 ? list.check(ip, 'ipv4') : list.check(ip, 'ipv6');
-  }
-
-  private getBlockList(): BlockList {
-    if (this.cachedBlockList) return this.cachedBlockList;
-
-    const list = new BlockList();
-    for (const entry of BLOCKED_IPV4_SUBNETS) {
-      list.addSubnet(entry.subnet, entry.prefix, 'ipv4');
-    }
-    for (const entry of BLOCKED_IPV6_SUBNETS) {
-      list.addSubnet(entry.subnet, entry.prefix, 'ipv6');
-    }
-
-    this.cachedBlockList = list;
-    return list;
+  private isBlockedBySubnet(ip: string, ipType: 4 | 6): boolean {
+    const family = ipType === 4 ? 'ipv4' : 'ipv6';
+    return this.blockList.check(ip, family);
   }
 }
 
@@ -279,15 +272,19 @@ interface TransformRule {
   readonly transform: (match: RegExpExecArray) => string;
 }
 
+function getMatchGroup(match: RegExpExecArray, index: number): string {
+  return match[index] ?? '';
+}
+
 const GITHUB_BLOB_RULE: TransformRule = {
   name: 'github',
   pattern:
     /^https?:\/\/(?:www\.)?github\.com\/([^/]+)\/([^/]+)\/blob\/([^/]+)\/(.+)$/i,
   transform: (match) => {
-    const owner = match[1] ?? '';
-    const repo = match[2] ?? '';
-    const branch = match[3] ?? '';
-    const path = match[4] ?? '';
+    const owner = getMatchGroup(match, 1);
+    const repo = getMatchGroup(match, 2);
+    const branch = getMatchGroup(match, 3);
+    const path = getMatchGroup(match, 4);
     return `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${path}`;
   },
 };
@@ -297,8 +294,8 @@ const GITHUB_GIST_RULE: TransformRule = {
   pattern:
     /^https?:\/\/gist\.github\.com\/([^/]+)\/([a-f0-9]+)(?:#file-(.+)|\/raw\/([^/]+))?$/i,
   transform: (match) => {
-    const user = match[1] ?? '';
-    const gistId = match[2] ?? '';
+    const user = getMatchGroup(match, 1);
+    const gistId = getMatchGroup(match, 2);
     const hashFile = match[3];
     const rawFile = match[4];
     const filename = rawFile ?? hashFile?.replace(/-/g, '.');
@@ -312,9 +309,9 @@ const GITLAB_BLOB_RULE: TransformRule = {
   pattern:
     /^(https?:\/\/(?:[^/]+\.)?gitlab\.com\/[^/]+\/[^/]+)\/-\/blob\/([^/]+)\/(.+)$/i,
   transform: (match) => {
-    const baseUrl = match[1] ?? '';
-    const branch = match[2] ?? '';
-    const path = match[3] ?? '';
+    const baseUrl = getMatchGroup(match, 1);
+    const branch = getMatchGroup(match, 2);
+    const path = getMatchGroup(match, 3);
     return `${baseUrl}/-/raw/${branch}/${path}`;
   },
 };
@@ -324,9 +321,9 @@ const BITBUCKET_SRC_RULE: TransformRule = {
   pattern:
     /^(https?:\/\/(?:www\.)?bitbucket\.org\/[^/]+\/[^/]+)\/src\/([^/]+)\/(.+)$/i,
   transform: (match) => {
-    const baseUrl = match[1] ?? '';
-    const branch = match[2] ?? '';
-    const path = match[3] ?? '';
+    const baseUrl = getMatchGroup(match, 1);
+    const branch = getMatchGroup(match, 2);
+    const path = getMatchGroup(match, 3);
     return `${baseUrl}/raw/${branch}/${path}`;
   },
 };
@@ -429,6 +426,48 @@ class RawUrlTransformer {
 
 const DNS_LOOKUP_TIMEOUT_MS = 5000;
 
+interface AbortRace {
+  abortPromise: Promise<never> | null;
+  cleanup: () => void;
+}
+
+function createAbortRace(
+  signal: AbortSignal | undefined,
+  onAbort: () => Error
+): AbortRace {
+  if (!signal) {
+    return { abortPromise: null, cleanup: () => {} };
+  }
+
+  if (signal.aborted) {
+    return {
+      abortPromise: Promise.reject(onAbort()),
+      cleanup: () => {},
+    };
+  }
+
+  let abortListener: (() => void) | null = null;
+
+  const abortPromise = new Promise<never>((_, reject) => {
+    abortListener = () => {
+      reject(onAbort());
+    };
+    signal.addEventListener('abort', abortListener, { once: true });
+  });
+
+  const cleanup = (): void => {
+    if (!abortListener) return;
+    try {
+      signal.removeEventListener('abort', abortListener);
+    } catch {
+      // Best-effort cleanup.
+    }
+    abortListener = null;
+  };
+
+  return { abortPromise, cleanup };
+}
+
 async function withTimeout<T>(
   promise: Promise<T>,
   timeoutMs: number,
@@ -437,7 +476,6 @@ async function withTimeout<T>(
   onAbort?: () => Error
 ): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
-  let abortListener: (() => void) | undefined;
 
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
@@ -446,33 +484,20 @@ async function withTimeout<T>(
     timer.unref();
   });
 
-  const abortPromise = signal
-    ? new Promise<never>((_, reject) => {
-        if (signal.aborted) {
-          reject(onAbort ? onAbort() : new Error('Request was canceled'));
-          return;
-        }
-
-        abortListener = () => {
-          reject(onAbort ? onAbort() : new Error('Request was canceled'));
-        };
-        signal.addEventListener('abort', abortListener, { once: true });
-      })
-    : null;
+  const abortRace = createAbortRace(
+    signal,
+    onAbort ?? (() => new Error('Request was canceled'))
+  );
 
   try {
     return await Promise.race(
-      abortPromise ? [promise, timeout, abortPromise] : [promise, timeout]
+      abortRace.abortPromise
+        ? [promise, timeout, abortRace.abortPromise]
+        : [promise, timeout]
     );
   } finally {
     if (timer) clearTimeout(timer);
-    if (abortListener && signal) {
-      try {
-        signal.removeEventListener('abort', abortListener);
-      } catch {
-        // Best-effort cleanup.
-      }
-    }
+    abortRace.cleanup();
   }
 }
 
@@ -836,12 +861,19 @@ class FetchTelemetry {
       ...withContextIds(context),
     });
 
-    const log =
-      status === 429
-        ? this.logger.warn.bind(this.logger)
-        : this.logger.error.bind(this.logger);
+    if (status === 429) {
+      this.logger.warn('HTTP Request Error', {
+        requestId: context.requestId,
+        url: context.url,
+        status,
+        code,
+        error: err.message,
+        ...withContextIds(context),
+      });
+      return;
+    }
 
-    log('HTTP Request Error', {
+    this.logger.error('HTTP Request Error', {
       requestId: context.requestId,
       url: context.url,
       status,
@@ -1042,46 +1074,6 @@ class ResponseTextReader {
     return this.readStreamWithLimit(response.body, url, maxBytes, signal);
   }
 
-  private createAbortRace(
-    signal: AbortSignal | undefined,
-    url: string
-  ): {
-    abortPromise: Promise<never> | null;
-    cleanup: () => void;
-  } {
-    if (!signal) {
-      return { abortPromise: null, cleanup: () => {} };
-    }
-
-    if (signal.aborted) {
-      return {
-        abortPromise: Promise.reject(createAbortedFetchError(url)),
-        cleanup: () => {},
-      };
-    }
-
-    let onAbort: (() => void) | null = null;
-
-    const abortPromise = new Promise<never>((_, reject) => {
-      onAbort = () => {
-        reject(createAbortedFetchError(url));
-      };
-      signal.addEventListener('abort', onAbort, { once: true });
-    });
-
-    const cleanup = (): void => {
-      if (!onAbort) return;
-      try {
-        signal.removeEventListener('abort', onAbort);
-      } catch {
-        // Best-effort cleanup.
-      }
-      onAbort = null;
-    };
-
-    return { abortPromise, cleanup };
-  }
-
   private async readNext(
     reader: ReadableStreamDefaultReader<Uint8Array>,
     abortPromise: Promise<never> | null
@@ -1102,7 +1094,9 @@ class ResponseTextReader {
     let total = 0;
 
     const reader = stream.getReader();
-    const abortRace = this.createAbortRace(signal, url);
+    const abortRace = createAbortRace(signal, () =>
+      createAbortedFetchError(url)
+    );
 
     try {
       let result = await this.readNext(reader, abortRace.abortPromise);
@@ -1303,17 +1297,21 @@ const telemetry = new FetchTelemetry(
   defaultContext,
   defaultRedactor
 );
+const normalizeRedirectUrl = (url: string): string =>
+  urlNormalizer.validateAndNormalize(url);
+const dnsPreflight = createDnsPreflight(dnsResolver);
 
 // Legacy redirect follower (no per-hop DNS preflight).
-const redirectFollower = new RedirectFollower(defaultFetch, (u) =>
-  urlNormalizer.validateAndNormalize(u)
+const redirectFollower = new RedirectFollower(
+  defaultFetch,
+  normalizeRedirectUrl
 );
 
 // Redirect follower with per-hop DNS preflight.
 const secureRedirectFollower = new RedirectFollower(
   defaultFetch,
-  (u) => urlNormalizer.validateAndNormalize(u),
-  createDnsPreflight(dnsResolver)
+  normalizeRedirectUrl,
+  dnsPreflight
 );
 
 const responseReader = new ResponseTextReader();
