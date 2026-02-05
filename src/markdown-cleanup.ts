@@ -15,7 +15,6 @@ const REGEX = {
   TOC_HEADING: /^(?:#{1,6}\s+)?(?:table of contents|contents)\s*$/i,
 
   HTML_DOC_START: /^(<!doctype|<html)/i,
-  COMMON_TAGS: /<(html|head|body|div|span|script|style|meta|link)\b/gi,
   ZERO_WIDTH_ANCHOR: /\[(?:\s|\u200B)*\]\(#[^)]*\)[ \t]*/g,
   SKIP_LINKS: /^\[Skip to (?:main )?(?:content|navigation)\]\(#[^)]*\)\s*$/gim,
   SKIP_LINK_SIMPLE: /^\[Skip link\]\(#[^)]*\)\s*$/gim,
@@ -27,6 +26,16 @@ const REGEX = {
 
   DOUBLE_NEWLINE_REDUCER: /\n{3,}/g,
 } as const;
+
+// Detect line ending style to preserve original formatting
+function getLineEnding(content: string): '\n' | '\r\n' {
+  return content.includes('\r\n') ? '\r\n' : '\n';
+}
+
+// Create fresh regex to avoid shared lastIndex state across calls
+function createCommonTagsRegex(): RegExp {
+  return /<(html|head|body|div|span|script|style|meta|link)\b/gi;
+}
 
 const HEADING_KEYWORDS = new Set([
   'overview',
@@ -284,7 +293,7 @@ const CLEANUP_PIPELINE = [
 
 const Frontmatter = {
   detect(content: string): FrontmatterData | null {
-    const lineEnding = content.includes('\r\n') ? '\r\n' : '\n';
+    const lineEnding = getLineEnding(content);
     if (!content.startsWith(`---${lineEnding}`)) return null;
 
     const endIndex = content.indexOf(`---${lineEnding}`, 3);
@@ -378,7 +387,7 @@ export function addSourceToMarkdown(content: string, url: string): string {
   const useMarkdownFormat = config.transform.metadataFormat === 'markdown';
 
   const injectBody = (): string => {
-    const lineEnding = content.includes('\r\n') ? '\r\n' : '\n';
+    const lineEnding = getLineEnding(content);
     const lines = content.split(lineEnding);
 
     const idx = lines.findIndex((l) => l.trim().length > 0);
@@ -397,14 +406,16 @@ export function addSourceToMarkdown(content: string, url: string): string {
   }
 
   if (!fm) {
-    const lineEnding = content.includes('\r\n') ? '\r\n' : '\n';
-    return `---${lineEnding}source: "${url}"${lineEnding}---${lineEnding}${lineEnding}${content}`;
+    const lineEnding = getLineEnding(content);
+    const escapedUrl = url.replace(/"/g, '\\"');
+    return `---${lineEnding}source: "${escapedUrl}"${lineEnding}---${lineEnding}${lineEnding}${content}`;
   }
 
   const fmBody = content.slice(fm.fence.length, fm.endIndex - fm.fence.length);
   if (/^source:\s/im.test(fmBody)) return content;
 
-  const injection = `source: "${url}"${fm.lineEnding}`;
+  const escapedUrl = url.replace(/"/g, '\\"');
+  const injection = `source: "${escapedUrl}"${fm.lineEnding}`;
   const closeFenceIndex = content.indexOf(`---${fm.lineEnding}`, 3);
 
   return (
@@ -417,16 +428,12 @@ export function addSourceToMarkdown(content: string, url: string): string {
 function countCommonTags(content: string, limit: number): number {
   if (limit <= 0) return 0;
 
-  const regex = REGEX.COMMON_TAGS;
-  regex.lastIndex = 0;
-
+  const regex = createCommonTagsRegex();
   let count = 0;
   while (regex.exec(content)) {
     count += 1;
     if (count > limit) break;
   }
-
-  regex.lastIndex = 0;
   return count;
 }
 

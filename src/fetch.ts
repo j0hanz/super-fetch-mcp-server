@@ -543,59 +543,68 @@ function parseRetryAfter(header: string | null): number {
   return Math.ceil(deltaMs / 1000);
 }
 
-class FetchErrorFactory {
-  canceled(url: string): FetchError {
-    return new FetchError('Request was canceled', url, 499, {
-      reason: 'aborted',
-    });
-  }
-
-  timeout(url: string, timeoutMs: number): FetchError {
-    return new FetchError(`Request timeout after ${timeoutMs}ms`, url, 504, {
-      timeout: timeoutMs,
-    });
-  }
-
-  rateLimited(url: string, retryAfterHeader: string | null): FetchError {
-    return new FetchError('Too many requests', url, 429, {
-      retryAfter: parseRetryAfter(retryAfterHeader),
-    });
-  }
-
-  http(url: string, status: number, statusText: string): FetchError {
-    return new FetchError(`HTTP ${status}: ${statusText}`, url, status);
-  }
-
-  tooManyRedirects(url: string): FetchError {
-    return new FetchError('Too many redirects', url);
-  }
-
-  missingRedirectLocation(url: string): FetchError {
-    return new FetchError('Redirect response missing Location header', url);
-  }
-
-  sizeLimit(url: string, maxBytes: number): FetchError {
-    return new FetchError(
-      `Response exceeds maximum size of ${maxBytes} bytes`,
-      url
-    );
-  }
-
-  network(url: string, message?: string): FetchError {
-    return new FetchError(
-      `Network error: Could not reach ${url}`,
-      url,
-      undefined,
-      message ? { message } : {}
-    );
-  }
-
-  unknown(url: string, message: string): FetchError {
-    return new FetchError(message, url);
-  }
+function createCanceledFetchError(url: string): FetchError {
+  return new FetchError('Request was canceled', url, 499, {
+    reason: 'aborted',
+  });
 }
 
-const fetchErrors = new FetchErrorFactory();
+function createTimeoutFetchError(url: string, timeoutMs: number): FetchError {
+  return new FetchError(`Request timeout after ${timeoutMs}ms`, url, 504, {
+    timeout: timeoutMs,
+  });
+}
+
+function createRateLimitedFetchError(
+  url: string,
+  retryAfterHeader: string | null
+): FetchError {
+  return new FetchError('Too many requests', url, 429, {
+    retryAfter: parseRetryAfter(retryAfterHeader),
+  });
+}
+
+function createHttpFetchError(
+  url: string,
+  status: number,
+  statusText: string
+): FetchError {
+  return new FetchError(`HTTP ${status}: ${statusText}`, url, status);
+}
+
+function createTooManyRedirectsFetchError(url: string): FetchError {
+  return new FetchError('Too many redirects', url);
+}
+
+function createMissingRedirectLocationFetchError(url: string): FetchError {
+  return new FetchError('Redirect response missing Location header', url);
+}
+
+function createSizeLimitFetchError(url: string, maxBytes: number): FetchError {
+  return new FetchError(
+    `Response exceeds maximum size of ${maxBytes} bytes`,
+    url
+  );
+}
+
+function createNetworkFetchError(url: string, message?: string): FetchError {
+  return new FetchError(
+    `Network error: Could not reach ${url}`,
+    url,
+    undefined,
+    message ? { message } : {}
+  );
+}
+
+function createUnknownFetchError(url: string, message: string): FetchError {
+  return new FetchError(message, url);
+}
+
+function createAbortedFetchError(url: string): FetchError {
+  return new FetchError('Request was aborted during response read', url, 499, {
+    reason: 'aborted',
+  });
+}
 
 function isAbortError(error: unknown): boolean {
   return (
@@ -627,44 +636,40 @@ function mapFetchError(
 
   if (isAbortError(error)) {
     return isTimeoutError(error)
-      ? fetchErrors.timeout(url, timeoutMs)
-      : fetchErrors.canceled(url);
+      ? createTimeoutFetchError(url, timeoutMs)
+      : createCanceledFetchError(url);
   }
 
-  // Keep explicit validation/preflight failures.
-  if (error instanceof Error && isSystemError(error)) {
-    const { code } = error;
+  if (!(error instanceof Error))
+    return createUnknownFetchError(url, 'Unexpected error');
 
-    // DNS ETIMEOUT maps to gateway timeout.
-    if (code === 'ETIMEOUT') {
-      return new FetchError(error.message, url, 504, { code });
-    }
+  if (!isSystemError(error)) return createNetworkFetchError(url, error.message);
 
-    // Policy/SSRF blocks should stay clear.
-    if (
-      code === VALIDATION_ERROR_CODE ||
-      code === 'EBADREDIRECT' ||
-      code === 'EBLOCKED' ||
-      code === 'ENODATA' ||
-      code === 'EINVAL'
-    ) {
-      return new FetchError(error.message, url, 400, { code });
-    }
+  const { code } = error;
 
-    // Other failures are transport errors; include the code.
-    return new FetchError(
-      `Network error: Could not reach ${url}`,
-      url,
-      undefined,
-      {
-        code,
-        message: error.message,
-      }
-    );
+  if (code === 'ETIMEOUT') {
+    return new FetchError(error.message, url, 504, { code });
   }
 
-  if (error instanceof Error) return fetchErrors.network(url, error.message);
-  return fetchErrors.unknown(url, 'Unexpected error');
+  if (
+    code === VALIDATION_ERROR_CODE ||
+    code === 'EBADREDIRECT' ||
+    code === 'EBLOCKED' ||
+    code === 'ENODATA' ||
+    code === 'EINVAL'
+  ) {
+    return new FetchError(error.message, url, 400, { code });
+  }
+
+  return new FetchError(
+    `Network error: Could not reach ${url}`,
+    url,
+    undefined,
+    {
+      code,
+      message: error.message,
+    }
+  );
 }
 
 type FetchChannelEvent =
@@ -716,12 +721,11 @@ function withContextIds(fields: {
   contextRequestId?: string;
   operationId?: string;
 }): Record<string, string> {
-  return {
-    ...(fields.contextRequestId
-      ? { contextRequestId: fields.contextRequestId }
-      : {}),
-    ...(fields.operationId ? { operationId: fields.operationId } : {}),
-  };
+  const result: Record<string, string> = {};
+  if (fields.contextRequestId)
+    result.contextRequestId = fields.contextRequestId;
+  if (fields.operationId) result.operationId = fields.operationId;
+  return result;
 }
 
 class FetchTelemetry {
@@ -912,7 +916,7 @@ class RedirectFollower {
       currentUrl = nextUrl;
     }
 
-    throw fetchErrors.tooManyRedirects(currentUrl);
+    throw createTooManyRedirectsFetchError(currentUrl);
   }
 
   private async performFetchCycle(
@@ -952,7 +956,7 @@ class RedirectFollower {
   ): void {
     if (redirectCount < redirectLimit) return;
     cancelResponseBody(response);
-    throw fetchErrors.tooManyRedirects(currentUrl);
+    throw createTooManyRedirectsFetchError(currentUrl);
   }
 
   private getRedirectLocation(response: Response, currentUrl: string): string {
@@ -960,7 +964,7 @@ class RedirectFollower {
     if (location) return location;
 
     cancelResponseBody(response);
-    throw fetchErrors.missingRedirectLocation(currentUrl);
+    throw createMissingRedirectLocationFetchError(currentUrl);
   }
 
   private resolveRedirectTarget(baseUrl: string, location: string): string {
@@ -1009,21 +1013,10 @@ function assertContentLengthWithinLimit(
   if (Number.isNaN(contentLength) || contentLength <= maxBytes) return;
 
   cancelResponseBody(response);
-  throw fetchErrors.sizeLimit(url, maxBytes);
+  throw createSizeLimitFetchError(url, maxBytes);
 }
 
 class ResponseTextReader {
-  private createAbortError(url: string): FetchError {
-    return new FetchError(
-      'Request was aborted during response read',
-      url,
-      499,
-      {
-        reason: 'aborted',
-      }
-    );
-  }
-
   async read(
     response: Response,
     url: string,
@@ -1034,15 +1027,15 @@ class ResponseTextReader {
 
     if (signal?.aborted) {
       cancelResponseBody(response);
-      throw this.createAbortError(url);
+      throw createAbortedFetchError(url);
     }
 
     if (!response.body) {
-      if (signal?.aborted) throw fetchErrors.canceled(url);
+      if (signal?.aborted) throw createCanceledFetchError(url);
 
       const text = await response.text();
       const size = Buffer.byteLength(text);
-      if (size > maxBytes) throw fetchErrors.sizeLimit(url, maxBytes);
+      if (size > maxBytes) throw createSizeLimitFetchError(url, maxBytes);
       return { text, size };
     }
 
@@ -1062,7 +1055,7 @@ class ResponseTextReader {
 
     if (signal.aborted) {
       return {
-        abortPromise: Promise.reject(this.createAbortError(url)),
+        abortPromise: Promise.reject(createAbortedFetchError(url)),
         cleanup: () => {},
       };
     }
@@ -1071,7 +1064,7 @@ class ResponseTextReader {
 
     const abortPromise = new Promise<never>((_, reject) => {
       onAbort = () => {
-        reject(this.createAbortError(url));
+        reject(createAbortedFetchError(url));
       };
       signal.addEventListener('abort', onAbort, { once: true });
     });
@@ -1115,7 +1108,7 @@ class ResponseTextReader {
       let result = await this.readNext(reader, abortRace.abortPromise);
       while (!result.done) {
         total += result.value.byteLength;
-        if (total > maxBytes) throw fetchErrors.sizeLimit(url, maxBytes);
+        if (total > maxBytes) throw createSizeLimitFetchError(url, maxBytes);
 
         const decoded = decoder.decode(result.value, { stream: true });
         if (decoded) parts.push(decoded);
@@ -1125,19 +1118,8 @@ class ResponseTextReader {
     } catch (error: unknown) {
       await this.cancelReaderQuietly(reader);
 
-      // Preserve explicit FetchErrors (abort/limits).
       if (error instanceof FetchError) throw error;
-
-      if (signal?.aborted) {
-        throw new FetchError(
-          'Request was aborted during response read',
-          url,
-          499,
-          {
-            reason: 'aborted',
-          }
-        );
-      }
+      if (signal?.aborted) throw createAbortedFetchError(url);
 
       throw error;
     } finally {
@@ -1201,7 +1183,7 @@ function resolveResponseError(
   finalUrl: string
 ): FetchError | null {
   if (response.status === 429) {
-    return fetchErrors.rateLimited(
+    return createRateLimitedFetchError(
       finalUrl,
       response.headers.get('retry-after')
     );
@@ -1209,7 +1191,7 @@ function resolveResponseError(
 
   return response.ok
     ? null
-    : fetchErrors.http(finalUrl, response.status, response.statusText);
+    : createHttpFetchError(finalUrl, response.status, response.statusText);
 }
 
 async function handleFetchResponse(

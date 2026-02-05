@@ -50,6 +50,20 @@ import type {
 } from './transform-types.js';
 import { isObject } from './type-guards.js';
 
+// Spread signal into options object only if defined
+function spreadSignal(
+  signal: AbortSignal | undefined
+): { signal: AbortSignal } | Record<string, never> {
+  return signal ? { signal } : {};
+}
+
+// Extract uppercase tagName from unknown node, or empty string
+function getTagName(node: unknown): string {
+  if (!isObject(node)) return '';
+  const raw = (node as { tagName?: unknown }).tagName;
+  return typeof raw === 'string' ? raw.toUpperCase() : '';
+}
+
 interface ExtractionContext extends ExtractionResult {
   document: Document;
   truncated?: boolean;
@@ -613,21 +627,12 @@ function hasGetAttribute(
 function isCodeBlock(
   parent: unknown
 ): parent is { tagName?: string; childNodes?: unknown[] } {
-  if (!isObject(parent)) return false;
-  const tagName =
-    typeof (parent as { tagName?: unknown }).tagName === 'string'
-      ? (parent as { tagName: string }).tagName.toUpperCase()
-      : '';
-  return ['PRE', 'WRAPPED-PRE'].includes(tagName);
+  const tagName = getTagName(parent);
+  return tagName === 'PRE' || tagName === 'WRAPPED-PRE';
 }
 
 function isAnchor(node: unknown): node is { tagName?: string } {
-  if (!isObject(node)) return false;
-  const tagName =
-    typeof (node as { tagName?: unknown }).tagName === 'string'
-      ? (node as { tagName: string }).tagName.toUpperCase()
-      : '';
-  return tagName === 'A';
+  return getTagName(node) === 'A';
 }
 
 function resolveAttributeLanguage(node: unknown): string | undefined {
@@ -651,10 +656,8 @@ function findLanguageFromCodeChild(node: unknown): string | undefined {
   for (const child of childNodes) {
     if (!isObject(child)) continue;
 
-    const tagName =
-      typeof (child as { rawTagName?: unknown }).rawTagName === 'string'
-        ? (child as { rawTagName: string }).rawTagName.toUpperCase()
-        : '';
+    const raw = (child as { rawTagName?: unknown }).rawTagName;
+    const tagName = typeof raw === 'string' ? raw.toUpperCase() : '';
 
     if (tagName === 'CODE') return resolveAttributeLanguage(child);
   }
@@ -1129,7 +1132,7 @@ class ContentSourceResolver {
       truncated,
     } = this.extractor.extract(params.html, params.url, {
       extractArticle: true,
-      ...(params.signal ? { signal: params.signal } : {}),
+      ...spreadSignal(params.signal),
     });
 
     const useArticleContent = article
@@ -1316,7 +1319,7 @@ function buildMarkdownFromContext(
   const content = stageTracker.run(url, 'transform:markdown', () =>
     htmlToMarkdown(context.sourceHtml, context.metadata, {
       url,
-      ...(signal ? { signal } : {}),
+      ...spreadSignal(signal),
       ...(context.document ? { document: context.document } : {}),
       ...(context.skipNoiseRemoval ? { skipNoiseRemoval: true } : {}),
     })
@@ -1358,7 +1361,7 @@ export function transformHtmlToMarkdownInProcess(
         html,
         url,
         includeMetadata: options.includeMetadata,
-        ...(signal ? { signal } : {}),
+        ...spreadSignal(signal),
       })
     );
 
@@ -1934,7 +1937,7 @@ function buildWorkerTransformOptions(options: TransformOptions): {
 } {
   return {
     includeMetadata: options.includeMetadata,
-    ...(options.signal ? { signal: options.signal } : {}),
+    ...spreadSignal(options.signal),
   };
 }
 
