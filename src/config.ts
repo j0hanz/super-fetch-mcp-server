@@ -380,7 +380,7 @@ export const config = {
     timeoutMs: DEFAULT_TRANSFORM_TIMEOUT_MS,
     stageWarnRatio: parseFloatOrDefault(env.TRANSFORM_STAGE_WARN_RATIO, 0.5),
     metadataFormat: parseTransformMetadataFormat(env.TRANSFORM_METADATA_FORMAT),
-    maxWorkerScale: parseInteger(env.TRANSFORM_WORKER_MAX_SCALE, 4, 1, 16),
+    maxWorkerScale: parseInteger(env.TRANSFORM_WORKER_MAX_SCALE, 4, 0, 16),
   },
   tools: {
     enabled: parseList(env.ENABLED_TOOLS ?? DEFAULT_ENABLED_TOOLS),
@@ -424,6 +424,10 @@ export const config = {
     ),
     removeSkipLinks: parseBoolean(env.MARKDOWN_REMOVE_SKIP_LINKS, true),
     removeTocBlocks: parseBoolean(env.MARKDOWN_REMOVE_TOC_BLOCKS, true),
+    removeTypeDocComments: parseBoolean(
+      env.MARKDOWN_REMOVE_TYPEDOC_COMMENTS,
+      true
+    ),
   },
   logging: {
     level: parseLogLevel(env.LOG_LEVEL),

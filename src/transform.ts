@@ -1422,10 +1422,14 @@ class WorkerPool implements TransformWorkerPool {
   private closed = false;
 
   constructor(size: number, timeoutMs: number) {
-    this.capacity = Math.max(
-      this.minCapacity,
-      Math.min(size, this.maxCapacity)
-    );
+    if (size === 0) {
+      this.capacity = 0;
+    } else {
+      this.capacity = Math.max(
+        this.minCapacity,
+        Math.min(size, this.maxCapacity)
+      );
+    }
     this.timeoutMs = timeoutMs;
     this.queueMax = this.maxCapacity * 32;
   }
@@ -1853,7 +1857,8 @@ class WorkerPool implements TransformWorkerPool {
 let workerPool: WorkerPool | null = null;
 
 function getOrCreateWorkerPool(): WorkerPool {
-  workerPool ??= new WorkerPool(POOL_MIN_WORKERS, DEFAULT_TIMEOUT_MS);
+  const size = config.transform.maxWorkerScale === 0 ? 0 : POOL_MIN_WORKERS;
+  workerPool ??= new WorkerPool(size, DEFAULT_TIMEOUT_MS);
   return workerPool;
 }
 
@@ -1906,6 +1911,9 @@ async function transformWithWorkerPool(
   options: TransformOptions
 ): Promise<MarkdownTransformResult> {
   const pool = getOrCreateWorkerPool();
+  if (pool.getCapacity() === 0) {
+    return transformHtmlToMarkdownInProcess(html, url, options);
+  }
   return pool.transform(html, url, buildWorkerTransformOptions(options));
 }
 

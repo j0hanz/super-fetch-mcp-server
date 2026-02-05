@@ -92,4 +92,37 @@ describe('readResponseText', () => {
     assert.equal(result.text, '');
     assert.equal(result.size, 0);
   });
+
+  it('decodes non-UTF8 content when encoding is provided', async () => {
+    // 0xE9 is 'é' in iso-8859-1
+    const buffer = new Uint8Array([0xe9]);
+    const response = new Response(buffer, {
+      status: 200,
+      headers: { 'content-length': '1' },
+    });
+
+    const result = await readResponseText(
+      response,
+      'https://example.com',
+      10,
+      undefined,
+      'iso-8859-1'
+    );
+
+    assert.equal(result.text, 'é');
+  });
+
+  it('defaults to UTF-8 without encoding, producing replacement chars for invalid sequences', async () => {
+    // 0xE9 is invalid in UTF-8 start byte
+    const buffer = new Uint8Array([0xe9]);
+    const response = new Response(buffer, {
+      status: 200,
+      headers: { 'content-length': '1' },
+    });
+
+    const result = await readResponseText(response, 'https://example.com', 10);
+
+    // \ufffd is the replacement character
+    assert.equal(result.text, '\ufffd');
+  });
 });

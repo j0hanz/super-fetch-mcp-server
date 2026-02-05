@@ -265,8 +265,11 @@ class InMemoryCacheStore {
     return () => this.listeners.delete(listener);
   }
 
-  get(cacheKey: string | null): CacheEntry | undefined {
-    if (!this.isReadable(cacheKey)) return undefined;
+  get(
+    cacheKey: string | null,
+    options?: CacheGetOptions
+  ): CacheEntry | undefined {
+    if (!this.isReadable(cacheKey, options?.force)) return undefined;
     return this.run(cacheKey, 'Cache get error', () =>
       this.cache.get(cacheKey)
     );
@@ -275,9 +278,10 @@ class InMemoryCacheStore {
   set(
     cacheKey: string | null,
     content: string,
-    metadata: CacheEntryMetadata
+    metadata: CacheEntryMetadata,
+    options?: CacheSetOptions
   ): void {
-    if (!this.isWritable(cacheKey, content)) return;
+    if (!this.isWritable(cacheKey, content, options?.force)) return;
 
     this.run(cacheKey, 'Cache set error', () => {
       const now = Date.now();
@@ -288,15 +292,20 @@ class InMemoryCacheStore {
     });
   }
 
-  private isReadable(cacheKey: string | null): cacheKey is string {
-    return config.cache.enabled && Boolean(cacheKey);
+  private isReadable(
+    cacheKey: string | null,
+    force = false
+  ): cacheKey is string {
+    return (config.cache.enabled || force) && Boolean(cacheKey);
   }
 
   private isWritable(
     cacheKey: string | null,
-    content: string
+    content: string,
+    force = false
   ): cacheKey is string {
-    return config.cache.enabled && Boolean(cacheKey) && Boolean(content);
+    if (!cacheKey || !content) return false;
+    return config.cache.enabled || force;
   }
 
   private run<T>(
@@ -360,16 +369,28 @@ export function onCacheUpdate(listener: CacheUpdateListener): () => void {
   return store.onUpdate(listener);
 }
 
-export function get(cacheKey: string | null): CacheEntry | undefined {
-  return store.get(cacheKey);
+export function get(
+  cacheKey: string | null,
+  options?: CacheGetOptions
+): CacheEntry | undefined {
+  return store.get(cacheKey, options);
+}
+
+export interface CacheSetOptions {
+  force?: boolean;
+}
+
+export interface CacheGetOptions {
+  force?: boolean;
 }
 
 export function set(
   cacheKey: string | null,
   content: string,
-  metadata: CacheEntryMetadata
+  metadata: CacheEntryMetadata,
+  options?: CacheSetOptions
 ): void {
-  store.set(cacheKey, content, metadata);
+  store.set(cacheKey, content, metadata, options);
 }
 
 export function keys(): readonly string[] {
@@ -571,7 +592,7 @@ function notifyResourceUpdate(
 }
 
 function requireCacheEntry(cacheKey: string): { content: string } {
-  const cached = get(cacheKey);
+  const cached = get(cacheKey, { force: true });
   if (!cached) {
     throw new McpError(
       -32002,
@@ -827,15 +848,6 @@ function respondNotFound(res: ServerResponse): void {
   sendJsonError(res, 404, 'Content not found or expired', 'NOT_FOUND');
 }
 
-function respondServiceUnavailable(res: ServerResponse): void {
-  sendJsonError(
-    res,
-    503,
-    'Download service is disabled',
-    'SERVICE_UNAVAILABLE'
-  );
-}
-
 function buildContentDisposition(fileName: string): string {
   const encodedName = encodeURIComponent(fileName).replace(/'/g, '%27');
   return `attachment; filename="${fileName}"; filename*=UTF-8''${encodedName}`;
@@ -885,11 +897,6 @@ export function handleDownload(
   namespace: string,
   hash: string
 ): void {
-  if (!config.cache.enabled) {
-    respondServiceUnavailable(res);
-    return;
-  }
-
   const params = parseDownloadParams(namespace, hash);
   if (!params) {
     respondBadRequest(res, 'Invalid namespace or hash format');
@@ -897,7 +904,7 @@ export function handleDownload(
   }
 
   const cacheKey = buildCacheKeyFromParams(params);
-  const cacheEntry = get(cacheKey);
+  const cacheEntry = get(cacheKey, { force: true });
 
   if (!cacheEntry) {
     logDebug('Download request for missing cache key', { cacheKey });

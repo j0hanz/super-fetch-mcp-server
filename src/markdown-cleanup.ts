@@ -156,11 +156,23 @@ const HeadingHeuristics = {
 
 function getHeadingPrefix(trimmed: string): string | null {
   if (HeadingHeuristics.isTooLong(trimmed)) return null;
-  if (HeadingHeuristics.hasExistingMarkup(trimmed)) return null;
+
+  // Structural checks: verify line isn't already formatted (heading, list, link)
+  if (
+    REGEX.HEADING_MARKER.test(trimmed) ||
+    REGEX.LIST_MARKER.test(trimmed) ||
+    /^\d+\.\s/.test(trimmed) ||
+    /^\[.*\]\(.*\)$/.test(trimmed)
+  ) {
+    return null;
+  }
 
   if (HeadingHeuristics.isSpecialPrefix(trimmed)) {
     return /^example:\s/i.test(trimmed) ? '### ' : '## ';
   }
+
+  // For standard headings, exclude lines ending in punctuation
+  if (/[.!?]$/.test(trimmed)) return null;
 
   if (HeadingHeuristics.isTitleCaseOrKeyword(trimmed)) {
     return '## ';
@@ -240,7 +252,6 @@ function removeToc(text: string): string {
     const isToc = REGEX.TOC_LINK.test(line);
 
     if (!skipping && REGEX.TOC_HEADING.test(trimmed) && hasTocBlock(i)) {
-      out.push(line);
       skipping = true;
       continue;
     }
@@ -279,17 +290,32 @@ function fixProperties(text: string): string {
   return current;
 }
 
-const CLEANUP_PIPELINE = [
+function removeTypeDocComments(text: string): string {
+  return text.replace(
+    /((`+)(?:(?!\2).)*\2)|(\s?\/\\?\*[\s\S]*?\\?\*\/)/g,
+    (match, code) => {
+      if (code) return code as string;
+      return '';
+    }
+  );
+}
+
+type CleanupStep = (text: string) => string;
+
+const CLEANUP_PIPELINE: CleanupStep[] = [
   ...(config.markdownCleanup.promoteOrphanHeadings
     ? [promoteOrphanHeadings]
     : []),
   fixAndSpaceHeadings,
+  ...(config.markdownCleanup.removeTypeDocComments
+    ? [removeTypeDocComments]
+    : []),
   ...(config.markdownCleanup.removeSkipLinks ? [removeSkipLinks] : []),
   ...(config.markdownCleanup.removeTocBlocks ? [removeToc] : []),
   removeEmptyHeadings,
   normalizeSpacing,
   fixProperties,
-] as const;
+];
 
 const Frontmatter = {
   detect(content: string): FrontmatterData | null {

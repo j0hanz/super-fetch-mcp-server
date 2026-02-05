@@ -414,8 +414,11 @@ class InlineContentLimiter {
       return { content, contentSize };
     }
 
+    const isTruncated = contentSize > inlineLimit;
     const resourceUri =
-      cache.isEnabled() && cacheKey ? cache.toResourceUri(cacheKey) : null;
+      cacheKey && (cache.isEnabled() || isTruncated)
+        ? cache.toResourceUri(cacheKey)
+        : null;
 
     const truncatedContent = truncateWithMarker(
       content,
@@ -644,8 +647,10 @@ function persistCache<T>(params: {
   serialize: ((result: T) => string) | undefined;
   normalizedUrl: string;
   cacheNamespace: string;
+  force?: boolean;
 }): void {
-  const { cacheKey, data, serialize, normalizedUrl, cacheNamespace } = params;
+  const { cacheKey, data, serialize, normalizedUrl, cacheNamespace, force } =
+    params;
   if (!cacheKey) return;
 
   const serializer = serialize ?? JSON.stringify;
@@ -656,7 +661,12 @@ function persistCache<T>(params: {
   };
 
   try {
-    cache.set(cacheKey, serializer(data), metadata);
+    cache.set(
+      cacheKey,
+      serializer(data),
+      metadata,
+      force ? { force: true } : undefined
+    );
   } catch (error: unknown) {
     logWarn('Failed to persist cache entry', {
       namespace: cacheNamespace,
@@ -752,6 +762,17 @@ export async function performSharedFetch<T extends { content: string }>(
     pipeline.data.content,
     pipeline.cacheKey ?? null
   );
+
+  if (inlineResult.truncated && !pipeline.fromCache && !cache.isEnabled()) {
+    persistCache({
+      cacheKey: pipeline.cacheKey ?? null,
+      data: pipeline.data,
+      serialize: options.serialize,
+      normalizedUrl: pipeline.url,
+      cacheNamespace: 'markdown',
+      force: true,
+    });
+  }
 
   return { pipeline, inlineResult };
 }

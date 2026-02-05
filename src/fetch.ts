@@ -1033,6 +1033,21 @@ class RedirectFollower {
   }
 }
 
+function getCharsetFromContentType(
+  contentType: string | null
+): string | undefined {
+  if (!contentType) return undefined;
+  const match = /charset=([^;]+)/i.exec(contentType);
+  const charsetGroup = match?.[1];
+
+  if (!charsetGroup) return undefined;
+  let charset = charsetGroup.trim();
+  if (charset.startsWith('"') && charset.endsWith('"')) {
+    charset = charset.slice(1, -1);
+  }
+  return charset.trim();
+}
+
 function assertContentLengthWithinLimit(
   response: Response,
   url: string,
@@ -1053,7 +1068,8 @@ class ResponseTextReader {
     response: Response,
     url: string,
     maxBytes: number,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    encoding?: string
   ): Promise<{ text: string; size: number }> {
     assertContentLengthWithinLimit(response, url, maxBytes);
 
@@ -1065,13 +1081,23 @@ class ResponseTextReader {
     if (!response.body) {
       if (signal?.aborted) throw createCanceledFetchError(url);
 
-      const text = await response.text();
-      const size = Buffer.byteLength(text);
-      if (size > maxBytes) throw createSizeLimitFetchError(url, maxBytes);
-      return { text, size };
+      const buffer = await response.arrayBuffer();
+      if (buffer.byteLength > maxBytes) {
+        throw createSizeLimitFetchError(url, maxBytes);
+      }
+
+      const decoder = new TextDecoder(encoding ?? 'utf-8');
+      const text = decoder.decode(buffer);
+      return { text, size: buffer.byteLength };
     }
 
-    return this.readStreamWithLimit(response.body, url, maxBytes, signal);
+    return this.readStreamWithLimit(
+      response.body,
+      url,
+      maxBytes,
+      signal,
+      encoding
+    );
   }
 
   private async readNext(
@@ -1087,9 +1113,10 @@ class ResponseTextReader {
     stream: ReadableStream<Uint8Array>,
     url: string,
     maxBytes: number,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    encoding?: string
   ): Promise<{ text: string; size: number }> {
-    const decoder = new TextDecoder();
+    const decoder = new TextDecoder(encoding ?? 'utf-8');
     const parts: string[] = [];
     let total = 0;
 
@@ -1203,11 +1230,15 @@ async function handleFetchResponse(
     throw responseError;
   }
 
+  const contentType = response.headers.get('content-type');
+  const encoding = getCharsetFromContentType(contentType ?? null);
+
   const { text, size } = await reader.read(
     response,
     finalUrl,
     maxBytes,
-    signal
+    signal,
+    encoding
   );
   telemetry.recordResponse(ctx, response, size);
   return text;
@@ -1381,9 +1412,10 @@ export async function readResponseText(
   response: Response,
   url: string,
   maxBytes: number,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  encoding?: string
 ): Promise<{ text: string; size: number }> {
-  return responseReader.read(response, url, maxBytes, signal);
+  return responseReader.read(response, url, maxBytes, signal, encoding);
 }
 
 export async function fetchNormalizedUrl(

@@ -239,6 +239,13 @@ describe('fetchUrlToolHandler', () => {
   });
 
   it('returns an error response when markdown conversion fails', async () => {
+    // Ensure clean state
+    await shutdownTransformWorkerPool();
+
+    // Disable worker pool to force in-process transform which uses the mocked NodeHtmlMarkdown
+    const originalMaxWorkerScale = config.transform.maxWorkerScale;
+    config.transform.maxWorkerScale = 0;
+
     const originalTranslate = NodeHtmlMarkdown.prototype.translate;
     NodeHtmlMarkdown.prototype.translate = () => {
       throw new Error('Translate failed');
@@ -265,6 +272,7 @@ describe('fetchUrlToolHandler', () => {
       );
     } finally {
       NodeHtmlMarkdown.prototype.translate = originalTranslate;
+      config.transform.maxWorkerScale = originalMaxWorkerScale;
     }
   });
 
