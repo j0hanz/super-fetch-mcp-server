@@ -436,19 +436,16 @@ async function handleDirectToolCall(
 ): Promise<ServerResult> {
   const args = requireFetchUrlArgs(params.arguments);
 
-  return fetchUrlToolHandler(
-    { url: args.url },
-    {
-      ...(context.signal ? { signal: context.signal } : {}),
-      ...(context.requestId !== undefined
-        ? { requestId: context.requestId }
-        : {}),
-      ...(context.sendNotification
-        ? { sendNotification: context.sendNotification }
-        : {}),
-      ...(params._meta ? { _meta: params._meta } : {}),
-    }
-  );
+  return fetchUrlToolHandler(args, {
+    ...(context.signal ? { signal: context.signal } : {}),
+    ...(context.requestId !== undefined
+      ? { requestId: context.requestId }
+      : {}),
+    ...(context.sendNotification
+      ? { sendNotification: context.sendNotification }
+      : {}),
+    ...(params._meta ? { _meta: params._meta } : {}),
+  });
 }
 
 async function handleToolCallRequest(

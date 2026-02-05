@@ -978,6 +978,11 @@ class HttpRequestPipeline {
     if (!hostOriginPolicy.validate(req, res)) return;
     if (corsPolicy.handle(req, res)) return;
 
+    if (!this.rateLimiter.check(req, res)) {
+      req.resume();
+      return;
+    }
+
     try {
       req.body = await jsonBodyReader.read(req);
     } catch {
@@ -988,8 +993,6 @@ class HttpRequestPipeline {
       }
       return;
     }
-
-    if (!this.rateLimiter.check(req, res)) return;
 
     await this.dispatcher.dispatch(req, res, url);
   }
