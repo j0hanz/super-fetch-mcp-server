@@ -7,6 +7,7 @@ import { isObject } from './type-guards.js';
 const NOISE_SCAN_LIMIT = 50_000;
 const MIN_BODY_CONTENT_LENGTH = 100;
 const DIALOG_MIN_CHARS_FOR_PRESERVATION = 500;
+const NAV_FOOTER_MIN_CHARS_FOR_PRESERVATION = 500;
 
 const HTML_DOCUMENT_MARKERS = /<\s*(?:!doctype|html|head|body)\b/i;
 const NOISE_TAGS_PATTERN =
@@ -500,7 +501,7 @@ function shouldPreserveNavFooter(element: Element): boolean {
   if (element.querySelector('[role="main"]') !== null) return true;
 
   const textContent = element.textContent || '';
-  return textContent.trim().length >= MIN_BODY_CONTENT_LENGTH;
+  return textContent.trim().length >= NAV_FOOTER_MIN_CHARS_FOR_PRESERVATION;
 }
 
 function shouldPreserveElement(element: Element): boolean {

@@ -470,10 +470,10 @@ export function isRawTextContent(content: string): boolean {
   if (REGEX.HTML_DOC_START.test(trimmed)) return false;
 
   const hasFm = Frontmatter.detect(trimmed) !== null;
-  const tagCount = countCommonTags(content, 2);
+  const tagCount = countCommonTags(content, 5);
 
   if (hasFm) return true;
-  if (tagCount > 2) return false;
+  if (tagCount > 5) return false;
 
   return (
     REGEX.HEADING_MARKER.test(content) ||
@@ -486,8 +486,8 @@ export function isLikelyHtmlContent(content: string): boolean {
   const trimmed = content.trim();
   if (!trimmed) return false;
   if (REGEX.HTML_DOC_START.test(trimmed)) return true;
-  const tagCount = countCommonTags(content, 2);
-  return tagCount > 2;
+  const tagCount = countCommonTags(content, 5);
+  return tagCount > 5;
 }
 
 export function buildMetadataFooter(

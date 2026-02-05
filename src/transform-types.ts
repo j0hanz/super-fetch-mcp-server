@@ -62,6 +62,7 @@ export interface MarkdownTransformResult {
 export interface TransformOptions {
   includeMetadata: boolean;
   signal?: AbortSignal;
+  skipNoiseRemoval?: boolean;
 }
 
 /**
@@ -98,6 +99,7 @@ export interface TransformWorkerTransformMessage {
   html: string;
   url: string;
   includeMetadata: boolean;
+  skipNoiseRemoval?: boolean | undefined;
 }
 
 export interface TransformWorkerCancelMessage {

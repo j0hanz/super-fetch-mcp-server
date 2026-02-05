@@ -282,6 +282,61 @@ function truncateHtml(html: string): { html: string; truncated: boolean } {
   return { html: content, truncated: true };
 }
 
+function willTruncate(html: string): boolean {
+  return html.length > config.constants.maxHtmlSize;
+}
+
+const HEAD_END_PATTERN = /<\/head\s*>|<body\b/i;
+const MAX_HEAD_SCAN_LENGTH = 50_000;
+
+function extractHeadSection(html: string): string | null {
+  const searchLimit = Math.min(html.length, MAX_HEAD_SCAN_LENGTH);
+  const searchText = html.substring(0, searchLimit);
+
+  const match = HEAD_END_PATTERN.exec(searchText);
+  if (!match) return null;
+
+  return html.substring(0, match.index);
+}
+
+function extractMetadataFromHead(html: string): ExtractedMetadata | null {
+  const headSection = extractHeadSection(html);
+  if (!headSection) return null;
+
+  try {
+    const { document } = parseHTML(
+      `<!DOCTYPE html><html>${headSection}</head><body></body></html>`
+    );
+    return extractMetadata(document);
+  } catch {
+    return null;
+  }
+}
+
+function mergeMetadata(
+  early: ExtractedMetadata | null,
+  late: ExtractedMetadata
+): ExtractedMetadata {
+  if (!early) return late;
+
+  const merged: ExtractedMetadata = {};
+  const title = late.title ?? early.title;
+  const description = late.description ?? early.description;
+  const author = late.author ?? early.author;
+  const image = late.image ?? early.image;
+  const publishedAt = late.publishedAt ?? early.publishedAt;
+  const modifiedAt = late.modifiedAt ?? early.modifiedAt;
+
+  if (title !== undefined) merged.title = title;
+  if (description !== undefined) merged.description = description;
+  if (author !== undefined) merged.author = author;
+  if (image !== undefined) merged.image = image;
+  if (publishedAt !== undefined) merged.publishedAt = publishedAt;
+  if (modifiedAt !== undefined) merged.modifiedAt = modifiedAt;
+
+  return merged;
+}
+
 interface MetaContext {
   title: { og?: string; twitter?: string; standard?: string };
   description: { og?: string; twitter?: string; standard?: string };
@@ -402,7 +457,11 @@ function isReadabilityCompatible(doc: unknown): doc is Document {
   );
 }
 
-function extractArticle(document: unknown): ExtractedArticle | null {
+function extractArticle(
+  document: unknown,
+  url: string,
+  signal?: AbortSignal
+): ExtractedArticle | null {
   if (!isReadabilityCompatible(document)) {
     logWarn('Document not compatible with Readability');
     return null;
@@ -410,6 +469,9 @@ function extractArticle(document: unknown): ExtractedArticle | null {
 
   try {
     const doc = document;
+
+    // F1: Check abort before DOM text content extraction
+    abortPolicy.throwIfAborted(signal, url, 'extract:article:textCheck');
 
     const rawText =
       doc.querySelector('body')?.textContent ??
@@ -426,14 +488,23 @@ function extractArticle(document: unknown): ExtractedArticle | null {
       );
     }
 
+    // F1: Check abort before isProbablyReaderable (DOM traversal)
+    abortPolicy.throwIfAborted(signal, url, 'extract:article:readabilityCheck');
+
     if (textLength >= 400 && !isProbablyReaderable(doc)) {
       return null;
     }
+
+    // F1: Check abort before cloning document
+    abortPolicy.throwIfAborted(signal, url, 'extract:article:clone');
 
     const readabilityDoc =
       typeof doc.cloneNode === 'function'
         ? (doc.cloneNode(true) as Document)
         : doc;
+
+    // F1: Check abort before heavy Readability parse
+    abortPolicy.throwIfAborted(signal, url, 'extract:article:parse');
 
     const reader = new Readability(readabilityDoc, { maxElemsToParse: 20_000 });
     const parsed = reader.parse();
@@ -495,6 +566,13 @@ function extractContentContext(
   try {
     abortPolicy.throwIfAborted(options.signal, url, 'extract:begin');
 
+    // F2: Extract metadata from <head> BEFORE truncation to preserve it
+    const earlyMetadata = willTruncate(html)
+      ? stageTracker.run(url, 'extract:early-metadata', () =>
+          extractMetadataFromHead(html)
+        )
+      : null;
+
     const { html: limitedHtml, truncated } = truncateHtml(html);
 
     const { document } = stageTracker.run(url, 'extract:parse', () =>
@@ -504,13 +582,18 @@ function extractContentContext(
 
     applyBaseUri(document, url);
 
-    const metadata = stageTracker.run(url, 'extract:metadata', () =>
+    const lateMetadata = stageTracker.run(url, 'extract:metadata', () =>
       extractMetadata(document)
     );
     abortPolicy.throwIfAborted(options.signal, url, 'extract:metadata');
 
+    // Merge early (pre-truncation) with late (post-truncation) metadata
+    const metadata = mergeMetadata(earlyMetadata, lateMetadata);
+
     const article = options.extractArticle
-      ? stageTracker.run(url, 'extract:article', () => extractArticle(document))
+      ? stageTracker.run(url, 'extract:article', () =>
+          extractArticle(document, url, options.signal)
+        )
       : null;
 
     abortPolicy.throwIfAborted(options.signal, url, 'extract:article');
@@ -1173,6 +1256,7 @@ function buildContentSource(params: {
   useArticleContent: boolean;
   document?: Document;
   truncated: boolean;
+  skipNoiseRemoval?: boolean;
 }): ContentSource {
   const {
     html,
@@ -1183,6 +1267,7 @@ function buildContentSource(params: {
     useArticleContent,
     document,
     truncated,
+    skipNoiseRemoval,
   } = params;
 
   const metadata = createContentMetadataBlock(
@@ -1194,12 +1279,10 @@ function buildContentSource(params: {
   );
 
   if (useArticleContent && article) {
-    // Readability output can still be noisy.
-    const cleanedArticleHtml = removeNoiseFromHtml(
-      article.content,
-      undefined,
-      url
-    );
+    // Readability output can still be noisy (unless user requested skip).
+    const cleanedArticleHtml = skipNoiseRemoval
+      ? article.content
+      : removeNoiseFromHtml(article.content, undefined, url);
     return {
       sourceHtml: cleanedArticleHtml,
       title: article.title,
@@ -1210,7 +1293,9 @@ function buildContentSource(params: {
   }
 
   if (document) {
-    const cleanedHtml = removeNoiseFromHtml(html, document, url);
+    const cleanedHtml = skipNoiseRemoval
+      ? html
+      : removeNoiseFromHtml(html, document, url);
 
     const contentRoot = findContentRoot(document);
     if (contentRoot) {
@@ -1247,6 +1332,7 @@ function resolveContentSource(params: {
   url: string;
   includeMetadata: boolean;
   signal?: AbortSignal;
+  skipNoiseRemoval?: boolean;
 }): ContentSource {
   const {
     article,
@@ -1271,6 +1357,7 @@ function resolveContentSource(params: {
     useArticleContent,
     document,
     truncated: truncated ?? false,
+    ...(params.skipNoiseRemoval ? { skipNoiseRemoval: true } : {}),
   });
 }
 
@@ -1325,6 +1412,7 @@ export function transformHtmlToMarkdownInProcess(
         url,
         includeMetadata: options.includeMetadata,
         ...spreadSignal(signal),
+        ...(options.skipNoiseRemoval ? { skipNoiseRemoval: true } : {}),
       })
     );
 
@@ -1365,6 +1453,7 @@ interface PendingTask {
   html: string;
   url: string;
   includeMetadata: boolean;
+  skipNoiseRemoval?: boolean;
   signal: AbortSignal | undefined;
   abortListener: (() => void) | undefined;
   resolve: (result: MarkdownTransformResult) => void;
@@ -1390,7 +1479,11 @@ interface TransformWorkerPool {
   transform(
     html: string,
     url: string,
-    options: { includeMetadata: boolean; signal?: AbortSignal }
+    options: {
+      includeMetadata: boolean;
+      signal?: AbortSignal;
+      skipNoiseRemoval?: boolean;
+    }
   ): Promise<MarkdownTransformResult>;
   close(): Promise<void>;
   getQueueDepth(): number;
@@ -1437,7 +1530,11 @@ class WorkerPool implements TransformWorkerPool {
   async transform(
     html: string,
     url: string,
-    options: { includeMetadata: boolean; signal?: AbortSignal }
+    options: {
+      includeMetadata: boolean;
+      signal?: AbortSignal;
+      skipNoiseRemoval?: boolean;
+    }
   ): Promise<MarkdownTransformResult> {
     this.ensureOpen();
     if (options.signal?.aborted)
@@ -1518,7 +1615,11 @@ class WorkerPool implements TransformWorkerPool {
   private createPendingTask(
     html: string,
     url: string,
-    options: { includeMetadata: boolean; signal?: AbortSignal },
+    options: {
+      includeMetadata: boolean;
+      signal?: AbortSignal;
+      skipNoiseRemoval?: boolean;
+    },
     resolve: (result: MarkdownTransformResult) => void,
     reject: (error: unknown) => void
   ): PendingTask {
@@ -1537,6 +1638,7 @@ class WorkerPool implements TransformWorkerPool {
       html,
       url,
       includeMetadata: options.includeMetadata,
+      ...(options.skipNoiseRemoval ? { skipNoiseRemoval: true } : {}),
       signal: options.signal,
       abortListener,
       resolve,
@@ -1817,6 +1919,7 @@ class WorkerPool implements TransformWorkerPool {
         html: task.html,
         url: task.url,
         includeMetadata: task.includeMetadata,
+        ...(task.skipNoiseRemoval ? { skipNoiseRemoval: true } : {}),
       });
     } catch (error: unknown) {
       clearTimeout(timer);
@@ -1898,10 +2001,12 @@ export async function shutdownTransformWorkerPool(): Promise<void> {
 function buildWorkerTransformOptions(options: TransformOptions): {
   includeMetadata: boolean;
   signal?: AbortSignal;
+  skipNoiseRemoval?: boolean;
 } {
   return {
     includeMetadata: options.includeMetadata,
     ...spreadSignal(options.signal),
+    ...(options.skipNoiseRemoval ? { skipNoiseRemoval: true } : {}),
   };
 }
 

@@ -33,6 +33,7 @@ import { isObject } from './type-guards.js';
 
 export interface FetchUrlInput {
   url: string;
+  skipNoiseRemoval?: boolean | undefined;
 }
 
 export interface ToolContentBlock {
@@ -127,6 +128,12 @@ export const fetchUrlInputSchema = z.strictObject({
     .min(1)
     .max(config.constants.maxUrlLength)
     .describe('The URL of the webpage to fetch and convert to Markdown'),
+  skipNoiseRemoval: z
+    .boolean()
+    .optional()
+    .describe(
+      'When true, preserves navigation, footers, and other elements normally filtered as noise'
+    ),
 });
 
 const fetchUrlOutputSchema = z.strictObject({
@@ -870,11 +877,13 @@ export function parseCachedMarkdownResult(
 const markdownTransform = async (
   html: string,
   url: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  skipNoiseRemoval?: boolean
 ): Promise<MarkdownPipelineResult> => {
   const result = await transformHtmlToMarkdown(html, url, {
     includeMetadata: true,
     ...withSignal(signal),
+    ...(skipNoiseRemoval ? { skipNoiseRemoval: true } : {}),
   });
   return { ...result, content: result.markdown };
 };
@@ -948,7 +957,8 @@ function buildResponse(
 async function fetchPipeline(
   url: string,
   signal?: AbortSignal,
-  progress?: ProgressReporter
+  progress?: ProgressReporter,
+  skipNoiseRemoval?: boolean
 ): Promise<{
   pipeline: PipelineResult<MarkdownPipelineResult>;
   inlineResult: InlineResult;
@@ -960,7 +970,7 @@ async function fetchPipeline(
       if (progress) {
         void progress.report(3, 'Transforming content');
       }
-      return markdownTransform(html, normalizedUrl, signal);
+      return markdownTransform(html, normalizedUrl, signal, skipNoiseRemoval);
     },
     serialize: serializeMarkdownResult,
     deserialize: parseCachedMarkdownResult,
@@ -983,7 +993,12 @@ async function executeFetch(
   logDebug('Fetching URL', { url });
 
   void progress.report(2, 'Fetching content');
-  const { pipeline, inlineResult } = await fetchPipeline(url, signal, progress);
+  const { pipeline, inlineResult } = await fetchPipeline(
+    url,
+    signal,
+    progress,
+    input.skipNoiseRemoval
+  );
 
   if (pipeline.fromCache) {
     void progress.report(3, 'Using cached content');

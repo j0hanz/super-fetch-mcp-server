@@ -98,6 +98,7 @@ function handleTransform(message: TransformWorkerTransformMessage): void {
     const result = transformHtmlToMarkdownInProcess(message.html, message.url, {
       includeMetadata: message.includeMetadata,
       signal: controller.signal,
+      ...(message.skipNoiseRemoval ? { skipNoiseRemoval: true } : {}),
     });
 
     post({
@@ -131,6 +132,7 @@ const TransformMessageSchema = z.object({
   html: z.string(),
   url: z.string(),
   includeMetadata: z.boolean(),
+  skipNoiseRemoval: z.boolean().optional(),
 });
 
 const CancelMessageSchema = z.object({

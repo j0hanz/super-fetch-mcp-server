@@ -35,23 +35,31 @@ SuperFetch runs with no configuration by default. Just run with `--stdio`:
 
 ### Core Server Settings
 
-| Variable                     | Default              | Description                                                                                           |
-| ---------------------------- | -------------------- | ----------------------------------------------------------------------------------------------------- |
-| `HOST`                       | `127.0.0.1`          | HTTP server bind address                                                                              |
-| `PORT`                       | `3000`               | HTTP server port (1024-65535)                                                                         |
-| `USER_AGENT`                 | `superFetch-MCP/2.0` | User-Agent header for outgoing requests                                                               |
-| `CACHE_ENABLED`              | `true`               | Enable response caching                                                                               |
-| `CACHE_TTL`                  | `3600`               | Cache lifetime in seconds (60-86400)                                                                  |
-| `LOG_LEVEL`                  | `info`               | Logging level. Only `debug` enables verbose logs; other values behave like `info`                     |
-| `ALLOW_REMOTE`               | `false`              | Allow binding to non-loopback hosts (OAuth required)                                                  |
-| `ALLOWED_HOSTS`              | (empty)              | Additional allowed Host/Origin values (comma/space separated)                                         |
-| `FETCH_TIMEOUT_MS`           | `15000`              | Outgoing fetch timeout in milliseconds (1000-60000)                                                   |
-| `TRANSFORM_TIMEOUT_MS`       | `30000`              | Worker transform timeout in milliseconds (5000-120000)                                                |
-| `TOOL_TIMEOUT_MS`            | `50000`              | Overall tool timeout in milliseconds (1000-300000). Defaults to 15000 + `TRANSFORM_TIMEOUT_MS` + 5000 |
-| `TRANSFORM_METADATA_FORMAT`  | `markdown`           | Metadata preamble format: `markdown` (title-first) or `frontmatter` (YAML)                            |
-| `TRANSFORM_STAGE_WARN_RATIO` | `0.5`                | Emit a warning when a transform stage uses more than this fraction of the total budget                |
-| `TRANSFORM_WORKER_MAX_SCALE` | `4`                  | Max worker pool scale factor (0-16)                                                                   |
-| `ENABLED_TOOLS`              | `fetch-url`          | Comma/space-separated list of enabled tools                                                           |
+| Variable               | Default              | Description                                                                                                        |
+| ---------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `HOST`                 | `127.0.0.1`          | HTTP server bind address                                                                                           |
+| `PORT`                 | `3000`               | HTTP server port (1024-65535)                                                                                      |
+| `USER_AGENT`           | `superFetch-MCP/2.0` | User-Agent header for outgoing requests                                                                            |
+| `CACHE_ENABLED`        | `true`               | Enable response caching                                                                                            |
+| `CACHE_TTL`            | `3600`               | Cache lifetime in seconds (60-86400)                                                                               |
+| `LOG_LEVEL`            | `info`               | Logging level. Only `debug` enables verbose logs; other values behave like `info`                                  |
+| `ALLOW_REMOTE`         | `false`              | Allow binding to non-loopback hosts (OAuth required)                                                               |
+| `ALLOWED_HOSTS`        | (empty)              | Additional allowed Host/Origin values (comma/space separated)                                                      |
+| `FETCH_TIMEOUT_MS`     | `15000`              | Outgoing fetch timeout in milliseconds (1000-60000)                                                                |
+| `TRANSFORM_TIMEOUT_MS` | `30000`              | Worker transform timeout in milliseconds (5000-120000)                                                             |
+| `TOOL_TIMEOUT_MS`      | `50000`              | Overall tool timeout in milliseconds (1000-300000). Defaults to `FETCH_TIMEOUT_MS` + `TRANSFORM_TIMEOUT_MS` + 5000 |
+
+> **Timeout Composition**: The tool timeout (`TOOL_TIMEOUT_MS`) is the overall deadline for a `fetch-url` call. It composes as: fetch (network I/O) + transform (HTML→Markdown) + 5s padding. Each layer has its own abort signal:
+>
+> 1. **Fetch timeout** aborts the HTTP request if the server is slow to respond.
+> 2. **Transform timeout** aborts markdown conversion if parsing/extraction hangs.
+> 3. **Tool timeout** is the outermost deadline; if reached, both fetch and transform are cancelled.
+>
+> For slow sites, increase `FETCH_TIMEOUT_MS`. For large/complex HTML, increase `TRANSFORM_TIMEOUT_MS`. The tool timeout auto-adjusts unless explicitly set.
+> | `TRANSFORM_METADATA_FORMAT` | `markdown` | Metadata preamble format: `markdown` (title-first) or `frontmatter` (YAML) |
+> | `TRANSFORM_STAGE_WARN_RATIO` | `0.5` | Emit a warning when a transform stage uses more than this fraction of the total budget |
+> | `TRANSFORM_WORKER_MAX_SCALE` | `4` | Max worker pool scale factor (0-16) |
+> | `ENABLED_TOOLS` | `fetch-url` | Comma/space-separated list of enabled tools |
 
 ### HTTP Server Tuning (HTTP Mode, Advanced)
 

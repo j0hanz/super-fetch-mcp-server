@@ -66,10 +66,10 @@ describe('transformHtmlToMarkdown raw content detection', () => {
     });
   });
 
-  it('treats >2 common HTML tags as HTML even if markdown patterns exist', () => {
+  it('treats >5 common HTML tags as HTML even if markdown patterns exist', () => {
     return runRawContentCase({
       input:
-        '<div>one</div><span>two</span><meta name="x" content="y">\n# Heading',
+        '<div>one</div><span>two</span><meta name="x" content="y"><link rel="stylesheet"><style></style><script></script>\n# Heading',
       url: 'https://example.com/html',
       includeMetadata: false,
       assert: (result) => {
