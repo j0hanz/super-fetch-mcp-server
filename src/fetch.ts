@@ -1635,7 +1635,12 @@ function assertSupportedContentType(
   url: string
 ): void {
   const mediaType = resolveMediaType(contentType);
-  if (!mediaType) return;
+  if (!mediaType) {
+    logDebug('No Content-Type header; relying on binary-content detection', {
+      url: redactUrl(url),
+    });
+    return;
+  }
 
   if (!isTextLikeMediaType(mediaType)) {
     throw new FetchError(`Unsupported content type: ${mediaType}`, url);

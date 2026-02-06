@@ -55,6 +55,8 @@ const DEFAULT_POLL_INTERVAL_MS = 1000;
 const DEFAULT_OWNER_KEY = 'default';
 const DEFAULT_PAGE_SIZE = 50;
 
+const MAX_CURSOR_LENGTH = 256;
+
 const TERMINAL_STATUSES = new Set<TaskStatus>([
   'completed',
   'failed',
@@ -327,12 +329,33 @@ class TaskManager {
   }
 
   private encodeCursor(index: number): string {
-    return Buffer.from(String(index)).toString('base64url');
+    // Base64url cursors are an opaque pagination token, NOT encryption.
+    const raw = String(index);
+
+    const bytes = new TextEncoder().encode(raw);
+    if (hasToBase64Method(bytes)) {
+      return bytes.toBase64({ alphabet: 'base64url', omitPadding: true });
+    }
+
+    return Buffer.from(raw, 'utf8').toString('base64url');
   }
 
   private decodeCursor(cursor: string): number | null {
+    // Base64url cursors are an opaque pagination token, NOT encryption.
     try {
-      const decoded = Buffer.from(cursor, 'base64url').toString('utf8');
+      if (!isValidBase64UrlCursor(cursor)) return null;
+
+      const fromBase64 = getUint8ArrayFromBase64();
+      const bytes = fromBase64
+        ? fromBase64(cursor, {
+            alphabet: 'base64url',
+            lastChunkHandling: 'strict',
+          })
+        : Buffer.from(cursor, 'base64url');
+
+      const decoded = new TextDecoder('utf-8').decode(bytes);
+      if (!/^\d+$/u.test(decoded)) return null;
+
       const value = Number.parseInt(decoded, 10);
       if (!Number.isFinite(value) || value < 0) return null;
       return value;
@@ -340,6 +363,59 @@ class TaskManager {
       return null;
     }
   }
+}
+
+interface FromBase64Options {
+  alphabet?: 'base64url' | 'base64';
+  lastChunkHandling?: 'strict' | 'loose' | 'stop-before-partial';
+}
+
+type Uint8ArrayFromBase64 = (
+  input: string,
+  options?: FromBase64Options
+) => Uint8Array;
+
+interface ToBase64Options {
+  alphabet?: 'base64url' | 'base64';
+  omitPadding?: boolean;
+}
+
+type Uint8ArrayWithToBase64 = Uint8Array & {
+  toBase64: (options?: ToBase64Options) => string;
+};
+
+function getUint8ArrayFromBase64(): Uint8ArrayFromBase64 | undefined {
+  const maybe = (Uint8Array as unknown as { fromBase64?: unknown }).fromBase64;
+  return typeof maybe === 'function'
+    ? (maybe as Uint8ArrayFromBase64)
+    : undefined;
+}
+
+function hasToBase64Method(bytes: Uint8Array): bytes is Uint8ArrayWithToBase64 {
+  return (
+    typeof (bytes as unknown as { toBase64?: unknown }).toBase64 === 'function'
+  );
+}
+
+function isValidBase64UrlCursor(cursor: string): boolean {
+  if (!cursor) return false;
+  if (cursor.length > MAX_CURSOR_LENGTH) return false;
+
+  // base64url alphabet + optional padding.
+  if (!/^[A-Za-z0-9_-]+={0,2}$/u.test(cursor)) return false;
+
+  const firstPaddingIndex = cursor.indexOf('=');
+  if (firstPaddingIndex !== -1) {
+    for (let i = firstPaddingIndex; i < cursor.length; i += 1) {
+      if (cursor[i] !== '=') return false;
+    }
+
+    // With padding, base64 strings must have a length divisible by 4.
+    return cursor.length % 4 === 0;
+  }
+
+  // Without padding, valid lengths are 0,2,3 mod 4 (never 1 mod 4).
+  return cursor.length % 4 !== 1;
 }
 
 export const taskManager = new TaskManager();

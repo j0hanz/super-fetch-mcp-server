@@ -10,6 +10,8 @@ import { isIP } from 'node:net';
 import { freemem, hostname, totalmem } from 'node:os';
 import { monitorEventLoopDelay, performance } from 'node:perf_hooks';
 import process from 'node:process';
+import { Writable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { setInterval as setIntervalPromise } from 'node:timers/promises';
 
 import {
@@ -353,7 +355,7 @@ class JsonBodyReader {
     try {
       const { chunks, size } = await this.collectChunks(req, limit, signal);
       if (chunks.length === 0) return undefined;
-      return Buffer.concat(chunks, size).toString();
+      return Buffer.concat(chunks, size).toString('utf8');
     } finally {
       this.detachAbortListener(signal, abortListener);
     }
@@ -402,21 +404,42 @@ class JsonBodyReader {
     let size = 0;
     const chunks: Buffer[] = [];
 
+    const sink = new Writable({
+      write: (chunk, _encoding, callback): void => {
+        try {
+          if (signal?.aborted || req.destroyed) {
+            callback(new JsonBodyError('read-failed', 'Request aborted'));
+            return;
+          }
+
+          const buf = this.normalizeChunk(
+            chunk as Buffer | Uint8Array | string
+          );
+          size += buf.length;
+
+          if (size > limit) {
+            req.destroy();
+            callback(
+              new JsonBodyError('payload-too-large', 'Payload too large')
+            );
+            return;
+          }
+
+          chunks.push(buf);
+          callback();
+        } catch (err: unknown) {
+          callback(err instanceof Error ? err : new Error(String(err)));
+        }
+      },
+    });
+
     try {
-      for await (const chunk of req as AsyncIterable<
-        Buffer | Uint8Array | string
-      >) {
-        if (signal?.aborted || req.destroyed) {
-          throw new JsonBodyError('read-failed', 'Request aborted');
-        }
-        const buf = this.normalizeChunk(chunk);
-        size += buf.length;
-        if (size > limit) {
-          req.destroy();
-          throw new JsonBodyError('payload-too-large', 'Payload too large');
-        }
-        chunks.push(buf);
+      if (signal?.aborted || req.destroyed) {
+        throw new JsonBodyError('read-failed', 'Request aborted');
       }
+
+      await pipeline(req, sink, signal ? { signal } : undefined);
+      return { chunks, size };
     } catch (err: unknown) {
       if (err instanceof JsonBodyError) throw err;
       if (signal?.aborted || req.destroyed) {
@@ -427,13 +450,11 @@ class JsonBodyReader {
         err instanceof Error ? err.message : String(err)
       );
     }
-
-    return { chunks, size };
   }
 
   private normalizeChunk(chunk: Buffer | Uint8Array | string): Buffer {
     if (Buffer.isBuffer(chunk)) return chunk;
-    if (typeof chunk === 'string') return Buffer.from(chunk);
+    if (typeof chunk === 'string') return Buffer.from(chunk, 'utf8');
     return Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength);
   }
 }
@@ -764,8 +785,9 @@ class AuthService {
     clientId: string,
     clientSecret: string | undefined
   ): string {
+    // Base64 is only an encoding for header transport; it is NOT encryption.
     const credentials = `${clientId}:${clientSecret ?? ''}`;
-    return `Basic ${Buffer.from(credentials).toString('base64')}`;
+    return `Basic ${Buffer.from(credentials, 'utf8').toString('base64')}`;
   }
 
   private buildIntrospectionRequest(

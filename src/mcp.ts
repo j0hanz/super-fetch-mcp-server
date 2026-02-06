@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import process from 'node:process';
 
 import { z } from 'zod';
@@ -43,8 +43,15 @@ import { isObject } from './type-guards.js';
 async function getLocalIcons(
   signal?: AbortSignal
 ): Promise<McpIcon[] | undefined> {
+  const MAX_ICON_BYTES = 10 * 1024;
+
   try {
     const iconPath = new URL('../assets/logo.svg', import.meta.url);
+
+    if (signal?.aborted) return undefined;
+    const { size } = await stat(iconPath);
+    if (size > MAX_ICON_BYTES) return undefined;
+
     const base64 = await readFile(iconPath, {
       encoding: 'base64',
       ...(signal ? { signal } : {}),

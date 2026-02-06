@@ -853,6 +853,67 @@ function buildCodeTranslator(ctx: unknown): TranslatorConfig {
   return { noEscape: true, preserveWhitespace: true };
 }
 
+function extractFirstSrcsetUrl(srcset: string): string {
+  const first = srcset.split(',')[0];
+  if (!first) return '';
+  return first.trim().split(/\s+/)[0] ?? '';
+}
+
+const LAZY_SRC_ATTRIBUTES = [
+  'data-src',
+  'data-lazy-src',
+  'data-original',
+  'data-srcset',
+] as const;
+
+function extractNonDataSrcsetUrl(value: string): string | undefined {
+  const url = extractFirstSrcsetUrl(value);
+  return url && !url.startsWith('data:') ? url : undefined;
+}
+
+function resolveLazySrc(
+  getAttribute: (name: string) => string | null
+): string | undefined {
+  for (const attr of LAZY_SRC_ATTRIBUTES) {
+    const lazy = getAttribute(attr);
+    if (!lazy || lazy.startsWith('data:')) continue;
+
+    if (attr === 'data-srcset') {
+      const url = extractNonDataSrcsetUrl(lazy);
+      if (url) return url;
+      continue;
+    }
+
+    return lazy;
+  }
+  return undefined;
+}
+
+function resolveImageSrc(
+  getAttribute: ((name: string) => string | null) | undefined
+): string {
+  if (!getAttribute) return '';
+
+  const srcRaw = getAttribute('src') ?? '';
+  if (srcRaw && !srcRaw.startsWith('data:')) return srcRaw;
+
+  // First check common lazy-loading attributes that may contain non-data URLs before falling back to the native srcset, as some sites use data URIs in lazy attributes while still providing valid URLs in srcset.
+  const lazySrc = resolveLazySrc(getAttribute);
+  if (lazySrc) return lazySrc;
+
+  // If the src is a data URI or missing, check srcset for a valid URL. Some sites use srcset with data URIs in src and actual URLs in srcset for responsive images.
+  const srcset = getAttribute('srcset');
+  if (srcset) {
+    const url = extractNonDataSrcsetUrl(srcset);
+    if (url) return url;
+  }
+
+  // If the only available src is a data URI, we choose to omit it rather than include the raw data in the alt text or URL, as data URIs can be very long and are not useful in Markdown output.
+  if (srcRaw.startsWith('data:')) return '[data URI removed]';
+
+  return '';
+}
+
 function buildImageTranslator(ctx: unknown): TranslatorConfig {
   if (!isObject(ctx)) return { content: '' };
 
@@ -861,8 +922,7 @@ function buildImageTranslator(ctx: unknown): TranslatorConfig {
     ? node.getAttribute.bind(node)
     : undefined;
 
-  const srcRaw = getAttribute?.('src') ?? '';
-  const src = srcRaw.startsWith('data:') ? '[data URI removed]' : srcRaw;
+  const src = resolveImageSrc(getAttribute);
 
   const existingAlt = getAttribute?.('alt') ?? '';
   const alt = existingAlt.trim() || deriveAltFromImageUrl(src);

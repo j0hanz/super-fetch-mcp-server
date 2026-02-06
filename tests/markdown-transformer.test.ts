@@ -205,3 +205,83 @@ describe('htmlToMarkdown image alt text', () => {
     assert.ok(markdown.includes('![](https://example.com/)'));
   });
 });
+
+describe('htmlToMarkdown lazy-loaded image support', () => {
+  it('resolves image from data-src when src is absent', () => {
+    const html =
+      '<img data-src="https://cdn.example.com/lazy.jpg" alt="lazy image" />';
+    const markdown = htmlToMarkdown(html);
+
+    assert.ok(
+      markdown.includes('![lazy image](https://cdn.example.com/lazy.jpg)')
+    );
+  });
+
+  it('resolves image from data-src when src is a data URI placeholder', () => {
+    const html =
+      '<img src="data:image/gif;base64,R0lGODlh" data-src="https://cdn.example.com/real.jpg" alt="placeholder" />';
+    const markdown = htmlToMarkdown(html);
+
+    assert.ok(
+      markdown.includes('![placeholder](https://cdn.example.com/real.jpg)')
+    );
+  });
+
+  it('resolves image from data-lazy-src fallback', () => {
+    const html =
+      '<img data-lazy-src="https://cdn.example.com/lazy2.jpg" alt="lazy2" />';
+    const markdown = htmlToMarkdown(html);
+
+    assert.ok(markdown.includes('![lazy2](https://cdn.example.com/lazy2.jpg)'));
+  });
+
+  it('resolves image from data-original fallback', () => {
+    const html =
+      '<img data-original="https://cdn.example.com/original.jpg" alt="original" />';
+    const markdown = htmlToMarkdown(html);
+
+    assert.ok(
+      markdown.includes('![original](https://cdn.example.com/original.jpg)')
+    );
+  });
+
+  it('resolves image from srcset when src is absent', () => {
+    const html =
+      '<img srcset="https://cdn.example.com/srcset.jpg 1x, https://cdn.example.com/srcset2x.jpg 2x" alt="srcset" />';
+    const markdown = htmlToMarkdown(html);
+
+    assert.ok(
+      markdown.includes('![srcset](https://cdn.example.com/srcset.jpg)')
+    );
+  });
+
+  it('resolves image from data-srcset fallback', () => {
+    const html =
+      '<img data-srcset="https://cdn.example.com/ds.jpg 800w, https://cdn.example.com/ds2.jpg 1200w" alt="data-srcset" />';
+    const markdown = htmlToMarkdown(html);
+
+    assert.ok(
+      markdown.includes('![data-srcset](https://cdn.example.com/ds.jpg)')
+    );
+  });
+
+  it('prefers real src over data-src attributes', () => {
+    const html =
+      '<img src="https://cdn.example.com/real.jpg" data-src="https://cdn.example.com/lazy.jpg" alt="real" />';
+    const markdown = htmlToMarkdown(html);
+
+    assert.ok(markdown.includes('![real](https://cdn.example.com/real.jpg)'));
+  });
+
+  it('handles picture with source and lazy-loaded img', () => {
+    const html = `<picture>
+      <source srcset="https://cdn.example.com/small.jpg" media="(max-width:480px)">
+      <img data-src="https://cdn.example.com/lazy.jpg" alt="picture lazy" />
+    </picture>`;
+    const markdown = htmlToMarkdown(html);
+
+    assert.ok(
+      markdown.includes('![picture lazy](https://cdn.example.com/lazy.jpg)')
+    );
+  });
+});
