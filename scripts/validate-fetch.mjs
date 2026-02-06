@@ -572,7 +572,7 @@ function parseCliArgs(args) {
   const { values, positionals } = parseArgs({
     args,
     allowPositionals: true,
-    strict: false,
+    strict: true,
     options: {
       help: { type: 'boolean' },
       config: { type: 'string' },
@@ -626,7 +626,15 @@ function parseCliArgs(args) {
 async function main() {
   const args = process.argv.slice(2);
 
-  const parsed = parseCliArgs(args);
+  let parsed;
+  try {
+    parsed = parseCliArgs(args);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`❌ Error: ${message}`);
+    printHelp();
+    return 1;
+  }
 
   if (args.length === 0 || parsed.help) {
     printHelp();

@@ -329,12 +329,20 @@ const CLI = {
 
   async main(args) {
     const rawArgs = args.slice(2);
-    const parsed = parseArgs({
-      args: rawArgs,
-      allowPositionals: true,
-      strict: false,
-      tokens: true,
-    });
+    let parsed;
+    try {
+      parsed = parseArgs({
+        args: rawArgs,
+        allowPositionals: true,
+        strict: false,
+        tokens: true,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      Logger.error(`Invalid arguments: ${message}`);
+      process.exitCode = 1;
+      return;
+    }
 
     const tokens = parsed.tokens ?? [];
     const positionalTokens = tokens.filter(

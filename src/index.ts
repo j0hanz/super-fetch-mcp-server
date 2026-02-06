@@ -36,13 +36,21 @@ function scheduleForcedExit(reason: string): void {
   forcedExitTimer.unref();
 }
 
-const { values } = parseArgs({
-  options: {
-    stdio: { type: 'boolean', default: false },
-    help: { type: 'boolean', default: false },
-    version: { type: 'boolean', default: false },
-  },
-});
+let values: { stdio: boolean; help: boolean; version: boolean };
+try {
+  ({ values } = parseArgs({
+    options: {
+      stdio: { type: 'boolean', default: false },
+      help: { type: 'boolean', default: false },
+      version: { type: 'boolean', default: false },
+    },
+  }));
+} catch (error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  process.stderr.write(`Invalid arguments: ${message}\n\n`);
+  printUsage();
+  process.exit(1);
+}
 
 if (values.help) {
   printUsage();
