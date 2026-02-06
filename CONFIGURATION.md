@@ -44,9 +44,25 @@ SuperFetch runs with no configuration by default. Just run with `--stdio`:
 | `LOG_LEVEL`                        | `info`                            | Logging level. Only `debug` enables verbose logs; other values behave like `info` |
 | `ALLOW_REMOTE`                     | `false`                           | Allow binding to non-loopback hosts (OAuth required)                              |
 | `ALLOWED_HOSTS`                    | (empty)                           | Additional allowed Host/Origin values (comma/space separated)                     |
+| `SERVER_MAX_CONNECTIONS`           | `0`                               | Max concurrent TCP connections; `0` disables the limit                            |
+| `SERVER_BLOCK_PRIVATE_CONNECTIONS` | `false`                           | Drop inbound connections from private/reserved IP ranges (includes loopback)      |
 | `FETCH_TIMEOUT_MS`                 | `15000`                           | Outgoing fetch timeout in milliseconds (1000-60000)                               |
 | `SUPERFETCH_EXTRA_NOISE_TOKENS`    | (empty)                           | Additional CSS class/ID tokens to flag as noise (comma/space separated)           |
 | `SUPERFETCH_EXTRA_NOISE_SELECTORS` | (empty)                           | Additional CSS selectors for noise removal (comma/space separated)                |
+
+### Transform Workers
+
+These limits are optional. When set, they are passed to Node.js `worker_threads` as `resourceLimits`.
+
+| Variable                                   | Default   | Description                                                                    |
+| ------------------------------------------ | --------- | ------------------------------------------------------------------------------ |
+| `TRANSFORM_WORKER_MODE`                    | `threads` | Worker execution mode: `threads` (worker_threads) or `process` (child_process) |
+| `TRANSFORM_WORKER_MAX_OLD_GENERATION_MB`   | (unset)   | V8 old generation heap limit in MB                                             |
+| `TRANSFORM_WORKER_MAX_YOUNG_GENERATION_MB` | (unset)   | V8 young generation heap limit in MB                                           |
+| `TRANSFORM_WORKER_CODE_RANGE_MB`           | (unset)   | V8 code range size in MB                                                       |
+| `TRANSFORM_WORKER_STACK_MB`                | (unset)   | Worker thread stack size in MB                                                 |
+
+**Note:** Resource limit variables apply to `threads` mode only. In `process` mode, Node defaults are used.
 
 ### Auth (HTTP Mode)
 

@@ -354,54 +354,62 @@ async function runFetchTaskExecution(params: {
 }): Promise<void> {
   const { taskId, args, meta, sendNotification } = params;
 
-  const controller = attachAbortController(taskId);
+  return runWithRequestContext(
+    { requestId: taskId, operationId: taskId },
+    async () => {
+      const controller = attachAbortController(taskId);
 
-  try {
-    const relatedMeta = buildRelatedTaskMeta(taskId, meta);
+      try {
+        const relatedMeta = buildRelatedTaskMeta(taskId, meta);
 
-    const result = await fetchUrlToolHandler(args, {
-      signal: controller.signal,
-      requestId: taskId, // Correlation
-      _meta: relatedMeta,
-      ...(sendNotification ? { sendNotification } : {}),
-    });
+        const result = await fetchUrlToolHandler(args, {
+          signal: controller.signal,
+          requestId: taskId, // Correlation
+          _meta: relatedMeta,
+          ...(sendNotification ? { sendNotification } : {}),
+        });
 
-    const isToolError =
-      isRecord(result) && typeof result.isError === 'boolean' && result.isError;
+        const isToolError =
+          isRecord(result) &&
+          typeof result.isError === 'boolean' &&
+          result.isError;
 
-    taskManager.updateTask(taskId, {
-      status: isToolError ? 'failed' : 'completed',
-      ...(isToolError
-        ? {
-            statusMessage:
-              (result as { structuredContent?: { error?: string } })
-                .structuredContent?.error ?? 'Tool execution failed',
-          }
-        : {}),
-      result,
-    });
-  } catch (error: unknown) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    const errorPayload =
-      error instanceof McpError
-        ? {
-            code: error.code,
-            message: errorMessage,
-            data: error.data,
-          }
-        : {
-            code: ErrorCode.InternalError,
-            message: errorMessage,
-          };
+        taskManager.updateTask(taskId, {
+          status: isToolError ? 'failed' : 'completed',
+          ...(isToolError
+            ? {
+                statusMessage:
+                  (result as { structuredContent?: { error?: string } })
+                    .structuredContent?.error ?? 'Tool execution failed',
+              }
+            : {}),
+          result,
+        });
+      } catch (error: unknown) {
+        const errorMessage =
+          error instanceof Error ? error.message : String(error);
+        const errorPayload =
+          error instanceof McpError
+            ? {
+                code: error.code,
+                message: errorMessage,
+                data: error.data,
+              }
+            : {
+                code: ErrorCode.InternalError,
+                message: errorMessage,
+              };
 
-    taskManager.updateTask(taskId, {
-      status: 'failed',
-      statusMessage: errorMessage,
-      error: errorPayload,
-    });
-  } finally {
-    clearTaskExecution(taskId);
-  }
+        taskManager.updateTask(taskId, {
+          status: 'failed',
+          statusMessage: errorMessage,
+          error: errorPayload,
+        });
+      } finally {
+        clearTaskExecution(taskId);
+      }
+    }
+  );
 }
 
 function handleTaskToolCall(
@@ -489,7 +497,11 @@ function registerTaskHandlers(server: McpServer): void {
       const sessionId = (extra as HandlerExtra | undefined)?.sessionId;
 
       return runWithRequestContext(
-        { requestId, ...(sessionId ? { sessionId } : {}) },
+        {
+          requestId,
+          operationId: requestId,
+          ...(sessionId ? { sessionId } : {}),
+        },
         () => {
           const parsed = parseExtendedCallToolRequest(request);
           return handleToolCallRequest(parsed, context);
@@ -682,13 +694,12 @@ function createShutdownHandler(server: McpServer): (signal: string) => void {
     Promise.resolve()
       .then(() => shutdownServer(server, signal))
       .catch((err: unknown) => {
-        logError(
-          'Error during shutdown',
-          err instanceof Error ? err : undefined
-        );
+        const error = err instanceof Error ? err : new Error(String(err));
+        logError('Error during shutdown', error);
+        process.exitCode = 1;
       })
       .finally(() => {
-        process.exit(0);
+        if (process.exitCode === undefined) process.exitCode = 0;
       });
   };
 }
@@ -710,11 +721,10 @@ async function connectStdioServer(
     await server.connect(transport);
     logInfo('superFetch MCP server running on stdio');
   } catch (error: unknown) {
-    logError(
-      'Failed to start stdio server',
-      error instanceof Error ? error : undefined
-    );
-    process.exit(1);
+    const err = error instanceof Error ? error : new Error(String(error));
+    throw new Error(`Failed to start stdio server: ${err.message}`, {
+      cause: err,
+    });
   }
 }
 

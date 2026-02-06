@@ -4,6 +4,7 @@ import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const RESULT_MARKER = '__RESULT__';
+const CHILD_TIMEOUT_MS = 20000;
 
 function runIsolatedNode(
   script: string,
@@ -15,6 +16,8 @@ function runIsolatedNode(
     {
       cwd: fileURLToPath(new URL('..', import.meta.url)),
       encoding: 'utf8',
+      timeout: CHILD_TIMEOUT_MS,
+      killSignal: 'SIGKILL',
       env: {
         ...process.env,
         ...env,

@@ -7,7 +7,7 @@ import {
   type ServerResponse,
 } from 'node:http';
 import { isIP } from 'node:net';
-import { arch, freemem, hostname, platform, totalmem } from 'node:os';
+import { freemem, hostname, totalmem } from 'node:os';
 import { monitorEventLoopDelay, performance } from 'node:perf_hooks';
 import process from 'node:process';
 import { setInterval as setIntervalPromise } from 'node:timers/promises';
@@ -26,6 +26,10 @@ import { keys as cacheKeys, handleDownload } from './cache.js';
 import { config, enableHttpMode, serverVersion } from './config.js';
 import { sha256Hex, timingSafeEqualUtf8 } from './crypto.js';
 import { normalizeHost } from './host-normalization.js';
+import {
+  createDefaultBlockList,
+  normalizeIpForBlockList,
+} from './ip-blocklist.js';
 import {
   acceptsEventStream,
   isJsonRpcBatchRequest,
@@ -181,6 +185,28 @@ function normalizeRemoteAddress(address: string | undefined): string | null {
   if (isIP(normalized)) return normalized;
 
   return trimmed;
+}
+
+function registerInboundBlockList(server: Server): void {
+  if (!config.server.http.blockPrivateConnections) return;
+
+  const blockList = createDefaultBlockList();
+
+  server.on('connection', (socket) => {
+    const remoteAddress = normalizeRemoteAddress(socket.remoteAddress);
+    if (!remoteAddress) return;
+
+    const normalized = normalizeIpForBlockList(remoteAddress);
+    if (!normalized) return;
+
+    if (blockList.check(normalized.ip, normalized.family)) {
+      logWarn('Blocked inbound connection', {
+        remoteAddress: normalized.ip,
+        family: normalized.family,
+      });
+      socket.destroy();
+    }
+  });
 }
 
 function getHeaderValue(req: IncomingMessage, name: string): string | null {
@@ -1074,10 +1100,17 @@ class HttpDispatcher {
       timestamp: new Date().toISOString(),
       os: {
         hostname: hostname(),
-        platform: platform(),
-        arch: arch(),
+        platform: process.platform,
+        arch: process.arch,
         memoryFree: freemem(),
         memoryTotal: totalmem(),
+      },
+      process: {
+        pid: process.pid,
+        ppid: process.ppid,
+        memory: process.memoryUsage(),
+        cpu: process.cpuUsage(),
+        resource: process.resourceUsage(),
       },
       perf: getEventLoopStats(),
       stats: {
@@ -1133,7 +1166,11 @@ class HttpRequestPipeline {
     const sessionId = getMcpSessionId(rawReq) ?? undefined;
 
     return runWithRequestContext(
-      { requestId, ...(sessionId ? { sessionId } : {}) },
+      {
+        requestId,
+        operationId: requestId,
+        ...(sessionId ? { sessionId } : {}),
+      },
       async () => {
         const ctx = buildRequestContext(rawReq, rawRes);
         if (!ctx) {
@@ -1280,13 +1317,14 @@ export async function startHttpServer(): Promise<{
     });
   });
 
+  registerInboundBlockList(server);
   applyHttpServerTuning(server);
   await listen(server, config.server.host, config.server.port);
 
   const port = resolveListeningPort(server, config.server.port);
   logInfo(`HTTP server listening on port ${port}`, {
-    platform: platform(),
-    arch: arch(),
+    platform: process.platform,
+    arch: process.arch,
     hostname: hostname(),
     nodeVersion: process.version,
   });

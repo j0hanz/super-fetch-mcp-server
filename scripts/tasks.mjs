@@ -4,6 +4,7 @@ import { access, chmod, cp, mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import process from 'node:process';
+import { parseArgs } from 'node:util';
 
 // --- Configuration (Single Source of Truth) ---
 const BIN = {
@@ -36,6 +37,15 @@ const CONFIG = {
     patterns: ['src/__tests__/**/*.test.ts', 'tests/**/*.test.ts'],
   },
 };
+
+const DEFAULT_TASK_TIMEOUT_MS = Number.parseInt(
+  process.env.TASK_TIMEOUT_MS ?? '',
+  10
+);
+const TASK_TIMEOUT_MS =
+  Number.isFinite(DEFAULT_TASK_TIMEOUT_MS) && DEFAULT_TASK_TIMEOUT_MS > 0
+    ? DEFAULT_TASK_TIMEOUT_MS
+    : undefined;
 
 // --- Infrastructure Layer (IO & System) ---
 const Logger = {
@@ -78,21 +88,64 @@ const System = {
     await chmod(path, mode);
   },
 
-  exec(command, args = []) {
+  exec(command, args = [], options = {}) {
     return new Promise((resolve, reject) => {
       const resolvedCommand = command === 'node' ? process.execPath : command;
+      const timeoutMs = options.timeoutMs ?? TASK_TIMEOUT_MS;
+      const timeoutSignal =
+        typeof timeoutMs === 'number' && timeoutMs > 0
+          ? AbortSignal.timeout(timeoutMs)
+          : undefined;
+      const combinedSignal =
+        options.signal && timeoutSignal
+          ? AbortSignal.any([options.signal, timeoutSignal])
+          : (options.signal ?? timeoutSignal);
+
+      if (combinedSignal?.aborted) {
+        reject(new Error(`${command} aborted before start`));
+        return;
+      }
 
       const proc = spawn(resolvedCommand, args, {
         stdio: 'inherit',
         shell: false,
         windowsHide: true,
+        ...(combinedSignal ? { signal: combinedSignal } : {}),
       });
 
+      let aborted = false;
+      const abortListener = combinedSignal
+        ? () => {
+            aborted = true;
+          }
+        : null;
+
+      if (combinedSignal && abortListener) {
+        combinedSignal.addEventListener('abort', abortListener, { once: true });
+      }
+
+      const cleanup = () => {
+        if (combinedSignal && abortListener) {
+          try {
+            combinedSignal.removeEventListener('abort', abortListener);
+          } catch {
+            /* ignore */
+          }
+        }
+      };
+
       proc.on('error', (error) => {
+        cleanup();
         reject(error);
       });
 
       proc.on('close', (code, signal) => {
+        cleanup();
+        if (aborted) {
+          const suffix = signal ? ` (signal ${signal})` : '';
+          reject(new Error(`${command} aborted${suffix}`));
+          return;
+        }
         if (code === 0) return resolve();
         const suffix = signal ? ` (signal ${signal})` : '';
         reject(new Error(`${command} exited with code ${code}${suffix}`));
@@ -254,8 +307,34 @@ const CLI = {
   },
 
   async main(args) {
-    const taskName = args[2] ?? 'build';
-    const restArgs = args.slice(3);
+    const rawArgs = args.slice(2);
+    const parsed = parseArgs({
+      args: rawArgs,
+      allowPositionals: true,
+      strict: false,
+      tokens: true,
+    });
+
+    const tokens = parsed.tokens ?? [];
+    const positionalTokens = tokens.filter(
+      (token) => token.kind === 'positional'
+    );
+    let taskIndex = -1;
+
+    for (const token of positionalTokens) {
+      const candidate = String(token.value);
+      if (candidate in this.routes) {
+        taskIndex = token.index;
+        break;
+      }
+    }
+
+    if (taskIndex === -1 && positionalTokens.length > 0) {
+      taskIndex = positionalTokens[0].index;
+    }
+
+    const taskName = taskIndex >= 0 ? String(rawArgs[taskIndex]) : 'build';
+    const restArgs = taskIndex >= 0 ? rawArgs.slice(taskIndex + 1) : [];
     const action = this.routes[taskName];
 
     if (!action) {

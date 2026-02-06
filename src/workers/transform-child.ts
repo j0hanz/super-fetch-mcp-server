@@ -1,5 +1,4 @@
-import { types as utilTypes } from 'node:util';
-import { parentPort } from 'node:worker_threads';
+import process from 'node:process';
 
 import { z } from 'zod';
 
@@ -13,16 +12,16 @@ import type {
 } from '../transform-types.js';
 import { transformHtmlToMarkdownInProcess } from '../transform.js';
 
-const port =
-  parentPort ??
+const send =
+  process.send ??
   (() => {
-    throw new Error('transform-worker started without parentPort');
-  })();
+    throw new Error('transform-child started without IPC channel');
+  });
 
 const controllersById = new Map<string, AbortController>();
 
 function post(message: TransformWorkerOutgoingMessage): void {
-  port.postMessage(message);
+  send(message);
 }
 
 function postError(
@@ -133,15 +132,11 @@ function handleCancel(message: TransformWorkerCancelMessage): void {
   controller.abort(new Error('Canceled'));
 }
 
-const HtmlBufferSchema = z.custom<Uint8Array>((value) =>
-  utilTypes.isUint8Array(value)
-);
-
 const TransformMessageSchema = z.object({
   type: z.literal('transform'),
   id: z.string(),
   html: z.string().optional(),
-  htmlBuffer: HtmlBufferSchema.optional(),
+  htmlBuffer: z.instanceof(Uint8Array).optional(),
   encoding: z.string().optional(),
   url: z.string(),
   includeMetadata: z.boolean(),
@@ -158,7 +153,7 @@ const IncomingMessageSchema = z.discriminatedUnion('type', [
   CancelMessageSchema,
 ]);
 
-port.on('message', (raw: unknown) => {
+process.on('message', (raw: unknown) => {
   const parsed = IncomingMessageSchema.safeParse(raw);
   if (!parsed.success) return;
 

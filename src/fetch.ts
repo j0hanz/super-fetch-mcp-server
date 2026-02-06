@@ -2,12 +2,16 @@ import { Buffer } from 'node:buffer';
 import { randomUUID } from 'node:crypto';
 import diagnosticsChannel from 'node:diagnostics_channel';
 import dns from 'node:dns';
-import { BlockList, isIP } from 'node:net';
+import { isIP } from 'node:net';
 import { performance } from 'node:perf_hooks';
 import { setTimeout as delay } from 'node:timers/promises';
 
 import { config } from './config.js';
 import { createErrorWithCode, FetchError, isSystemError } from './errors.js';
+import {
+  createDefaultBlockList,
+  normalizeIpForBlockList,
+} from './ip-blocklist.js';
 import {
   getOperationId,
   getRequestId,
@@ -65,88 +69,21 @@ const defaultRedactor: UrlRedactor = {
 
 const defaultFetch: FetchLike = (input, init) => globalThis.fetch(input, init);
 
-type IpSegment = number | string;
-
-function buildIpv4(parts: readonly [number, number, number, number]): string {
-  return parts.join('.');
-}
-
-function buildIpv6(parts: readonly IpSegment[]): string {
-  return parts.map(String).join(':');
-}
-
-const IPV6_ZERO = buildIpv6([0, 0, 0, 0, 0, 0, 0, 0]);
-const IPV6_LOOPBACK = buildIpv6([0, 0, 0, 0, 0, 0, 0, 1]);
-const IPV6_64_FF9B = buildIpv6(['64', 'ff9b', 0, 0, 0, 0, 0, 0]);
-const IPV6_64_FF9B_1 = buildIpv6(['64', 'ff9b', 1, 0, 0, 0, 0, 0]);
-const IPV6_2001 = buildIpv6(['2001', 0, 0, 0, 0, 0, 0, 0]);
-const IPV6_2002 = buildIpv6(['2002', 0, 0, 0, 0, 0, 0, 0]);
-const IPV6_FC00 = buildIpv6(['fc00', 0, 0, 0, 0, 0, 0, 0]);
-const IPV6_FE80 = buildIpv6(['fe80', 0, 0, 0, 0, 0, 0, 0]);
-const IPV6_FF00 = buildIpv6(['ff00', 0, 0, 0, 0, 0, 0, 0]);
-
-type BlockedSubnet = Readonly<{
-  subnet: string;
-  prefix: number;
-  family: 'ipv4' | 'ipv6';
-}>;
-
-const BLOCKED_SUBNETS: readonly BlockedSubnet[] = [
-  { subnet: buildIpv4([0, 0, 0, 0]), prefix: 8, family: 'ipv4' },
-  { subnet: buildIpv4([10, 0, 0, 0]), prefix: 8, family: 'ipv4' },
-  { subnet: buildIpv4([100, 64, 0, 0]), prefix: 10, family: 'ipv4' },
-  { subnet: buildIpv4([127, 0, 0, 0]), prefix: 8, family: 'ipv4' },
-  { subnet: buildIpv4([169, 254, 0, 0]), prefix: 16, family: 'ipv4' },
-  { subnet: buildIpv4([172, 16, 0, 0]), prefix: 12, family: 'ipv4' },
-  { subnet: buildIpv4([192, 168, 0, 0]), prefix: 16, family: 'ipv4' },
-  { subnet: buildIpv4([224, 0, 0, 0]), prefix: 4, family: 'ipv4' },
-  { subnet: buildIpv4([240, 0, 0, 0]), prefix: 4, family: 'ipv4' },
-  { subnet: IPV6_ZERO, prefix: 128, family: 'ipv6' },
-  { subnet: IPV6_LOOPBACK, prefix: 128, family: 'ipv6' },
-  { subnet: IPV6_64_FF9B, prefix: 96, family: 'ipv6' },
-  { subnet: IPV6_64_FF9B_1, prefix: 48, family: 'ipv6' },
-  { subnet: IPV6_2001, prefix: 32, family: 'ipv6' },
-  { subnet: IPV6_2002, prefix: 16, family: 'ipv6' },
-  { subnet: IPV6_FC00, prefix: 7, family: 'ipv6' },
-  { subnet: IPV6_FE80, prefix: 10, family: 'ipv6' },
-  { subnet: IPV6_FF00, prefix: 8, family: 'ipv6' },
-];
-
-function createSubnetBlockList(subnets: readonly BlockedSubnet[]): BlockList {
-  const list = new BlockList();
-  for (const entry of subnets) {
-    list.addSubnet(entry.subnet, entry.prefix, entry.family);
-  }
-  return list;
-}
-
 type SecurityConfig = typeof config.security;
 
 class IpBlocker {
-  private readonly blockList: BlockList;
+  private readonly blockList = createDefaultBlockList();
 
-  constructor(private readonly security: SecurityConfig) {
-    this.blockList = createSubnetBlockList(BLOCKED_SUBNETS);
-  }
+  constructor(private readonly security: SecurityConfig) {}
 
   isBlockedIp(candidate: string): boolean {
-    if (this.security.blockedHosts.has(candidate)) return true;
+    const normalized = candidate.trim().toLowerCase();
+    if (!normalized) return false;
+    if (this.security.blockedHosts.has(normalized)) return true;
 
-    const ipType = isIP(candidate);
-    if (ipType !== 4 && ipType !== 6) return false;
-
-    const normalized = candidate.toLowerCase();
-    if (this.isBlockedBySubnet(normalized, ipType)) return true;
-
-    return (
-      this.security.blockedIpPattern.test(normalized) ||
-      this.security.blockedIpv4MappedPattern.test(normalized)
-    );
-  }
-
-  private isBlockedBySubnet(ip: string, ipType: 4 | 6): boolean {
-    const family = ipType === 4 ? 'ipv4' : 'ipv6';
-    return this.blockList.check(ip, family);
+    const normalizedIp = normalizeIpForBlockList(normalized);
+    if (!normalizedIp) return false;
+    return this.blockList.check(normalizedIp.ip, normalizedIp.family);
   }
 }
 
@@ -428,6 +365,9 @@ class RawUrlTransformer {
     base: string,
     hash: string
   ): { url: string; platform: string } | null {
+    const parsedMatch = this.tryTransformWithUrl(base, hash);
+    if (parsedMatch) return parsedMatch;
+
     for (const rule of TRANSFORM_RULES) {
       const urlToMatch =
         rule.name === 'github-gist' && hash.startsWith('#file-')
@@ -439,6 +379,134 @@ class RawUrlTransformer {
     }
 
     return null;
+  }
+
+  private tryTransformWithUrl(
+    base: string,
+    hash: string
+  ): { url: string; platform: string } | null {
+    if (!URL.canParse(base)) return null;
+
+    let parsed: URL;
+    try {
+      parsed = new URL(base);
+    } catch {
+      return null;
+    }
+
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:')
+      return null;
+
+    const hostname = parsed.hostname.toLowerCase();
+    const segments = parsed.pathname.split('/').filter(Boolean);
+
+    if (hostname === 'github.com' || hostname === 'www.github.com') {
+      const github = this.transformGithubBlob(segments);
+      if (github) return github;
+    }
+
+    if (hostname === 'gist.github.com') {
+      const gist = this.transformGithubGist(segments, hash);
+      if (gist) return gist;
+    }
+
+    if (hostname === 'gitlab.com' || hostname.endsWith('.gitlab.com')) {
+      const gitlab = this.transformGitLab(segments, parsed.origin);
+      if (gitlab) return gitlab;
+    }
+
+    if (hostname === 'bitbucket.org' || hostname === 'www.bitbucket.org') {
+      const bitbucket = this.transformBitbucket(segments, parsed.origin);
+      if (bitbucket) return bitbucket;
+    }
+
+    return null;
+  }
+
+  private transformGithubBlob(
+    segments: string[]
+  ): { url: string; platform: string } | null {
+    if (segments.length < 5 || segments[2] !== 'blob') return null;
+
+    const owner = segments[0];
+    const repo = segments[1];
+    const branch = segments[3];
+    const path = segments.slice(4).join('/');
+
+    if (!owner || !repo || !branch || !path) return null;
+
+    return {
+      url: `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${path}`,
+      platform: 'github',
+    };
+  }
+
+  private transformGithubGist(
+    segments: string[],
+    hash: string
+  ): { url: string; platform: string } | null {
+    if (segments.length < 2) return null;
+
+    const user = segments[0];
+    const gistId = segments[1];
+    if (!user || !gistId) return null;
+
+    let filePath = '';
+    if (segments[2] === 'raw' && segments.length >= 4) {
+      const rawPath = segments.slice(3).join('/');
+      if (rawPath) filePath = `/${rawPath}`;
+    } else if (hash.startsWith('#file-')) {
+      const filename = hash.slice('#file-'.length).replace(/-/g, '.');
+      if (filename) filePath = `/${filename}`;
+    }
+
+    return {
+      url: `https://gist.githubusercontent.com/${user}/${gistId}/raw${filePath}`,
+      platform: 'github-gist',
+    };
+  }
+
+  private transformGitLab(
+    segments: string[],
+    origin: string
+  ): { url: string; platform: string } | null {
+    const markerIndex = segments.findIndex(
+      (segment, index) => segment === '-' && segments[index + 1] === 'blob'
+    );
+
+    if (markerIndex === -1) return null;
+
+    const baseSegments = segments.slice(0, markerIndex);
+    if (baseSegments.length < 2) return null;
+
+    const branch = segments[markerIndex + 2];
+    const path = segments.slice(markerIndex + 3).join('/');
+
+    if (!branch || !path) return null;
+
+    return {
+      url: `${origin}/${baseSegments.join('/')}/-/raw/${branch}/${path}`,
+      platform: 'gitlab',
+    };
+  }
+
+  private transformBitbucket(
+    segments: string[],
+    origin: string
+  ): { url: string; platform: string } | null {
+    if (segments.length < 5 || segments[2] !== 'src') return null;
+
+    const owner = segments[0];
+    const repo = segments[1];
+    const branch = segments[3];
+    const path = segments.slice(4).join('/');
+
+    if (!owner || !repo || !branch || !path) return null;
+
+    return {
+      url: `${origin}/${owner}/${repo}/raw/${branch}/${path}`,
+      platform: 'bitbucket',
+    };
   }
 }
 
@@ -1426,7 +1494,7 @@ class ResponseTextReader {
   ): Promise<{ buffer: Uint8Array; encoding: string; size: number }> {
     let effectiveEncoding = encoding;
     let decoder: TextDecoder | null = null;
-    const chunks: Uint8Array[] = [];
+    const chunks: Buffer[] = [];
     let total = 0;
 
     const reader = stream.getReader();
@@ -1443,31 +1511,41 @@ class ResponseTextReader {
         decoder = createDecoder(effectiveEncoding);
       }
 
-      if (!result.done && isBinaryContent(result.value, decoder?.encoding)) {
-        await this.cancelReaderQuietly(reader);
-        throw new FetchError(
-          'Detailed content type check failed: binary content detected',
-          url,
-          500,
-          { reason: 'binary_content_detected' }
-        );
-      }
-
+      let checkedBinary = false;
       while (!result.done) {
         const chunk = result.value;
-        const newTotal = total + chunk.byteLength;
+        const buf = Buffer.from(
+          chunk.buffer,
+          chunk.byteOffset,
+          chunk.byteLength
+        );
+
+        if (!checkedBinary) {
+          checkedBinary = true;
+          if (isBinaryContent(buf, decoder?.encoding)) {
+            await this.cancelReaderQuietly(reader);
+            throw new FetchError(
+              'Detailed content type check failed: binary content detected',
+              url,
+              500,
+              { reason: 'binary_content_detected' }
+            );
+          }
+        }
+
+        const newTotal = total + buf.length;
 
         if (newTotal > maxBytes) {
           const remaining = maxBytes - total;
           if (remaining > 0) {
-            chunks.push(chunk.subarray(0, remaining));
+            chunks.push(buf.subarray(0, remaining));
             total += remaining;
           }
           await this.cancelReaderQuietly(reader);
           break;
         }
 
-        chunks.push(chunk);
+        chunks.push(buf);
         total = newTotal;
 
         result = await this.readNext(reader, abortRace.abortPromise);
@@ -1480,15 +1558,8 @@ class ResponseTextReader {
       reader.releaseLock();
     }
 
-    const resultBuffer = new Uint8Array(total);
-    let offset = 0;
-    for (const chunk of chunks) {
-      resultBuffer.set(chunk, offset);
-      offset += chunk.byteLength;
-    }
-
     return {
-      buffer: resultBuffer,
+      buffer: Buffer.concat(chunks, total),
       encoding: effectiveEncoding ?? 'utf-8',
       size: total,
     };

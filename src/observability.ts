@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import process from 'node:process';
-import { inspect } from 'node:util';
+import { inspect, stripVTControlCharacters } from 'node:util';
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
@@ -14,8 +14,15 @@ interface RequestContext {
   readonly operationId?: string;
 }
 
-const requestContext = new AsyncLocalStorage<RequestContext>();
+const requestContext = new AsyncLocalStorage<RequestContext>({
+  name: 'requestContext',
+});
 let mcpServer: McpServer | undefined;
+let stderrAvailable = true;
+
+process.stderr.on('error', () => {
+  stderrAvailable = false;
+});
 
 export function setMcpServer(server: McpServer): void {
   mcpServer = server;
@@ -110,17 +117,24 @@ function mapToMcpLevel(
 }
 
 function safeWriteStderr(line: string): void {
+  if (!stderrAvailable) return;
+  if (process.stderr.destroyed || process.stderr.writableEnded) {
+    stderrAvailable = false;
+    return;
+  }
   try {
     process.stderr.write(line);
   } catch {
     // Logging must never take down the process (e.g. EPIPE).
+    stderrAvailable = false;
   }
 }
 
 function writeLog(level: LogLevel, message: string, meta?: LogMetadata): void {
   if (!shouldLog(level)) return;
 
-  safeWriteStderr(`${formatLogEntry(level, message, meta)}\n`);
+  const line = formatLogEntry(level, message, meta);
+  safeWriteStderr(`${stripVTControlCharacters(line)}\n`);
 
   const server = mcpServer;
   if (!server) return;

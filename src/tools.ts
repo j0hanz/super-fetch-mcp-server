@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 
 import { z } from 'zod';
@@ -215,6 +216,8 @@ interface ProgressReporter {
   report: (progress: number, message: string) => Promise<void>;
 }
 
+type RunInContext = ReturnType<typeof AsyncLocalStorage.snapshot>;
+
 /* -------------------------------------------------------------------------------------------------
  * Small runtime helpers
  * ------------------------------------------------------------------------------------------------- */
@@ -291,7 +294,8 @@ class ToolProgressReporter implements ProgressReporter {
     private readonly sendNotification: (
       notification: ProgressNotification
     ) => Promise<void>,
-    private readonly relatedTaskMeta?: { taskId: string }
+    private readonly relatedTaskMeta: { taskId: string } | undefined,
+    private readonly runInContext: RunInContext
   ) {}
 
   static create(extra?: ToolHandlerExtra): ProgressReporter {
@@ -303,10 +307,23 @@ class ToolProgressReporter implements ProgressReporter {
       return { report: async () => {} };
     }
 
-    return new ToolProgressReporter(token, sendNotification, relatedTaskMeta);
+    const runInContext = AsyncLocalStorage.snapshot();
+    return new ToolProgressReporter(
+      token,
+      sendNotification,
+      relatedTaskMeta,
+      runInContext
+    );
   }
 
   async report(progress: number, message: string): Promise<void> {
+    return this.runInContext(() => this.reportInContext(progress, message));
+  }
+
+  private async reportInContext(
+    progress: number,
+    message: string
+  ): Promise<void> {
     const notification: ProgressNotification = {
       method: 'notifications/progress',
       params: {
@@ -553,7 +570,7 @@ function buildEmbeddedResource(
   if (!content) return null;
 
   const filename = cache.generateSafeFilename(url, title, undefined, '.md');
-  const uri = `file:///${filename}`;
+  const uri = new URL(filename, 'file:///').href;
 
   return {
     type: 'resource',

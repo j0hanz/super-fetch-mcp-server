@@ -1,8 +1,12 @@
-import { AsyncLocalStorage } from 'node:async_hooks';
+import { AsyncLocalStorage, AsyncResource } from 'node:async_hooks';
+import { Buffer } from 'node:buffer';
+import { fork } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import diagnosticsChannel from 'node:diagnostics_channel';
 import { availableParallelism } from 'node:os';
 import { performance } from 'node:perf_hooks';
+import { fileURLToPath } from 'node:url';
+import { types as utilTypes } from 'node:util';
 import {
   type Transferable as NodeTransferable,
   Worker,
@@ -51,6 +55,7 @@ import type {
   TransformOptions,
   TransformStageContext,
   TransformStageEvent,
+  TransformWorkerCancelMessage,
   TransformWorkerTransformMessage,
 } from './transform-types.js';
 import { isObject } from './type-guards.js';
@@ -253,24 +258,51 @@ export function endTransformStage(
   return stageTracker.end(context, options);
 }
 
+function getUtf8ByteLength(html: string): number {
+  return Buffer.byteLength(html, 'utf8');
+}
+
+function trimUtf8Buffer(buffer: Buffer, maxBytes: number): Buffer {
+  if (buffer.length <= maxBytes) return buffer;
+  if (maxBytes <= 0) return buffer.subarray(0, 0);
+
+  let end = maxBytes;
+  let cursor = end - 1;
+
+  while (cursor >= 0 && (buffer[cursor] & 0xc0) === 0x80) {
+    cursor -= 1;
+  }
+
+  if (cursor < 0) return buffer.subarray(0, maxBytes);
+
+  const lead = buffer[cursor];
+  let sequenceLength = 1;
+
+  if (lead >= 0xc0 && lead < 0xe0) sequenceLength = 2;
+  else if (lead >= 0xe0 && lead < 0xf0) sequenceLength = 3;
+  else if (lead >= 0xf0 && lead < 0xf8) sequenceLength = 4;
+
+  if (cursor + sequenceLength > end) {
+    end = cursor;
+  }
+
+  return buffer.subarray(0, end);
+}
+
 function truncateHtml(html: string): { html: string; truncated: boolean } {
   const maxSize = config.constants.maxHtmlSize;
 
-  if (maxSize <= 0 || html.length <= maxSize) {
+  if (maxSize <= 0) {
     return { html, truncated: false };
   }
 
-  let limit = maxSize;
-  // Avoid splitting surrogate pairs.
-  if (
-    limit > 0 &&
-    html.charCodeAt(limit - 1) >= 0xd800 &&
-    html.charCodeAt(limit - 1) <= 0xdbff
-  ) {
-    limit--;
+  const byteLength = getUtf8ByteLength(html);
+  if (byteLength <= maxSize) {
+    return { html, truncated: false };
   }
 
-  let content = html.substring(0, limit);
+  const htmlBuffer = Buffer.from(html, 'utf8');
+  let content = trimUtf8Buffer(htmlBuffer, maxSize).toString('utf8');
 
   // Avoid truncating inside tags.
   const lastOpen = content.lastIndexOf('<');
@@ -281,16 +313,16 @@ function truncateHtml(html: string): { html: string; truncated: boolean } {
   }
 
   logWarn('HTML content exceeds maximum size, truncating', {
-    size: html.length,
+    size: byteLength,
     maxSize,
-    truncatedSize: content.length,
+    truncatedSize: getUtf8ByteLength(content),
   });
   return { html: content, truncated: true };
 }
 
 function willTruncate(html: string): boolean {
   const maxSize = config.constants.maxHtmlSize;
-  return maxSize > 0 && html.length > maxSize;
+  return maxSize > 0 && getUtf8ByteLength(html) > maxSize;
 }
 
 const HEAD_END_PATTERN = /<\/head\s*>|<body\b/i;
@@ -684,22 +716,23 @@ function deriveAltFromImageUrl(src: string): string {
   if (!src) return '';
 
   try {
-    const pathname = (() => {
-      if (URL.canParse(src)) {
-        const parsed = new URL(src);
-        if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
-          return parsed.pathname;
-        }
-        return '';
-      }
+    const isAbsolute = URL.canParse(src);
+    const parsed = isAbsolute
+      ? new URL(src)
+      : URL.canParse(src, 'http://localhost')
+        ? new URL(src, 'http://localhost')
+        : null;
 
-      if (URL.canParse(src, 'http://localhost')) {
-        return new URL(src, 'http://localhost').pathname;
-      }
+    if (!parsed) return '';
+    if (
+      isAbsolute &&
+      parsed.protocol !== 'http:' &&
+      parsed.protocol !== 'https:'
+    ) {
+      return '';
+    }
 
-      const withoutQuery = src.split('?')[0] ?? '';
-      return (withoutQuery.split('#')[0] ?? withoutQuery).trim();
-    })();
+    const pathname = parsed.pathname;
     const segments = pathname.split('/');
     const filename = segments.pop() ?? '';
     if (!filename) return '';
@@ -1816,7 +1849,26 @@ const workerMessageSchema = z.discriminatedUnion('type', [
   }),
 ]);
 
-type RunInContext = ReturnType<typeof AsyncLocalStorage.snapshot>;
+interface TaskContext {
+  run: (fn: () => void) => void;
+  destroy: () => void;
+}
+
+function createTaskContext(): TaskContext {
+  const runWithStore = AsyncLocalStorage.snapshot();
+  const resource = new AsyncResource('TransformWorkerTask', {
+    requireManualDestroy: true,
+  });
+
+  return {
+    run: (fn) => {
+      resource.runInAsyncScope(runWithStore, null, fn);
+    },
+    destroy: () => {
+      resource.emitDestroy();
+    },
+  };
+}
 
 interface PendingTask {
   id: string;
@@ -1828,7 +1880,7 @@ interface PendingTask {
   skipNoiseRemoval?: boolean;
   signal: AbortSignal | undefined;
   abortListener: (() => void) | undefined;
-  runInContext: RunInContext;
+  context: TaskContext;
   resolve: (result: MarkdownTransformResult) => void;
   reject: (error: unknown) => void;
 }
@@ -1840,13 +1892,37 @@ interface InflightTask {
   signal: AbortSignal | undefined;
   abortListener: (() => void) | undefined;
   workerIndex: number;
-  runInContext: RunInContext;
+  context: TaskContext;
 }
 
+type TransformWorkerMessage =
+  | TransformWorkerTransformMessage
+  | TransformWorkerCancelMessage;
+
+interface WorkerHost {
+  kind: 'thread' | 'process';
+  threadId?: number;
+  pid?: number;
+  postMessage: (
+    message: TransformWorkerMessage,
+    transferList?: NodeTransferable[]
+  ) => void;
+  terminate: () => Promise<void>;
+  unref: () => void;
+  onMessage: (handler: (raw: unknown) => void) => void;
+  onError: (handler: (error: unknown) => void) => void;
+  onExit: (
+    handler: (code: number | null, signal: NodeJS.Signals | null) => void
+  ) => void;
+}
+
+type WorkerSpawner = (workerIndex: number, name: string) => WorkerHost;
+
 interface WorkerSlot {
-  worker: Worker;
+  host: WorkerHost;
   busy: boolean;
   currentTaskId: string | null;
+  name: string;
 }
 
 interface TransformWorkerPool {
@@ -1871,8 +1947,94 @@ const POOL_MIN_WORKERS = Math.max(
 );
 const POOL_MAX_WORKERS = config.transform.maxWorkerScale;
 const POOL_SCALE_THRESHOLD = 0.5;
+const WORKER_NAME_PREFIX = 'superfetch-transform';
 
 const DEFAULT_TIMEOUT_MS = config.transform.timeoutMs;
+const TRANSFORM_CHILD_PATH = fileURLToPath(
+  new URL('./workers/transform-child.js', import.meta.url)
+);
+
+function ensureTightBuffer(buffer: Uint8Array): Uint8Array {
+  if (
+    buffer.byteOffset === 0 &&
+    buffer.byteLength === buffer.buffer.byteLength
+  ) {
+    return buffer;
+  }
+
+  return Buffer.from(buffer);
+}
+
+function createThreadWorkerHost(workerIndex: number, name: string): WorkerHost {
+  void workerIndex;
+  const resourceLimits = config.transform.workerResourceLimits;
+  const worker = new Worker(
+    new URL('./workers/transform-worker.js', import.meta.url),
+    {
+      name,
+      ...(resourceLimits ? { resourceLimits } : {}),
+    }
+  );
+
+  return {
+    kind: 'thread',
+    threadId: worker.threadId,
+    postMessage: (message, transferList) =>
+      worker.postMessage(message, transferList),
+    terminate: async () => {
+      await worker.terminate();
+    },
+    unref: () => worker.unref(),
+    onMessage: (handler) => worker.on('message', handler),
+    onError: (handler) => {
+      worker.on('error', handler);
+      worker.on('messageerror', handler);
+    },
+    onExit: (handler) => worker.on('exit', (code) => handler(code, null)),
+  };
+}
+
+function createProcessWorkerHost(
+  workerIndex: number,
+  name: string
+): WorkerHost {
+  void workerIndex;
+  void name;
+  const child = fork(TRANSFORM_CHILD_PATH, [], {
+    stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
+    serialization: 'advanced',
+    windowsHide: true,
+  });
+
+  return {
+    kind: 'process',
+    pid: child.pid ?? undefined,
+    postMessage: (message) => {
+      if (!child.connected) {
+        throw new Error('Transform worker IPC channel is closed');
+      }
+      child.send(message);
+    },
+    terminate: () =>
+      new Promise((resolve) => {
+        if (child.exitCode !== null || child.killed) {
+          resolve();
+          return;
+        }
+        child.once('exit', () => resolve());
+        try {
+          child.kill();
+        } catch {
+          resolve();
+        }
+      }),
+    unref: () => child.unref(),
+    onMessage: (handler) => child.on('message', handler),
+    onError: (handler) => child.on('error', handler),
+    onExit: (handler) =>
+      child.on('exit', (code, signal) => handler(code, signal)),
+  };
+}
 
 class WorkerPool implements TransformWorkerPool {
   private static readonly CLOSED_MESSAGE = 'Transform worker pool closed';
@@ -1888,10 +2050,11 @@ class WorkerPool implements TransformWorkerPool {
 
   private readonly timeoutMs: number;
   private readonly queueMax: number;
+  private readonly spawnWorkerImpl: WorkerSpawner;
 
   private closed = false;
 
-  constructor(size: number, timeoutMs: number) {
+  constructor(size: number, timeoutMs: number, spawnWorker: WorkerSpawner) {
     if (size === 0) {
       this.capacity = 0;
     } else {
@@ -1902,6 +2065,7 @@ class WorkerPool implements TransformWorkerPool {
     }
     this.timeoutMs = timeoutMs;
     this.queueMax = this.maxCapacity * 32;
+    this.spawnWorkerImpl = spawnWorker;
   }
 
   async transform(
@@ -1986,8 +2150,8 @@ class WorkerPool implements TransformWorkerPool {
     this.closed = true;
 
     const terminations = this.workers
-      .map((slot) => slot?.worker.terminate())
-      .filter((p): p is Promise<number> => p !== undefined);
+      .map((slot) => slot?.host.terminate())
+      .filter((p): p is Promise<void> => p !== undefined);
 
     this.workers.fill(undefined);
     this.workers.length = 0;
@@ -1995,7 +2159,7 @@ class WorkerPool implements TransformWorkerPool {
     for (const id of Array.from(this.inflight.keys())) {
       const inflight = this.takeInflight(id);
       if (!inflight) continue;
-      this.finalizeTask(inflight.runInContext, () => {
+      this.finalizeTask(inflight.context, () => {
         inflight.reject(new Error(WorkerPool.CLOSED_MESSAGE));
       });
     }
@@ -2004,7 +2168,7 @@ class WorkerPool implements TransformWorkerPool {
       const task = this.queue[i];
       if (!task) continue;
       this.clearAbortListener(task.signal, task.abortListener);
-      this.finalizeTask(task.runInContext, () => {
+      this.finalizeTask(task.context, () => {
         task.reject(new Error(WorkerPool.CLOSED_MESSAGE));
       });
     }
@@ -2034,12 +2198,12 @@ class WorkerPool implements TransformWorkerPool {
 
     // Preserve request context for resolve/reject even when callbacks fire
     // from worker thread events.
-    const runInContext = AsyncLocalStorage.snapshot();
+    const context = createTaskContext();
 
     let abortListener: (() => void) | undefined;
     if (options.signal) {
       abortListener = () => {
-        this.onAbortSignal(id, url, runInContext, reject);
+        this.onAbortSignal(id, url, context, reject);
       };
       options.signal.addEventListener('abort', abortListener, { once: true });
     }
@@ -2051,7 +2215,7 @@ class WorkerPool implements TransformWorkerPool {
       ...(options.skipNoiseRemoval ? { skipNoiseRemoval: true } : {}),
       signal: options.signal,
       abortListener,
-      runInContext,
+      context,
       resolve,
       reject,
     };
@@ -2071,11 +2235,11 @@ class WorkerPool implements TransformWorkerPool {
   private onAbortSignal(
     id: string,
     url: string,
-    runInContext: RunInContext,
+    context: TaskContext,
     reject: (error: unknown) => void
   ): void {
     if (this.closed) {
-      runInContext(() => {
+      this.finalizeTask(context, () => {
         reject(new Error(WorkerPool.CLOSED_MESSAGE));
       });
       return;
@@ -2094,13 +2258,13 @@ class WorkerPool implements TransformWorkerPool {
 
       this.queue.splice(queuedIndex, 1);
       if (task) {
-        this.finalizeTask(task.runInContext, () => {
+        this.finalizeTask(task.context, () => {
           task.reject(
             abortPolicy.createAbortError(url, 'transform:queued-abort')
           );
         });
       } else {
-        runInContext(() => {
+        this.finalizeTask(context, () => {
           reject(abortPolicy.createAbortError(url, 'transform:queued-abort'));
         });
       }
@@ -2112,7 +2276,7 @@ class WorkerPool implements TransformWorkerPool {
     const slot = this.workers[workerIndex];
     if (slot) {
       try {
-        slot.worker.postMessage({ type: 'cancel', id });
+        slot.host.postMessage({ type: 'cancel', id });
       } catch {
         /* ignore */
       }
@@ -2137,28 +2301,25 @@ class WorkerPool implements TransformWorkerPool {
   }
 
   private spawnWorker(workerIndex: number): WorkerSlot {
-    const worker = new Worker(
-      new URL('./workers/transform-worker.js', import.meta.url)
-    );
-    worker.unref();
+    const name = `${WORKER_NAME_PREFIX}-${workerIndex + 1}`;
+    const host = this.spawnWorkerImpl(workerIndex, name);
+    host.unref();
 
-    worker.on('message', (raw: unknown) => {
+    host.onMessage((raw: unknown) => {
       this.onWorkerMessage(workerIndex, raw);
     });
-    worker.on('error', (error: unknown) => {
+    host.onError((error: unknown) => {
       this.onWorkerBroken(
         workerIndex,
         `Transform worker error: ${getErrorMessage(error)}`
       );
     });
-    worker.on('exit', (code: number) => {
-      this.onWorkerBroken(
-        workerIndex,
-        `Transform worker exited (code ${code})`
-      );
+    host.onExit((code: number | null, signal: NodeJS.Signals | null) => {
+      const suffix = signal ? `signal ${signal}` : `code ${code ?? 'unknown'}`;
+      this.onWorkerBroken(workerIndex, `Transform worker exited (${suffix})`);
     });
 
-    return { worker, busy: false, currentTaskId: null };
+    return { host, busy: false, currentTaskId: null, name };
   }
 
   private onWorkerBroken(workerIndex: number, message: string): void {
@@ -2166,6 +2327,16 @@ class WorkerPool implements TransformWorkerPool {
 
     const slot = this.workers[workerIndex];
     if (!slot) return;
+
+    logWarn('Transform worker unavailable; restarting', {
+      reason: message,
+      workerIndex,
+      workerKind: slot.host.kind,
+      workerName: slot.name,
+      ...(slot.host.kind === 'process'
+        ? { pid: slot.host.pid }
+        : { threadId: slot.host.threadId }),
+    });
 
     if (slot.busy && slot.currentTaskId) {
       this.failTask(slot.currentTaskId, new Error(message));
@@ -2178,7 +2349,7 @@ class WorkerPool implements TransformWorkerPool {
     if (this.closed) return;
 
     const target = slot ?? this.workers[workerIndex];
-    if (target) void target.worker.terminate();
+    if (target) void target.host.terminate();
 
     this.workers[workerIndex] = this.spawnWorker(workerIndex);
     this.drainQueue();
@@ -2195,7 +2366,7 @@ class WorkerPool implements TransformWorkerPool {
     this.markIdle(workerIndex);
 
     if (message.type === 'result') {
-      this.finalizeTask(inflight.runInContext, () => {
+      this.finalizeTask(inflight.context, () => {
         inflight.resolve({
           markdown: message.result.markdown,
           truncated: message.result.truncated,
@@ -2205,7 +2376,7 @@ class WorkerPool implements TransformWorkerPool {
     } else {
       const err = message.error;
       if (err.name === 'FetchError') {
-        this.finalizeTask(inflight.runInContext, () => {
+        this.finalizeTask(inflight.context, () => {
           inflight.reject(
             new FetchError(
               err.message,
@@ -2216,7 +2387,7 @@ class WorkerPool implements TransformWorkerPool {
           );
         });
       } else {
-        this.finalizeTask(inflight.runInContext, () => {
+        this.finalizeTask(inflight.context, () => {
           inflight.reject(new Error(err.message));
         });
       }
@@ -2247,7 +2418,7 @@ class WorkerPool implements TransformWorkerPool {
     const inflight = this.takeInflight(id);
     if (!inflight) return;
 
-    this.finalizeTask(inflight.runInContext, () => {
+    this.finalizeTask(inflight.context, () => {
       inflight.reject(error);
     });
     this.markIdle(inflight.workerIndex);
@@ -2310,7 +2481,7 @@ class WorkerPool implements TransformWorkerPool {
 
     if (this.closed) {
       this.clearAbortListener(task.signal, task.abortListener);
-      this.finalizeTask(task.runInContext, () => {
+      this.finalizeTask(task.context, () => {
         task.reject(new Error(WorkerPool.CLOSED_MESSAGE));
       });
       return;
@@ -2318,7 +2489,7 @@ class WorkerPool implements TransformWorkerPool {
 
     if (task.signal?.aborted) {
       this.clearAbortListener(task.signal, task.abortListener);
-      this.finalizeTask(task.runInContext, () => {
+      this.finalizeTask(task.context, () => {
         task.reject(
           abortPolicy.createAbortError(task.url, 'transform:dispatch')
         );
@@ -2331,7 +2502,7 @@ class WorkerPool implements TransformWorkerPool {
 
     const timer = setTimeout(() => {
       try {
-        slot.worker.postMessage({ type: 'cancel', id: task.id });
+        slot.host.postMessage({ type: 'cancel', id: task.id });
       } catch {
         /* ignore */
       }
@@ -2339,7 +2510,7 @@ class WorkerPool implements TransformWorkerPool {
       const inflight = this.takeInflight(task.id);
       if (!inflight) return;
 
-      this.finalizeTask(inflight.runInContext, () => {
+      this.finalizeTask(inflight.context, () => {
         inflight.reject(
           new FetchError('Request timeout', task.url, 504, {
             reason: 'timeout',
@@ -2359,7 +2530,7 @@ class WorkerPool implements TransformWorkerPool {
       signal: task.signal,
       abortListener: task.abortListener,
       workerIndex,
-      runInContext: task.runInContext,
+      context: task.context,
     });
 
     try {
@@ -2374,27 +2545,25 @@ class WorkerPool implements TransformWorkerPool {
       const transferList: NodeTransferable[] = [];
 
       if (task.htmlBuffer) {
-        message.htmlBuffer = task.htmlBuffer;
+        const htmlBuffer = ensureTightBuffer(task.htmlBuffer);
+        message.htmlBuffer = htmlBuffer;
         message.encoding = task.encoding;
-        const transferBuffer = task.htmlBuffer.buffer;
-        if (
-          typeof SharedArrayBuffer === 'undefined' ||
-          !(transferBuffer instanceof SharedArrayBuffer)
-        ) {
+        const transferBuffer = htmlBuffer.buffer;
+        if (!utilTypes.isSharedArrayBuffer(transferBuffer)) {
           transferList.push(transferBuffer as ArrayBuffer);
         }
       } else {
         message.html = task.html;
       }
 
-      slot.worker.postMessage(message, transferList);
+      slot.host.postMessage(message, transferList);
     } catch (error: unknown) {
       clearTimeout(timer);
       this.clearAbortListener(task.signal, task.abortListener);
       this.inflight.delete(task.id);
       this.markIdle(workerIndex);
 
-      this.finalizeTask(task.runInContext, () => {
+      this.finalizeTask(task.context, () => {
         task.reject(
           error instanceof Error
             ? error
@@ -2405,8 +2574,12 @@ class WorkerPool implements TransformWorkerPool {
     }
   }
 
-  private finalizeTask(runInContext: RunInContext, fn: () => void): void {
-    runInContext(fn);
+  private finalizeTask(context: TaskContext, fn: () => void): void {
+    try {
+      context.run(fn);
+    } finally {
+      context.destroy();
+    }
   }
 
   private findQueuedIndex(id: string): number | null {
@@ -2432,9 +2605,19 @@ class WorkerPool implements TransformWorkerPool {
 
 let workerPool: WorkerPool | null = null;
 
+function resolveWorkerSpawner(): WorkerSpawner {
+  return config.transform.workerMode === 'process'
+    ? createProcessWorkerHost
+    : createThreadWorkerHost;
+}
+
 function getOrCreateWorkerPool(): WorkerPool {
   const size = config.transform.maxWorkerScale === 0 ? 0 : POOL_MIN_WORKERS;
-  workerPool ??= new WorkerPool(size, DEFAULT_TIMEOUT_MS);
+  workerPool ??= new WorkerPool(
+    size,
+    DEFAULT_TIMEOUT_MS,
+    resolveWorkerSpawner()
+  );
   return workerPool;
 }
 

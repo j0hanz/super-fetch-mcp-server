@@ -1,3 +1,5 @@
+import { inspect } from 'node:util';
+
 import { isError, isObject } from './type-guards.js';
 
 const DEFAULT_HTTP_STATUS = 502;
@@ -26,13 +28,28 @@ export function getErrorMessage(error: unknown): string {
   if (isError(error)) return error.message;
   if (typeof error === 'string' && error.length > 0) return error;
   if (isErrorWithMessage(error)) return error.message;
-  return 'Unknown error';
+  return formatUnknownError(error);
 }
 
 function isErrorWithMessage(error: unknown): error is { message: string } {
   if (!isObject(error)) return false;
   const { message } = error;
   return typeof message === 'string' && message.length > 0;
+}
+
+function formatUnknownError(error: unknown): string {
+  if (error === null || error === undefined) return 'Unknown error';
+  try {
+    return inspect(error, {
+      depth: 2,
+      maxStringLength: 200,
+      breakLength: Infinity,
+      compact: true,
+      colors: false,
+    });
+  } catch {
+    return 'Unknown error';
+  }
 }
 
 export function createErrorWithCode(

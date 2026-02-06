@@ -1,4 +1,5 @@
-import { isIP } from 'node:net';
+import { isIP, SocketAddress } from 'node:net';
+import { domainToASCII } from 'node:url';
 
 export function normalizeHost(value: string): string | null {
   const trimmedLower = value.trim().toLowerCase();
@@ -7,14 +8,20 @@ export function normalizeHost(value: string): string | null {
   const first = takeFirstHostValue(trimmedLower);
   if (!first) return null;
 
+  const socketAddress = SocketAddress.parse(first);
+  if (socketAddress) return normalizeHostname(socketAddress.address);
+
+  const parsed = parseHostWithUrl(first);
+  if (parsed) return parsed;
+
   const ipv6 = stripIpv6Brackets(first);
-  if (ipv6) return stripTrailingDots(ipv6);
+  if (ipv6) return normalizeHostname(ipv6);
 
   if (isIpV6Literal(first)) {
-    return stripTrailingDots(first);
+    return normalizeHostname(first);
   }
 
-  return stripTrailingDots(stripPortIfPresent(first));
+  return normalizeHostname(stripPortIfPresent(first));
 }
 
 function takeFirstHostValue(value: string): string | null {
@@ -42,6 +49,28 @@ function stripPortIfPresent(value: string): string {
 
 function isIpV6Literal(value: string): boolean {
   return isIP(value) === 6;
+}
+
+function normalizeHostname(value: string): string | null {
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) return null;
+
+  if (isIP(trimmed)) return stripTrailingDots(trimmed);
+
+  const ascii = domainToASCII(trimmed);
+  return ascii ? stripTrailingDots(ascii) : null;
+}
+
+function parseHostWithUrl(value: string): string | null {
+  const candidateUrl = `http://${value}`;
+  if (!URL.canParse(candidateUrl)) return null;
+
+  try {
+    const parsed = new URL(candidateUrl);
+    return normalizeHostname(parsed.hostname);
+  } catch {
+    return null;
+  }
 }
 
 function stripTrailingDots(value: string): string {

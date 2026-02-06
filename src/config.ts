@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module';
+import { isIP } from 'node:net';
 import process from 'node:process';
-import { fileURLToPath } from 'node:url';
+import { domainToASCII, fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
 const packageJsonPath = fileURLToPath(
@@ -19,8 +20,27 @@ const LOG_LEVELS: readonly LogLevel[] = ['debug', 'info', 'warn', 'error'];
 
 /** Hardcoded to 'markdown'. Type retained for consumer compatibility. */
 export type TransformMetadataFormat = 'markdown';
+export type TransformWorkerMode = 'threads' | 'process';
 
 type AuthMode = 'oauth' | 'static';
+
+function isMissingEnvFileError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const code = (error as { code?: string }).code;
+  return code === 'ENOENT' || code === 'ERR_ENV_FILE_NOT_FOUND';
+}
+
+function loadEnvFileIfAvailable(): void {
+  if (typeof process.loadEnvFile !== 'function') return;
+  try {
+    process.loadEnvFile();
+  } catch (error) {
+    if (isMissingEnvFileError(error)) return;
+    throw error;
+  }
+}
+
+loadEnvFileIfAvailable();
 
 const { env } = process;
 
@@ -38,12 +58,36 @@ function formatHostForUrl(hostname: string): string {
   return hostname;
 }
 
+function stripTrailingDots(value: string): string {
+  let result = value;
+  while (result.endsWith('.')) result = result.slice(0, -1);
+  return result;
+}
+
+function normalizeHostname(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  const lowered = trimmed.toLowerCase();
+  const ipType = isIP(lowered);
+  if (ipType) return stripTrailingDots(lowered);
+
+  const ascii = domainToASCII(lowered);
+  return ascii ? stripTrailingDots(ascii) : null;
+}
+
 function normalizeHostValue(value: string): string | null {
   const raw = value.trim();
   if (!raw) return null;
 
-  if (raw.includes('://') && URL.canParse(raw)) {
-    return new URL(raw).hostname.toLowerCase();
+  if (raw.includes('://')) {
+    if (!URL.canParse(raw)) return null;
+    return normalizeHostname(new URL(raw).hostname);
+  }
+
+  const candidateUrl = `http://${raw}`;
+  if (URL.canParse(candidateUrl)) {
+    return normalizeHostname(new URL(candidateUrl).hostname);
   }
 
   const lowered = raw.toLowerCase();
@@ -51,15 +95,17 @@ function normalizeHostValue(value: string): string | null {
   if (lowered.startsWith('[')) {
     const end = lowered.indexOf(']');
     if (end === -1) return null;
-    return lowered.slice(1, end);
+    return normalizeHostname(lowered.slice(1, end));
   }
 
+  if (isIP(lowered) === 6) return stripTrailingDots(lowered);
+
   const firstColon = lowered.indexOf(':');
-  if (firstColon === -1) return lowered;
-  if (lowered.includes(':', firstColon + 1)) return lowered;
+  if (firstColon === -1) return normalizeHostname(lowered);
+  if (lowered.includes(':', firstColon + 1)) return null;
 
   const host = lowered.slice(0, firstColon);
-  return host || null;
+  return host ? normalizeHostname(host) : null;
 }
 
 function parseIntegerValue(
@@ -73,6 +119,15 @@ function parseIntegerValue(
   if (min !== undefined && parsed < min) return null;
   if (max !== undefined && parsed > max) return null;
   return parsed;
+}
+
+function parseOptionalInteger(
+  envValue: string | undefined,
+  min?: number,
+  max?: number
+): number | undefined {
+  const parsed = parseIntegerValue(envValue, min, max);
+  return parsed === null ? undefined : parsed;
 }
 
 function parseInteger(
@@ -134,6 +189,16 @@ function parseLogLevel(envValue: string | undefined): LogLevel {
   return isLogLevel(level) ? level : 'info';
 }
 
+function parseTransformWorkerMode(
+  envValue: string | undefined
+): TransformWorkerMode {
+  if (!envValue) return 'threads';
+
+  const normalized = envValue.trim().toLowerCase();
+  if (normalized === 'process' || normalized === 'fork') return 'process';
+  return 'threads';
+}
+
 function parsePort(envValue: string | undefined): number {
   if (envValue?.trim() === '0') return 0;
   return parseInteger(envValue, 3000, 1024, 65535);
@@ -158,6 +223,45 @@ const DEFAULT_TOOL_TIMEOUT_MS =
   DEFAULT_FETCH_TIMEOUT_MS +
   DEFAULT_TRANSFORM_TIMEOUT_MS +
   DEFAULT_TOOL_TIMEOUT_PADDING_MS;
+
+interface WorkerResourceLimits {
+  maxOldGenerationSizeMb?: number;
+  maxYoungGenerationSizeMb?: number;
+  codeRangeSizeMb?: number;
+  stackSizeMb?: number;
+}
+
+function resolveWorkerResourceLimits(): WorkerResourceLimits | undefined {
+  const limits: WorkerResourceLimits = {};
+  const maxOldGenerationSizeMb = parseOptionalInteger(
+    env.TRANSFORM_WORKER_MAX_OLD_GENERATION_MB,
+    1
+  );
+  const maxYoungGenerationSizeMb = parseOptionalInteger(
+    env.TRANSFORM_WORKER_MAX_YOUNG_GENERATION_MB,
+    1
+  );
+  const codeRangeSizeMb = parseOptionalInteger(
+    env.TRANSFORM_WORKER_CODE_RANGE_MB,
+    1
+  );
+  const stackSizeMb = parseOptionalInteger(env.TRANSFORM_WORKER_STACK_MB, 1);
+
+  if (maxOldGenerationSizeMb !== undefined) {
+    limits.maxOldGenerationSizeMb = maxOldGenerationSizeMb;
+  }
+  if (maxYoungGenerationSizeMb !== undefined) {
+    limits.maxYoungGenerationSizeMb = maxYoungGenerationSizeMb;
+  }
+  if (codeRangeSizeMb !== undefined) {
+    limits.codeRangeSizeMb = codeRangeSizeMb;
+  }
+  if (stackSizeMb !== undefined) {
+    limits.stackSizeMb = stackSizeMb;
+  }
+
+  return Object.keys(limits).length > 0 ? limits : undefined;
+}
 
 interface AuthConfig {
   mode: AuthMode;
@@ -284,6 +388,11 @@ const BLOCKED_IPV4_MAPPED_PATTERN =
 
 const host = (env.HOST ?? LOOPBACK_V4).trim();
 const port = parsePort(env.PORT);
+const maxConnections = parseInteger(env.SERVER_MAX_CONNECTIONS, 0, 0);
+const blockPrivateConnections = parseBoolean(
+  env.SERVER_BLOCK_PRIVATE_CONNECTIONS,
+  false
+);
 
 const baseUrl = new URL(`http://${formatHostForUrl(host)}:${port}`);
 
@@ -310,6 +419,8 @@ export const config = {
       headersTimeoutMs: undefined,
       requestTimeoutMs: undefined,
       keepAliveTimeoutMs: undefined,
+      maxConnections,
+      blockPrivateConnections,
       shutdownCloseIdleConnections: true,
       shutdownCloseAllConnections: false,
     },
@@ -325,6 +436,8 @@ export const config = {
     stageWarnRatio: 0.5,
     metadataFormat: 'markdown',
     maxWorkerScale: 4,
+    workerMode: parseTransformWorkerMode(env.TRANSFORM_WORKER_MODE),
+    workerResourceLimits: resolveWorkerResourceLimits(),
   },
   tools: {
     enabled: ['fetch-url'],

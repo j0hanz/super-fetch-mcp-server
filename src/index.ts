@@ -24,6 +24,18 @@ function printUsage(): void {
   );
 }
 
+const FORCE_EXIT_TIMEOUT_MS = 10_000;
+let forcedExitTimer: NodeJS.Timeout | undefined;
+
+function scheduleForcedExit(reason: string): void {
+  if (forcedExitTimer) return;
+  forcedExitTimer = setTimeout(() => {
+    process.stderr.write(`${reason}; forcing exit.\n`);
+    process.exit(1);
+  }, FORCE_EXIT_TIMEOUT_MS);
+  forcedExitTimer.unref();
+}
+
 const { values } = parseArgs({
   options: {
     stdio: { type: 'boolean', default: false },
@@ -69,13 +81,15 @@ function registerHttpSignalHandlers(): void {
 function handleFatalError(label: string, error: Error, signal: string): void {
   logError(label, error);
   process.stderr.write(`${label}: ${error.message}\n`);
+  process.exitCode = 1;
 
   if (shouldAttemptShutdown()) {
     attemptShutdown(signal);
+    scheduleForcedExit('Graceful shutdown timed out');
     return;
   }
 
-  process.exit(1);
+  scheduleForcedExit('Fatal error without shutdown handler');
 }
 
 process.on('uncaughtException', (error) => {
@@ -102,5 +116,6 @@ try {
   );
   const message = error instanceof Error ? error.message : String(error);
   process.stderr.write(`Failed to start server: ${message}\n`);
-  process.exit(1);
+  process.exitCode = 1;
+  scheduleForcedExit('Startup failure');
 }

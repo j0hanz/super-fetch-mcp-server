@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { Buffer } from 'node:buffer';
 import { randomUUID } from 'node:crypto';
 
@@ -56,6 +57,8 @@ const TERMINAL_STATUSES = new Set<TaskStatus>([
   'failed',
   'cancelled',
 ]);
+
+type RunInContext = ReturnType<typeof AsyncLocalStorage.snapshot>;
 
 function isTerminalStatus(status: TaskStatus): boolean {
   return TERMINAL_STATUSES.has(status);
@@ -190,13 +193,21 @@ class TaskManager {
     }
 
     return new Promise((resolve, reject) => {
+      const runInContext: RunInContext = AsyncLocalStorage.snapshot();
+      const resolveInContext = (value: TaskState | undefined): void => {
+        runInContext(() => resolve(value));
+      };
+      const rejectInContext = (error: unknown): void => {
+        runInContext(() => reject(error));
+      };
+
       let timeoutId: NodeJS.Timeout | undefined;
       let waiter: ((updated: TaskState) => void) | null = null;
 
       const onAbort = (): void => {
         cleanup();
         removeWaiter();
-        reject(
+        rejectInContext(
           new McpError(ErrorCode.ConnectionClosed, 'Request was cancelled')
         );
       };
@@ -217,7 +228,7 @@ class TaskManager {
 
       waiter = (updated: TaskState): void => {
         cleanup();
-        resolve(updated);
+        resolveInContext(updated);
       };
 
       if (signal?.aborted) {
@@ -239,7 +250,7 @@ class TaskManager {
           cleanup();
           removeWaiter();
           this.tasks.delete(taskId);
-          resolve(undefined);
+          resolveInContext(undefined);
           return;
         }
 
@@ -247,7 +258,7 @@ class TaskManager {
           cleanup();
           removeWaiter();
           this.tasks.delete(taskId);
-          resolve(undefined);
+          resolveInContext(undefined);
         }, timeoutMs);
         timeoutId.unref();
       }

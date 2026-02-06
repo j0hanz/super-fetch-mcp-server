@@ -347,7 +347,7 @@ describe('readResponseText', () => {
 
   it('detects HTML-declared charset when content-type charset is missing', async () => {
     const html = '<meta charset="windows-1252"><p>caf\xe9</p>';
-    const bytes = new Uint8Array([...html].map((char) => char.charCodeAt(0)));
+    const bytes = Buffer.from(html, 'latin1');
     const response = new Response(bytes, {
       status: 200,
       headers: { 'content-type': 'text/html' },
