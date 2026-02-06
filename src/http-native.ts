@@ -455,7 +455,7 @@ class CorsPolicy {
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, DELETE');
     res.setHeader(
       'Access-Control-Allow-Headers',
-      'Content-Type, Authorization, X-API-Key, MCP-Protocol-Version, MCP-Session-ID, X-MCP-Session-ID'
+      'Content-Type, Authorization, X-API-Key, MCP-Protocol-Version, MCP-Session-ID, X-MCP-Session-ID, Last-Event-ID'
     );
 
     if (req.method !== 'OPTIONS') return false;

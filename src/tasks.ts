@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { Buffer } from 'node:buffer';
 import { randomUUID } from 'node:crypto';
+import { setInterval } from 'node:timers';
 
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 
@@ -69,6 +70,21 @@ function isTerminalStatus(status: TaskStatus): boolean {
 class TaskManager {
   private tasks = new Map<string, TaskState>();
   private waiters = new Map<string, Set<(task: TaskState) => void>>();
+
+  constructor() {
+    this.startCleanupLoop();
+  }
+
+  private startCleanupLoop(): void {
+    const interval = setInterval(() => {
+      for (const [id, task] of this.tasks) {
+        if (this.isExpired(task)) {
+          this.tasks.delete(id);
+        }
+      }
+    }, 60000);
+    interval.unref();
+  }
 
   createTask(
     options?: CreateTaskOptions,
