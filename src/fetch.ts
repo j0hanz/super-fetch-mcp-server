@@ -4,7 +4,10 @@ import diagnosticsChannel from 'node:diagnostics_channel';
 import dns from 'node:dns';
 import { isIP } from 'node:net';
 import { performance } from 'node:perf_hooks';
+import { Readable } from 'node:stream';
+import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
 import { setTimeout as delay } from 'node:timers/promises';
+import { createBrotliDecompress, createGunzip, createInflate } from 'node:zlib';
 
 import { config } from './config.js';
 import { createErrorWithCode, FetchError, isSystemError } from './errors.js';
@@ -1645,6 +1648,161 @@ function assertSupportedContentType(
   }
 }
 
+function parseContentEncodings(value: string | null): string[] {
+  if (!value) return [];
+  return value
+    .split(',')
+    .map((token) => token.trim().toLowerCase())
+    .filter((token) => token.length > 0);
+}
+
+function createUnsupportedContentEncodingError(
+  url: string,
+  encodingHeader: string
+): FetchError {
+  return new FetchError(
+    `Unsupported Content-Encoding: ${encodingHeader}`,
+    url,
+    415,
+    {
+      reason: 'unsupported_content_encoding',
+      encoding: encodingHeader,
+    }
+  );
+}
+
+function createDecompressionFailedError(
+  url: string,
+  encoding: string,
+  message?: string
+): FetchError {
+  return new FetchError(
+    message
+      ? `Failed to decompress ${encoding} response: ${message}`
+      : `Failed to decompress ${encoding} response`,
+    url,
+    500,
+    {
+      reason: 'decompression_failed',
+      encoding,
+    }
+  );
+}
+
+function toUint8Chunk(value: unknown): Uint8Array {
+  if (value instanceof Uint8Array) return value;
+  if (typeof value === 'string') return Buffer.from(value);
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  throw new Error('Unsupported decompressor chunk type');
+}
+
+function decodeResponseIfNeeded(
+  response: Response,
+  url: string,
+  signal?: AbortSignal
+): Response {
+  const encodingHeader = response.headers.get('content-encoding');
+  const encodings = parseContentEncodings(encodingHeader);
+
+  if (encodings.length === 0) return response;
+  if (encodings.length === 1 && encodings[0] === 'identity') return response;
+  if (encodings.length !== 1) {
+    throw createUnsupportedContentEncodingError(url, encodingHeader ?? '');
+  }
+
+  const encoding = encodings[0] ?? '';
+  if (!response.body) return response;
+
+  let decompressor: ReturnType<typeof createGunzip> | null = null;
+  switch (encoding) {
+    case 'gzip':
+      decompressor = createGunzip();
+      break;
+    case 'deflate':
+      decompressor = createInflate();
+      break;
+    case 'br':
+      decompressor = createBrotliDecompress();
+      break;
+    default:
+      decompressor = null;
+  }
+
+  if (!decompressor) {
+    throw createUnsupportedContentEncodingError(
+      url,
+      encodingHeader ?? encoding
+    );
+  }
+
+  const sourceStream = Readable.fromWeb(
+    response.body as unknown as NodeReadableStream<Uint8Array>
+  );
+  const decodedNodeStream = sourceStream.pipe(decompressor);
+
+  const abortHandler = (): void => {
+    sourceStream.destroy();
+    decompressor.destroy();
+    decodedNodeStream.destroy();
+  };
+
+  if (signal) {
+    signal.addEventListener('abort', abortHandler, { once: true });
+  }
+
+  const iterator = decodedNodeStream[
+    Symbol.asyncIterator
+  ]() as AsyncIterator<unknown>;
+
+  const decodedBody = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const result: IteratorResult<unknown> = await iterator.next();
+        if (result.done) {
+          controller.close();
+          return;
+        }
+
+        controller.enqueue(toUint8Chunk(result.value));
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : undefined;
+        controller.error(
+          createDecompressionFailedError(url, encoding, message)
+        );
+      }
+    },
+    async cancel() {
+      try {
+        await iterator.return?.();
+      } finally {
+        decodedNodeStream.destroy();
+        decompressor.destroy();
+        sourceStream.destroy();
+        if (signal) signal.removeEventListener('abort', abortHandler);
+      }
+    },
+  });
+
+  const headers = new Headers(response.headers);
+  headers.delete('content-encoding');
+  headers.delete('content-length');
+
+  if (signal) {
+    decodedNodeStream.once('close', () => {
+      signal.removeEventListener('abort', abortHandler);
+    });
+    decodedNodeStream.once('error', () => {
+      signal.removeEventListener('abort', abortHandler);
+    });
+  }
+
+  return new Response(decodedBody, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
 async function handleFetchResponse(
   response: Response,
   finalUrl: string,
@@ -1660,18 +1818,20 @@ async function handleFetchResponse(
     throw responseError;
   }
 
-  const contentType = response.headers.get('content-type');
+  const decodedResponse = decodeResponseIfNeeded(response, finalUrl, signal);
+
+  const contentType = decodedResponse.headers.get('content-type');
   assertSupportedContentType(contentType, finalUrl);
   const encoding = getCharsetFromContentType(contentType ?? null);
 
   const { text, size } = await reader.read(
-    response,
+    decodedResponse,
     finalUrl,
     maxBytes,
     signal,
     encoding
   );
-  telemetry.recordResponse(ctx, response, size);
+  telemetry.recordResponse(ctx, decodedResponse, size);
   return text;
 }
 
@@ -1690,7 +1850,9 @@ async function handleFetchResponseBuffer(
     throw responseError;
   }
 
-  const contentType = response.headers.get('content-type');
+  const decodedResponse = decodeResponseIfNeeded(response, finalUrl, signal);
+
+  const contentType = decodedResponse.headers.get('content-type');
   assertSupportedContentType(contentType, finalUrl);
   const encoding = getCharsetFromContentType(contentType ?? null);
 
@@ -1698,8 +1860,14 @@ async function handleFetchResponseBuffer(
     buffer,
     encoding: detectedEncoding,
     size,
-  } = await reader.readBuffer(response, finalUrl, maxBytes, signal, encoding);
-  telemetry.recordResponse(ctx, response, size);
+  } = await reader.readBuffer(
+    decodedResponse,
+    finalUrl,
+    maxBytes,
+    signal,
+    encoding
+  );
+  telemetry.recordResponse(ctx, decodedResponse, size);
   return { buffer, encoding: detectedEncoding };
 }
 
@@ -1914,7 +2082,8 @@ export async function readResponseText(
   signal?: AbortSignal,
   encoding?: string
 ): Promise<{ text: string; size: number }> {
-  return responseReader.read(response, url, maxBytes, signal, encoding);
+  const decodedResponse = decodeResponseIfNeeded(response, url, signal);
+  return responseReader.read(decodedResponse, url, maxBytes, signal, encoding);
 }
 
 export async function readResponseBuffer(
@@ -1924,7 +2093,14 @@ export async function readResponseBuffer(
   signal?: AbortSignal,
   encoding?: string
 ): Promise<{ buffer: Uint8Array; encoding: string; size: number }> {
-  return responseReader.readBuffer(response, url, maxBytes, signal, encoding);
+  const decodedResponse = decodeResponseIfNeeded(response, url, signal);
+  return responseReader.readBuffer(
+    decodedResponse,
+    url,
+    maxBytes,
+    signal,
+    encoding
+  );
 }
 
 export async function fetchNormalizedUrl(

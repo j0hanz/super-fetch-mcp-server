@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { brotliCompressSync, gzipSync } from 'node:zlib';
 
 import { FetchError } from '../dist/errors.js';
 import { readResponseText } from '../dist/fetch.js';
@@ -133,7 +134,7 @@ describe('readResponseText', () => {
     assert.equal(result.text, '\ufffd');
   });
 
-  it('allows responses with unhandled Content-Encoding header by ignoring it', async () => {
+  it('rejects responses with unsupported Content-Encoding', async () => {
     // Use non-binary bytes that don't match any signature
     const buffer = new Uint8Array([0x61, 0x62, 0x63, 0x64]); // "abcd"
     const response = new Response(buffer, {
@@ -144,13 +145,53 @@ describe('readResponseText', () => {
       },
     });
 
+    await assert.rejects(
+      () => readResponseText(response, 'https://example.com', 10000),
+      (error) => {
+        assert.ok(error instanceof FetchError);
+        assert.equal(error.statusCode, 415);
+        assert.match(error.message, /Unsupported Content-Encoding/i);
+        return true;
+      }
+    );
+  });
+
+  it('decodes gzip encoded responses', async () => {
+    const compressed = gzipSync(Buffer.from('hello', 'utf-8'));
+    const response = new Response(compressed, {
+      status: 200,
+      headers: {
+        'content-type': 'text/html; charset=utf-8',
+        'content-encoding': 'gzip',
+      },
+    });
+
     const result = await readResponseText(
       response,
       'https://example.com',
-      10000
+      1024
     );
-    // It should not throw. Content will be decoded as text.
-    assert.ok(result.text.length > 0);
+    assert.equal(result.text, 'hello');
+    assert.equal(result.size, 5);
+  });
+
+  it('decodes brotli encoded responses', async () => {
+    const compressed = brotliCompressSync(Buffer.from('hello', 'utf-8'));
+    const response = new Response(compressed, {
+      status: 200,
+      headers: {
+        'content-type': 'text/html; charset=utf-8',
+        'content-encoding': 'br',
+      },
+    });
+
+    const result = await readResponseText(
+      response,
+      'https://example.com',
+      1024
+    );
+    assert.equal(result.text, 'hello');
+    assert.equal(result.size, 5);
   });
 
   it('allows responses with identity Content-Encoding', async () => {
