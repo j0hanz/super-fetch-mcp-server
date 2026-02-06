@@ -40,10 +40,15 @@ import { isObject } from './type-guards.js';
  * Icons + server info
  * ------------------------------------------------------------------------------------------------- */
 
-async function getLocalIcons(): Promise<McpIcon[] | undefined> {
+async function getLocalIcons(
+  signal?: AbortSignal
+): Promise<McpIcon[] | undefined> {
   try {
     const iconPath = new URL('../assets/logo.svg', import.meta.url);
-    const base64 = await readFile(iconPath, { encoding: 'base64' });
+    const base64 = await readFile(iconPath, {
+      encoding: 'base64',
+      ...(signal ? { signal } : {}),
+    });
     return [
       {
         src: `data:image/svg+xml;base64,${base64}`,
@@ -87,13 +92,14 @@ function createServerCapabilities(): {
 }
 
 async function createServerInstructions(
-  serverVersion: string
+  serverVersion: string,
+  signal?: AbortSignal
 ): Promise<string> {
   try {
-    const raw = await readFile(
-      new URL('./instructions.md', import.meta.url),
-      'utf8'
-    );
+    const raw = await readFile(new URL('./instructions.md', import.meta.url), {
+      encoding: 'utf8',
+      ...(signal ? { signal } : {}),
+    });
     return raw.replaceAll('{{SERVER_VERSION}}', serverVersion).trim();
   } catch {
     return `Instructions unavailable | ${serverVersion}`;
@@ -632,9 +638,10 @@ function registerTaskHandlers(server: McpServer): void {
  * ------------------------------------------------------------------------------------------------- */
 
 export async function createMcpServer(): Promise<McpServer> {
+  const startupSignal = AbortSignal.timeout(5000);
   const [instructions, localIcons] = await Promise.all([
-    createServerInstructions(config.server.version),
-    getLocalIcons(),
+    createServerInstructions(config.server.version, startupSignal),
+    getLocalIcons(startupSignal),
   ]);
 
   const serverInfo = createServerInfo(localIcons);

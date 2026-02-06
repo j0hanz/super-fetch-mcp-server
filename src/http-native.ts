@@ -117,6 +117,7 @@ interface RequestContext {
   query: QueryParams;
   ip: string | null;
   body: unknown;
+  signal?: AbortSignal;
 }
 
 interface AuthenticatedContext extends RequestContext {
@@ -166,6 +167,30 @@ function drainRequest(req: IncomingMessage): void {
   } catch {
     // Best-effort only.
   }
+}
+
+function createRequestAbortSignal(req: IncomingMessage): {
+  signal: AbortSignal;
+  cleanup: () => void;
+} {
+  const controller = new AbortController();
+
+  const handleAbort = (): void => {
+    if (!controller.signal.aborted) controller.abort();
+  };
+
+  req.on('aborted', handleAbort);
+  req.on('close', handleAbort);
+  req.on('error', handleAbort);
+
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      req.off('aborted', handleAbort);
+      req.off('close', handleAbort);
+      req.off('error', handleAbort);
+    },
+  };
 }
 
 function normalizeRemoteAddress(address: string | undefined): string | null {
@@ -225,7 +250,8 @@ function getMcpSessionId(req: IncomingMessage): string | null {
 
 function buildRequestContext(
   req: IncomingMessage,
-  res: ServerResponse
+  res: ServerResponse,
+  signal?: AbortSignal
 ): RequestContext | null {
   let url: URL;
   try {
@@ -243,6 +269,7 @@ function buildRequestContext(
     query: parseQuery(url),
     ip: normalizeRemoteAddress(req.socket.remoteAddress),
     body: undefined,
+    ...(signal ? { signal } : {}),
   };
 }
 
@@ -274,12 +301,30 @@ const DEFAULT_BODY_LIMIT_BYTES = 1024 * 1024;
 class JsonBodyReader {
   async read(
     req: IncomingMessage,
-    limit = DEFAULT_BODY_LIMIT_BYTES
+    limit = DEFAULT_BODY_LIMIT_BYTES,
+    signal?: AbortSignal
   ): Promise<unknown> {
     const contentType = getHeaderValue(req, 'content-type');
     if (!contentType?.includes('application/json')) return undefined;
 
-    const body = await this.readBody(req, limit);
+    const contentLengthHeader = getHeaderValue(req, 'content-length');
+    if (contentLengthHeader) {
+      const contentLength = Number.parseInt(contentLengthHeader, 10);
+      if (Number.isFinite(contentLength) && contentLength > limit) {
+        try {
+          req.destroy();
+        } catch {
+          // Best-effort only.
+        }
+        throw new JsonBodyError('payload-too-large', 'Payload too large');
+      }
+    }
+
+    if (signal?.aborted || req.destroyed) {
+      throw new JsonBodyError('read-failed', 'Request aborted');
+    }
+
+    const body = await this.readBody(req, limit, signal);
     if (!body) return undefined;
 
     try {
@@ -294,8 +339,60 @@ class JsonBodyReader {
 
   private async readBody(
     req: IncomingMessage,
-    limit: number
+    limit: number,
+    signal?: AbortSignal
   ): Promise<string | undefined> {
+    const abortListener = this.attachAbortListener(req, signal);
+
+    try {
+      const { chunks, size } = await this.collectChunks(req, limit, signal);
+      if (chunks.length === 0) return undefined;
+      return Buffer.concat(chunks, size).toString();
+    } finally {
+      this.detachAbortListener(signal, abortListener);
+    }
+  }
+
+  private attachAbortListener(
+    req: IncomingMessage,
+    signal?: AbortSignal
+  ): (() => void) | null {
+    if (!signal) return null;
+
+    const listener = (): void => {
+      try {
+        req.destroy();
+      } catch {
+        // Best-effort only.
+      }
+    };
+
+    if (signal.aborted) {
+      listener();
+    } else {
+      signal.addEventListener('abort', listener, { once: true });
+    }
+
+    return listener;
+  }
+
+  private detachAbortListener(
+    signal: AbortSignal | undefined,
+    listener: (() => void) | null
+  ): void {
+    if (!signal || !listener) return;
+    try {
+      signal.removeEventListener('abort', listener);
+    } catch {
+      // Best-effort cleanup.
+    }
+  }
+
+  private async collectChunks(
+    req: IncomingMessage,
+    limit: number,
+    signal?: AbortSignal
+  ): Promise<{ chunks: Buffer[]; size: number }> {
     let size = 0;
     const chunks: Buffer[] = [];
 
@@ -303,6 +400,9 @@ class JsonBodyReader {
       for await (const chunk of req as AsyncIterable<
         Buffer | Uint8Array | string
       >) {
+        if (signal?.aborted || req.destroyed) {
+          throw new JsonBodyError('read-failed', 'Request aborted');
+        }
         const buf = this.normalizeChunk(chunk);
         size += buf.length;
         if (size > limit) {
@@ -313,14 +413,16 @@ class JsonBodyReader {
       }
     } catch (err: unknown) {
       if (err instanceof JsonBodyError) throw err;
+      if (signal?.aborted || req.destroyed) {
+        throw new JsonBodyError('read-failed', 'Request aborted');
+      }
       throw new JsonBodyError(
         'read-failed',
         err instanceof Error ? err.message : String(err)
       );
     }
 
-    if (chunks.length === 0) return undefined;
-    return Buffer.concat(chunks, size).toString();
+    return { chunks, size };
   }
 
   private normalizeChunk(chunk: Buffer | Uint8Array | string): Buffer {
@@ -556,19 +658,25 @@ function createRateLimitManagerImpl(
 const STATIC_TOKEN_TTL_SECONDS = 60 * 60 * 24;
 
 class AuthService {
-  async authenticate(req: IncomingMessage): Promise<AuthInfo> {
+  async authenticate(
+    req: IncomingMessage,
+    signal?: AbortSignal
+  ): Promise<AuthInfo> {
     const authHeader = getHeaderValue(req, 'authorization');
     if (!authHeader) {
       return this.authenticateWithApiKey(req);
     }
 
     const token = this.resolveBearerToken(authHeader);
-    return this.authenticateWithToken(token);
+    return this.authenticateWithToken(token, signal);
   }
 
-  private authenticateWithToken(token: string): Promise<AuthInfo> {
+  private authenticateWithToken(
+    token: string,
+    signal?: AbortSignal
+  ): Promise<AuthInfo> {
     return config.auth.mode === 'oauth'
-      ? this.verifyWithIntrospection(token)
+      ? this.verifyWithIntrospection(token, signal)
       : Promise.resolve(this.verifyStaticToken(token));
   }
 
@@ -656,13 +764,19 @@ class AuthService {
   private async requestIntrospection(
     url: URL,
     request: { body: string; headers: Record<string, string> },
-    timeoutMs: number
+    timeoutMs: number,
+    signal?: AbortSignal
   ): Promise<unknown> {
+    const timeoutSignal = AbortSignal.timeout(timeoutMs);
+    const combinedSignal = signal
+      ? AbortSignal.any([signal, timeoutSignal])
+      : timeoutSignal;
+
     const response = await fetch(url, {
       method: 'POST',
       headers: request.headers,
       body: request.body,
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: combinedSignal,
     });
 
     if (!response.ok) {
@@ -694,7 +808,10 @@ class AuthService {
     return info;
   }
 
-  private async verifyWithIntrospection(token: string): Promise<AuthInfo> {
+  private async verifyWithIntrospection(
+    token: string,
+    signal?: AbortSignal
+  ): Promise<AuthInfo> {
     if (!config.auth.introspectionUrl) {
       throw new ServerError('Introspection not configured');
     }
@@ -709,7 +826,8 @@ class AuthService {
     const payload = await this.requestIntrospection(
       config.auth.introspectionUrl,
       req,
-      config.auth.introspectionTimeoutMs
+      config.auth.introspectionTimeoutMs,
+      signal
     );
 
     if (!isObject(payload) || payload.active !== true) {
@@ -1145,7 +1263,7 @@ class HttpDispatcher {
     ctx: RequestContext
   ): Promise<AuthInfo | null> {
     try {
-      return await authService.authenticate(ctx.req);
+      return await authService.authenticate(ctx.req, ctx.signal);
     } catch (err) {
       sendJson(ctx.res, 401, {
         error: err instanceof Error ? err.message : 'Unauthorized',
@@ -1164,51 +1282,60 @@ class HttpRequestPipeline {
   async handle(rawReq: IncomingMessage, rawRes: ServerResponse): Promise<void> {
     const requestId = getHeaderValue(rawReq, 'x-request-id') ?? randomUUID();
     const sessionId = getMcpSessionId(rawReq) ?? undefined;
+    const { signal, cleanup } = createRequestAbortSignal(rawReq);
 
-    return runWithRequestContext(
-      {
-        requestId,
-        operationId: requestId,
-        ...(sessionId ? { sessionId } : {}),
-      },
-      async () => {
-        const ctx = buildRequestContext(rawReq, rawRes);
-        if (!ctx) {
-          drainRequest(rawReq);
-          return;
-        }
-
-        if (!hostOriginPolicy.validate(ctx)) {
-          drainRequest(rawReq);
-          return;
-        }
-        if (corsPolicy.handle(ctx)) {
-          drainRequest(rawReq);
-          return;
-        }
-
-        if (!this.rateLimiter.check(ctx)) {
-          drainRequest(rawReq);
-          return;
-        }
-
-        try {
-          ctx.body = await jsonBodyReader.read(ctx.req);
-        } catch {
-          if (ctx.url.pathname === '/mcp' && ctx.method === 'POST') {
-            sendError(ctx.res, -32700, 'Parse error', 400, null);
-          } else {
-            sendJson(ctx.res, 400, {
-              error: 'Invalid JSON or Payload too large',
-            });
+    try {
+      await runWithRequestContext(
+        {
+          requestId,
+          operationId: requestId,
+          ...(sessionId ? { sessionId } : {}),
+        },
+        async () => {
+          const ctx = buildRequestContext(rawReq, rawRes, signal);
+          if (!ctx) {
+            drainRequest(rawReq);
+            return;
           }
-          drainRequest(rawReq);
-          return;
-        }
 
-        await this.dispatcher.dispatch(ctx);
-      }
-    );
+          if (!hostOriginPolicy.validate(ctx)) {
+            drainRequest(rawReq);
+            return;
+          }
+          if (corsPolicy.handle(ctx)) {
+            drainRequest(rawReq);
+            return;
+          }
+
+          if (!this.rateLimiter.check(ctx)) {
+            drainRequest(rawReq);
+            return;
+          }
+
+          try {
+            ctx.body = await jsonBodyReader.read(
+              ctx.req,
+              DEFAULT_BODY_LIMIT_BYTES,
+              ctx.signal
+            );
+          } catch {
+            if (ctx.url.pathname === '/mcp' && ctx.method === 'POST') {
+              sendError(ctx.res, -32700, 'Parse error', 400, null);
+            } else {
+              sendJson(ctx.res, 400, {
+                error: 'Invalid JSON or Payload too large',
+              });
+            }
+            drainRequest(rawReq);
+            return;
+          }
+
+          await this.dispatcher.dispatch(ctx);
+        }
+      );
+    } finally {
+      cleanup();
+    }
   }
 }
 

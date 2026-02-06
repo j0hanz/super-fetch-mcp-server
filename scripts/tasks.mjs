@@ -1,6 +1,6 @@
 /* eslint-disable */
 import { spawn } from 'node:child_process';
-import { access, chmod, cp, mkdir, rm } from 'node:fs/promises';
+import { access, chmod, cp, glob, mkdir, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import process from 'node:process';
@@ -64,6 +64,14 @@ const System = {
     try {
       await access(path);
       return true;
+    } catch {
+      return false;
+    }
+  },
+  async isDirectory(path) {
+    try {
+      const stats = await stat(path);
+      return stats.isDirectory();
     } catch {
       return false;
     }
@@ -176,7 +184,7 @@ const BuildTasks = {
     await System.makeDir(CONFIG.paths.dist);
     await System.copy(CONFIG.paths.instructions, CONFIG.paths.distInstructions);
 
-    if (await System.exists(CONFIG.paths.assets)) {
+    if (await System.isDirectory(CONFIG.paths.assets)) {
       await System.copy(CONFIG.paths.assets, CONFIG.paths.distAssets, {
         recursive: true,
       });
@@ -204,14 +212,24 @@ function getCoverageArgs(args) {
 }
 
 async function findTestPatterns() {
-  const existing = [];
-  for (const pattern of CONFIG.test.patterns) {
-    const basePath = pattern.split('/')[0];
-    if (await System.exists(basePath)) {
-      existing.push(pattern);
+  const matches = await Promise.all(
+    CONFIG.test.patterns.map(async (pattern) => {
+      const files = [];
+      for await (const entry of glob(pattern)) {
+        files.push(entry);
+      }
+      return files;
+    })
+  );
+
+  const files = new Set();
+  for (const group of matches) {
+    for (const file of group) {
+      files.add(file);
     }
   }
-  return existing;
+
+  return [...files].sort();
 }
 
 const TestTasks = {
@@ -225,10 +243,10 @@ const TestTasks = {
   async test(args = []) {
     await Pipeline.fullBuild();
 
-    const patterns = await findTestPatterns();
-    if (patterns.length === 0) {
+    const testFiles = await findTestPatterns();
+    if (testFiles.length === 0) {
       throw new Error(
-        `No test directories found. Expected one of: ${CONFIG.test.patterns.join(
+        `No test files found. Expected one of: ${CONFIG.test.patterns.join(
           ', '
         )}`
       );
@@ -242,7 +260,7 @@ const TestTasks = {
         '--test',
         ...loader,
         ...coverage,
-        ...patterns,
+        ...testFiles,
       ]);
     });
   },
