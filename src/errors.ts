@@ -13,9 +13,10 @@ export class FetchError extends Error {
     message: string,
     readonly url: string,
     httpStatus?: number,
-    details: Record<string, unknown> = {}
+    details: Record<string, unknown> = {},
+    options?: ErrorOptions
   ) {
-    super(message);
+    super(message, options);
     this.name = 'FetchError';
     this.statusCode = httpStatus ?? DEFAULT_HTTP_STATUS;
     this.code = httpStatus ? `HTTP_${httpStatus}` : 'FETCH_ERROR';
@@ -54,9 +55,10 @@ function formatUnknownError(error: unknown): string {
 
 export function createErrorWithCode(
   message: string,
-  code: string
+  code: string,
+  options?: ErrorOptions
 ): NodeJS.ErrnoException {
-  const error = new Error(message);
+  const error = new Error(message, options);
   return Object.assign(error, { code });
 }
 
