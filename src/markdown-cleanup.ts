@@ -1,12 +1,15 @@
 import { config } from './config.js';
 import type { MetadataBlock } from './transform-types.js';
 
+// --- Constants & Regex ---
+
 const MAX_LINE_LENGTH = 80;
 
 const REGEX = {
+  // Pre-compiled regexes for performance
   HEADING_MARKER: /^#{1,6}\s/m,
   HEADING_STRICT: /^#{1,6}\s+/m,
-  EMPTY_HEADING: /^#{1,6}[ \t\u00A0]*$\r?\n?/gm,
+  EMPTY_HEADING_LINE: /^#{1,6}[ \t\u00A0]*$/,
 
   FENCE_START: /^\s*(`{3,}|~{3,})/,
 
@@ -15,6 +18,8 @@ const REGEX = {
   TOC_HEADING: /^(?:#{1,6}\s+)?(?:table of contents|contents)\s*$/i,
 
   HTML_DOC_START: /^(<!doctype|<html)/i,
+
+  // Global replacements
   ZERO_WIDTH_ANCHOR: /\[(?:\s|\u200B)*\]\(#[^)]*\)[ \t]*/g,
   SKIP_LINKS: /^\[Skip to (?:main )?(?:content|navigation)\]\(#[^)]*\)\s*$/gim,
   SKIP_LINK_SIMPLE: /^\[Skip link\]\(#[^)]*\)\s*$/gim,
@@ -26,150 +31,142 @@ const REGEX = {
   DOUBLE_NEWLINE_REDUCER: /\n{3,}/g,
 
   SOURCE_KEY: /^source:\s/im,
+
+  // Pipeline-specific
+  HEADING_SPACING: /(^#{1,6}\s[^\n]*)\n([^\n])/gm,
+  HEADING_CODE_BLOCK: /(^#{1,6}\s+\w+)```/gm,
+  HEADING_CAMEL_CASE: /(^#{1,6}\s+\w*[A-Z])([A-Z][a-z])/gm,
+
+  SPACING_LINK_FIX: /\]\(([^)]+)\)\[/g,
+  SPACING_LINK_ADJ: /\]\([^)]+\)(?=[A-Za-z0-9])/g,
+  SPACING_CODE_ADJ: /`[^`]+`(?=[A-Za-z0-9])/g,
+  SPACING_CODE_DASH: /(`[^`]+`)\s*\\-\s*/g,
+  SPACING_ESCAPES: /\\([[\].])/g,
+  SPACING_URL_ENC: /\]\([^)]*%5[Ff][^)]*\)/g,
+  SPACING_LIST_FIX: /^((?![-*+] |\d+\. |[ \t]).+)\n([-*+] )/gm,
+  SPACING_NUM_FIX: /^((?![-*+] |\d+\. |[ \t]).+)\n(\d+\. )/gm,
+
+  TYPEDOC: /(`+)(?:(?!\1)[\s\S])*?\1|\s?\/\\?\*[\s\S]*?\\?\*\//g,
 } as const;
 
-function getLineEnding(content: string): '\n' | '\r\n' {
-  return content.includes('\r\n') ? '\r\n' : '\n';
-}
-
-function splitLinesLf(content: string): string[] {
-  return content.split(/\r?\n/);
-}
-
-function toLocaleLower(value: string): string {
-  const { locale } = config.i18n;
-  return locale ? value.toLocaleLowerCase(locale) : value.toLocaleLowerCase();
-}
-
 const HEADING_KEYWORDS = new Set(
-  config.markdownCleanup.headingKeywords.map((value) => toLocaleLower(value))
+  config.markdownCleanup.headingKeywords.map((value) =>
+    value.toLocaleLowerCase(config.i18n.locale)
+  )
 );
 
 const SPECIAL_PREFIXES =
   /^(?:example|note|tip|warning|important|caution):\s+\S/i;
 
-interface Segment {
-  content: string;
-  isFence: boolean;
-}
+// --- Helper Functions ---
 
-interface FrontmatterData {
-  fence: string;
-  lines: string[];
-  endIndex: number;
-  lineEnding: '\n' | '\r\n';
-}
-
-function splitByFences(content: string): Segment[] {
-  const lines = splitLinesLf(content);
-  const segments: Segment[] = [];
-
-  let buffer: string[] = [];
-  let inFence = false;
-  let fenceMarker = '';
-
-  const flush = (isFenceSegment: boolean): void => {
-    if (buffer.length === 0) return;
-    segments.push({ content: buffer.join('\n'), isFence: isFenceSegment });
-    buffer = [];
-  };
-
-  for (const line of lines) {
-    const trimmed = line.trimStart();
-
-    if (inFence) {
-      buffer.push(line);
-
-      const isClosure =
-        trimmed.startsWith(fenceMarker) &&
-        trimmed.slice(fenceMarker.length).trim() === '';
-
-      if (isClosure) {
-        flush(true);
-        inFence = false;
-        fenceMarker = '';
-      }
-      continue;
-    }
-
-    const match = REGEX.FENCE_START.exec(line);
-    if (match) {
-      flush(false);
-      inFence = true;
-      fenceMarker = match[1] ?? '```';
-      buffer.push(line);
-      continue;
-    }
-
-    buffer.push(line);
-  }
-
-  flush(inFence);
-  return segments;
-}
-
-const HeadingHeuristics = {
-  isTooLong: (line: string): boolean => line.length > MAX_LINE_LENGTH,
-  isSpecialPrefix: (line: string): boolean => SPECIAL_PREFIXES.test(line),
-
-  isTitleCaseOrKeyword: (trimmed: string): boolean => {
-    const words = trimmed.split(/\s+/);
-
-    if (words.length === 1) {
-      return (
-        /^[A-Z]/.test(trimmed) && HEADING_KEYWORDS.has(toLocaleLower(trimmed))
-      );
-    }
-
-    if (words.length >= 2 && words.length <= 6) {
-      const allTitleCase = words.every(
-        (w) =>
-          /^[A-Z][a-z]*$/.test(w) || /^(?:and|or|the|of|in|for|to|a)$/i.test(w)
-      );
-      if (!allTitleCase) return false;
-
-      const capitalizedCount = words.filter((w) =>
-        /^[A-Z][a-z]*$/.test(w)
-      ).length;
-      return capitalizedCount >= 2;
-    }
-
-    return false;
-  },
-};
-
-function getHeadingPrefix(trimmed: string): string | null {
-  if (HeadingHeuristics.isTooLong(trimmed)) return null;
-
-  if (
-    REGEX.HEADING_MARKER.test(trimmed) ||
-    REGEX.LIST_MARKER.test(trimmed) ||
-    /^\d+\.\s/.test(trimmed) ||
-    /^\[.*\]\(.*\)$/.test(trimmed)
-  ) {
-    return null;
-  }
-
-  if (HeadingHeuristics.isSpecialPrefix(trimmed)) {
-    return /^example:\s/i.test(trimmed) ? '### ' : '## ';
-  }
-
-  if (/[.!?]$/.test(trimmed)) return null;
-
-  return HeadingHeuristics.isTitleCaseOrKeyword(trimmed) ? '## ' : null;
+function getLineEnding(content: string): '\n' | '\r\n' {
+  return content.includes('\r\n') ? '\r\n' : '\n';
 }
 
 function hasFollowingContent(lines: string[], startIndex: number): boolean {
-  return lines.slice(startIndex + 1).some((l) => l.trim() !== '');
+  // Optimization: Bound lookahead to avoid checking too many lines in huge files
+  const max = Math.min(lines.length, startIndex + 50);
+  for (let i = startIndex + 1; i < max; i++) {
+    const line = lines[i];
+    if (line && line.trim().length > 0) return true;
+  }
+  return false;
 }
 
-function isPromotableLine(
+// Optimized Heuristics
+function isTitleCaseOrKeyword(trimmed: string): boolean {
+  // Quick check for length to avoid regex on long strings
+  if (trimmed.length > MAX_LINE_LENGTH) return false;
+
+  // Single word optimization
+  if (!trimmed.includes(' ')) {
+    if (!/^[A-Z]/.test(trimmed)) return false;
+    return HEADING_KEYWORDS.has(trimmed.toLocaleLowerCase(config.i18n.locale));
+  }
+
+  // Split limited number of words
+  const words = trimmed.split(/\s+/);
+  const len = words.length;
+  if (len < 2 || len > 6) return false;
+
+  let capitalizedCount = 0;
+  for (let i = 0; i < len; i++) {
+    const w = words[i];
+    if (!w) continue;
+    const isCap = /^[A-Z][a-z]*$/.test(w);
+    if (isCap) capitalizedCount++;
+    else if (!/^(?:and|or|the|of|in|for|to|a)$/i.test(w)) return false;
+  }
+
+  return capitalizedCount >= 2;
+}
+
+function getHeadingPrefix(trimmed: string): string | null {
+  if (trimmed.length > MAX_LINE_LENGTH) return null;
+
+  // Fast path: Check common markdown markers first
+  const firstChar = trimmed.charCodeAt(0);
+  // # (35), - (45), * (42), + (43), digit (48-57), [ (91)
+  if (
+    firstChar === 35 ||
+    firstChar === 45 ||
+    firstChar === 42 ||
+    firstChar === 43 ||
+    firstChar === 91 ||
+    (firstChar >= 48 && firstChar <= 57)
+  ) {
+    if (
+      REGEX.HEADING_MARKER.test(trimmed) ||
+      REGEX.LIST_MARKER.test(trimmed) ||
+      /^\d+\.\s/.test(trimmed) ||
+      /^\[.*\]\(.*\)$/.test(trimmed)
+    ) {
+      return null;
+    }
+  }
+
+  if (SPECIAL_PREFIXES.test(trimmed)) {
+    return /^example:\s/i.test(trimmed) ? '### ' : '## ';
+  }
+
+  const lastChar = trimmed.charCodeAt(trimmed.length - 1);
+  // . (46), ! (33), ? (63)
+  if (lastChar === 46 || lastChar === 33 || lastChar === 63) return null;
+
+  return isTitleCaseOrKeyword(trimmed) ? '## ' : null;
+}
+
+// Optimized TOC detection
+function hasTocBlock(lines: string[], headingIndex: number): boolean {
+  const lookaheadMax = Math.min(lines.length, headingIndex + 8);
+  for (let i = headingIndex + 1; i < lookaheadMax; i++) {
+    const line = lines[i];
+    if (!line || line.trim().length === 0) continue;
+    if (REGEX.TOC_LINK.test(line)) return true;
+  }
+  return false;
+}
+
+function skipTocLines(lines: string[], startIndex: number): number {
+  for (let i = startIndex; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line) continue;
+    if (line.trim().length === 0) continue;
+    if (!REGEX.TOC_LINK.test(line)) return i;
+  }
+  return lines.length;
+}
+
+// --- Main Processing Logic ---
+
+function tryPromoteOrphan(
   lines: string[],
-  index: number,
+  i: number,
   trimmed: string
 ): string | null {
-  const prevLine = index > 0 ? (lines[index - 1] ?? '') : '';
-  const isOrphan = index === 0 || prevLine.trim() === '';
+  const prevLine = lines[i - 1];
+  const isOrphan = i === 0 || !prevLine || prevLine.trim().length === 0;
   if (!isOrphan) return null;
 
   const prefix = getHeadingPrefix(trimmed);
@@ -177,322 +174,363 @@ function isPromotableLine(
 
   const isTitleCaseOnly =
     prefix === '## ' &&
-    !HeadingHeuristics.isSpecialPrefix(trimmed) &&
-    trimmed.split(/\s+/).length >= 2;
+    !SPECIAL_PREFIXES.test(trimmed) &&
+    trimmed.includes(' ');
 
-  if (isTitleCaseOnly && !hasFollowingContent(lines, index)) return null;
+  if (isTitleCaseOnly && !hasFollowingContent(lines, i)) return null;
 
-  return prefix;
+  return `${prefix}${trimmed}`;
 }
 
-function promoteOrphanHeadings(segmentText: string): string {
-  if (!segmentText) return '';
-  const lines = splitLinesLf(segmentText);
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i] ?? '';
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-
-    const prefix = isPromotableLine(lines, i, trimmed);
-    if (prefix) lines[i] = `${prefix}${trimmed}`;
+function shouldSkipAsToc(
+  lines: string[],
+  i: number,
+  trimmed: string,
+  removeToc: boolean
+): number | null {
+  if (removeToc && REGEX.TOC_HEADING.test(trimmed) && hasTocBlock(lines, i)) {
+    return skipTocLines(lines, i + 1);
   }
-
-  return lines.join('\n');
+  return null;
 }
 
-function removeEmptyHeadings(text: string): string {
-  return text.replace(REGEX.EMPTY_HEADING, '');
-}
+function preprocessLines(lines: string[]): string {
+  const processedLines: string[] = [];
+  const len = lines.length;
+  const promote = config.markdownCleanup.promoteOrphanHeadings;
+  const removeToc = config.markdownCleanup.removeTocBlocks;
 
-function fixAndSpaceHeadings(text: string): string {
-  let current = text;
+  let skipUntil = -1;
 
-  current = current.replace(/(^#{1,6}\s[^\n]*)\n([^\n])/gm, '$1\n\n$2');
-  current = current.replace(/(^#{1,6}\s+\w+)```/gm, '$1\n\n```');
-  current = current.replace(/(^#{1,6}\s+\w*[A-Z])([A-Z][a-z])/gm, '$1\n\n$2');
+  for (let i = 0; i < len; i++) {
+    if (i < skipUntil) continue;
 
-  return current;
-}
+    let line = lines[i];
+    if (line === undefined) continue;
 
-function removeSkipLinks(text: string): string {
-  return text
-    .replace(REGEX.ZERO_WIDTH_ANCHOR, '')
-    .replace(REGEX.SKIP_LINKS, '')
-    .replace(REGEX.SKIP_LINK_SIMPLE, '');
-}
-
-function hasTocBlock(lines: string[], headingIndex: number): boolean {
-  const lookaheadMax = Math.min(lines.length, headingIndex + 8);
-
-  for (let i = headingIndex + 1; i < lookaheadMax; i++) {
-    const line = lines[i] ?? '';
     const trimmed = line.trim();
-    if (!trimmed) continue;
-    return REGEX.TOC_LINK.test(line);
-  }
+    if (REGEX.EMPTY_HEADING_LINE.test(trimmed)) continue;
 
-  return false;
-}
-
-function skipTocLines(lines: string[], startIndex: number): number {
-  for (let i = startIndex; i < lines.length; i++) {
-    const line = lines[i] ?? '';
-    const trimmed = line.trim();
-
-    if (!trimmed) continue;
-    if (REGEX.TOC_LINK.test(line)) continue;
-
-    return i;
-  }
-
-  return lines.length;
-}
-
-function removeToc(text: string): string {
-  const lines = splitLinesLf(text);
-  const out: string[] = [];
-
-  for (let i = 0; i < lines.length; ) {
-    const line = lines[i] ?? '';
-    const trimmed = line.trim();
-
-    if (REGEX.TOC_HEADING.test(trimmed) && hasTocBlock(lines, i)) {
-      i = skipTocLines(lines, i + 1);
+    const tocSkip = shouldSkipAsToc(lines, i, trimmed, removeToc);
+    if (tocSkip !== null) {
+      skipUntil = tocSkip;
       continue;
     }
 
-    out.push(line);
-    i += 1;
-  }
+    if (promote && trimmed.length > 0) {
+      const promoted = tryPromoteOrphan(lines, i, trimmed);
+      if (promoted) line = promoted;
+    }
 
-  return out.join('\n');
+    processedLines.push(line);
+  }
+  return processedLines.join('\n');
 }
 
-function normalizeSpacing(text: string): string {
-  return text
-    .replace(/\]\(([^)]+)\)\[/g, ']($1)\n\n[')
+// Process a block of non-fence lines
+function processTextBuffer(lines: string[]): string {
+  if (lines.length === 0) return '';
+  const text = preprocessLines(lines);
+  return applyGlobalRegexes(text);
+}
+
+function applyGlobalRegexes(text: string): string {
+  let result = text;
+
+  // fixAndSpaceHeadings
+  result = result
+    .replace(REGEX.HEADING_SPACING, '$1\n\n$2')
+    .replace(REGEX.HEADING_CODE_BLOCK, '$1\n\n```')
+    .replace(REGEX.HEADING_CAMEL_CASE, '$1\n\n$2');
+
+  // removeTypeDocComments
+  if (config.markdownCleanup.removeTypeDocComments) {
+    result = result.replace(REGEX.TYPEDOC, (match) =>
+      match.startsWith('`') ? match : ''
+    );
+  }
+
+  // removeSkipLinks
+  if (config.markdownCleanup.removeSkipLinks) {
+    result = result
+      .replace(REGEX.ZERO_WIDTH_ANCHOR, '')
+      .replace(REGEX.SKIP_LINKS, '')
+      .replace(REGEX.SKIP_LINK_SIMPLE, '');
+  }
+
+  // normalizeSpacing
+  result = result
+    .replace(REGEX.SPACING_LINK_FIX, ']($1)\n\n[')
     .replace(REGEX.HELPFUL_PROMPT, '')
-    .replace(/\]\([^)]+\)(?=[A-Za-z0-9])/g, '$& ')
-    .replace(/`[^`]+`(?=[A-Za-z0-9])/g, '$& ')
-    .replace(/(`[^`]+`)\s*\\-\s*/g, '$1 - ')
-    .replace(/\\([[\].])/g, '$1')
-    .replace(/\]\([^)]*%5[Ff][^)]*\)/g, (m) => m.replace(/%5[Ff]/g, '_'))
-    .replace(/^((?![-*+] |\d+\. |[ \t]).+)\n([-*+] )/gm, '$1\n\n$2')
-    .replace(/^((?![-*+] |\d+\. |[ \t]).+)\n(\d+\. )/gm, '$1\n\n$2')
+    .replace(REGEX.SPACING_LINK_ADJ, '$& ')
+    .replace(REGEX.SPACING_CODE_ADJ, '$& ')
+    .replace(REGEX.SPACING_CODE_DASH, '$1 - ')
+    .replace(REGEX.SPACING_ESCAPES, '$1')
+    .replace(REGEX.SPACING_URL_ENC, (m) => m.replace(/%5[Ff]/g, '_'))
+    .replace(REGEX.SPACING_LIST_FIX, '$1\n\n$2')
+    .replace(REGEX.SPACING_NUM_FIX, '$1\n\n$2')
     .replace(REGEX.DOUBLE_NEWLINE_REDUCER, '\n\n');
-}
 
-function fixProperties(text: string): string {
-  let current = text;
-
-  for (let i = 0; i < 3; i++) {
-    const next = current.replace(REGEX.CONCATENATED_PROPS, '$1$2\n\n$3');
-    if (next === current) break;
-    current = next;
+  // fixProperties
+  for (let k = 0; k < 3; k++) {
+    const next = result.replace(REGEX.CONCATENATED_PROPS, '$1$2\n\n$3');
+    if (next === result) break;
+    result = next;
   }
 
-  return current;
+  return result;
 }
 
-function removeTypeDocComments(text: string): string {
-  const pattern = /(`+)(?:(?!\1)[\s\S])*?\1|\s?\/\\?\*[\s\S]*?\\?\*\//g;
+function findNextLine(
+  content: string,
+  lastIndex: number,
+  len: number
+): { line: string; nextIndex: number } {
+  let nextIndex = content.indexOf('\n', lastIndex);
+  let line: string;
 
-  return text.replace(pattern, (match) => (match.startsWith('`') ? match : ''));
+  if (nextIndex === -1) {
+    line = content.slice(lastIndex);
+    nextIndex = len;
+  } else {
+    if (nextIndex > lastIndex && content.charCodeAt(nextIndex - 1) === 13) {
+      line = content.slice(lastIndex, nextIndex - 1);
+    } else {
+      line = content.slice(lastIndex, nextIndex);
+    }
+    nextIndex++; // Skip \n
+  }
+  return { line, nextIndex };
 }
 
-type CleanupStep = (text: string) => string;
+function checkFenceStart(line: string): string | null {
+  const match = REGEX.FENCE_START.exec(line);
+  return match ? (match[1] ?? '```') : null;
+}
 
-const CLEANUP_PIPELINE: CleanupStep[] = [
-  (text) =>
-    config.markdownCleanup.promoteOrphanHeadings
-      ? promoteOrphanHeadings(text)
-      : text,
-  fixAndSpaceHeadings,
-  (text) =>
-    config.markdownCleanup.removeTypeDocComments
-      ? removeTypeDocComments(text)
-      : text,
-  (text) =>
-    config.markdownCleanup.removeSkipLinks ? removeSkipLinks(text) : text,
-  (text) => (config.markdownCleanup.removeTocBlocks ? removeToc(text) : text),
-  removeEmptyHeadings,
-  normalizeSpacing,
-  fixProperties,
-];
+function isFenceClosure(trimmed: string, marker: string): boolean {
+  return (
+    trimmed.startsWith(marker) && trimmed.slice(marker.length).trim() === ''
+  );
+}
 
-const Frontmatter = {
-  detect(content: string): FrontmatterData | null {
-    let lineEnding: '\n' | '\r\n' | null = null;
+function handleFencedLine(
+  line: string,
+  trimmed: string,
+  fenceMarker: string,
+  segments: string[]
+): string | null {
+  segments.push(line);
+  return isFenceClosure(trimmed, fenceMarker) ? null : fenceMarker;
+}
 
-    if (content.startsWith('---\r\n')) {
-      lineEnding = '\r\n';
-    } else if (content.startsWith('---\n')) {
-      lineEnding = '\n';
-    }
-
-    if (!lineEnding) return null;
-
-    const fence = `---${lineEnding}`;
-    const closeFenceIndex = content.indexOf(fence, fence.length);
-    if (closeFenceIndex === -1) return null;
-
-    return {
-      fence,
-      lines: content.slice(0, closeFenceIndex).split(lineEnding),
-      endIndex: closeFenceIndex + fence.length,
-      lineEnding,
-    };
-  },
-
-  parseEntry(line: string): { key: string; value: string } | null {
-    const trimmed = line.trim();
-    const idx = trimmed.indexOf(':');
-    if (!trimmed || idx <= 0) return null;
-
-    return {
-      key: trimmed.slice(0, idx).trim().toLowerCase(),
-      value: trimmed.slice(idx + 1).trim(),
-    };
-  },
-
-  stripQuotes(val: string): string {
-    const first = val.charAt(0);
-    const last = val.charAt(val.length - 1);
-
-    if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
-      return val.slice(1, -1).trim();
-    }
-
-    return val;
-  },
-};
-
-function applyCleanupPipeline(text: string): string {
-  return CLEANUP_PIPELINE.reduce((acc, step) => step(acc), text);
+function handleUnfencedLine(
+  line: string,
+  segments: string[],
+  buffer: string[]
+): { fenceMarker: string | null; buffer: string[] } {
+  const newMarker = checkFenceStart(line);
+  if (!newMarker) {
+    buffer.push(line);
+    return { fenceMarker: null, buffer };
+  }
+  if (buffer.length > 0) {
+    segments.push(processTextBuffer(buffer));
+    buffer = [];
+  }
+  segments.push(line);
+  return { fenceMarker: newMarker, buffer };
 }
 
 export function cleanupMarkdownArtifacts(content: string): string {
   if (!content) return '';
 
-  const segments = splitByFences(content);
+  const len = content.length;
+  let lastIndex = 0;
+  let fenceMarker: string | null = null;
+  const segments: string[] = [];
+  let buffer: string[] = [];
 
-  const processed = segments.map((seg) =>
-    seg.isFence ? seg.content : applyCleanupPipeline(seg.content)
-  );
+  while (lastIndex < len) {
+    const { line, nextIndex } = findNextLine(content, lastIndex, len);
+    const trimmed = line.trimStart();
 
-  return processed.join('\n').trim();
+    if (fenceMarker) {
+      fenceMarker = handleFencedLine(line, trimmed, fenceMarker, segments);
+    } else {
+      ({ fenceMarker, buffer } = handleUnfencedLine(line, segments, buffer));
+    }
+
+    lastIndex = nextIndex;
+  }
+
+  if (buffer.length > 0) {
+    segments.push(processTextBuffer(buffer));
+  }
+
+  return segments.join('\n').trim();
+}
+
+// --- Frontmatter & Metadata Utilities ---
+
+interface FrontmatterRange {
+  start: number;
+  end: number;
+  linesStart: number;
+  linesEnd: number;
+  lineEnding: '\n' | '\r\n';
+}
+
+function detectFrontmatter(content: string): FrontmatterRange | null {
+  const len = content.length;
+  if (len < 4) return null;
+
+  let lineEnding: '\n' | '\r\n' | null = null;
+  let fenceLen = 0;
+
+  if (content.startsWith('---\n')) {
+    lineEnding = '\n';
+    fenceLen = 4;
+  } else if (content.startsWith('---\r\n')) {
+    lineEnding = '\r\n';
+    fenceLen = 5;
+  }
+
+  if (!lineEnding) return null;
+
+  const fence = `---${lineEnding}`;
+  const closeIndex = content.indexOf(fence, fenceLen);
+
+  if (closeIndex === -1) return null;
+
+  return {
+    start: 0,
+    end: closeIndex + fenceLen,
+    linesStart: fenceLen,
+    linesEnd: closeIndex,
+    lineEnding,
+  };
+}
+
+function parseFrontmatterEntry(
+  line: string
+): { key: string; value: string } | null {
+  const trimmed = line.trim();
+  const idx = trimmed.indexOf(':');
+  if (!trimmed || idx <= 0) return null;
+
+  return {
+    key: trimmed.slice(0, idx).trim().toLowerCase(),
+    value: trimmed.slice(idx + 1).trim(),
+  };
+}
+
+function stripFrontmatterQuotes(val: string): string {
+  const first = val.charAt(0);
+  const last = val.charAt(val.length - 1);
+
+  if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+    return val.slice(1, -1).trim();
+  }
+  return val;
+}
+
+function scanFrontmatterForTitle(
+  content: string,
+  fm: FrontmatterRange
+): string | undefined {
+  const fmBody = content.slice(fm.linesStart, fm.linesEnd);
+  let lastIdx = 0;
+  while (lastIdx < fmBody.length) {
+    let nextIdx = fmBody.indexOf(fm.lineEnding, lastIdx);
+    if (nextIdx === -1) nextIdx = fmBody.length;
+
+    const line = fmBody.slice(lastIdx, nextIdx);
+    const entry = parseFrontmatterEntry(line);
+
+    if (entry) {
+      if (entry.key === 'title' || entry.key === 'name') {
+        const cleaned = stripFrontmatterQuotes(entry.value);
+        if (cleaned) return cleaned;
+      }
+    }
+    lastIdx = nextIdx + fm.lineEnding.length;
+  }
+  return undefined;
+}
+
+function scanBodyForTitle(content: string): string | undefined {
+  const len = content.length;
+  let scanIndex = 0;
+  const LIMIT = 5000;
+  const maxScan = Math.min(len, LIMIT);
+
+  while (scanIndex < maxScan) {
+    let nextIndex = content.indexOf('\n', scanIndex);
+    if (nextIndex === -1) nextIndex = len;
+
+    let line = content.slice(scanIndex, nextIndex);
+    if (line.endsWith('\r')) line = line.slice(0, -1);
+
+    const trimmed = line.trim();
+    if (trimmed) {
+      if (REGEX.HEADING_STRICT.test(trimmed)) {
+        return trimmed.replace(REGEX.HEADING_MARKER, '').trim() || undefined;
+      }
+      return undefined;
+    }
+
+    scanIndex = nextIndex + 1;
+  }
+  return undefined;
 }
 
 export function extractTitleFromRawMarkdown(
   content: string
 ): string | undefined {
-  const fmTitle = extractTitleFromFrontmatter(content);
-  if (fmTitle) return fmTitle;
-
-  return extractTitleFromBody(content);
-}
-
-function extractTitleFromFrontmatter(content: string): string | undefined {
-  const fm = Frontmatter.detect(content);
-  if (!fm) return undefined;
-
-  for (const line of fm.lines) {
-    const entry = Frontmatter.parseEntry(line);
-    if (!entry) continue;
-
-    if (entry.key === 'title' || entry.key === 'name') {
-      const cleaned = Frontmatter.stripQuotes(entry.value);
-      if (cleaned) return cleaned;
-    }
+  const fm = detectFrontmatter(content);
+  if (fm) {
+    const title = scanFrontmatterForTitle(content, fm);
+    if (title) return title;
   }
-
-  return undefined;
-}
-
-function extractTitleFromBody(content: string): string | undefined {
-  const lines = content.split(/\r?\n/);
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-
-    if (REGEX.HEADING_STRICT.test(trimmed)) {
-      return trimmed.replace(REGEX.HEADING_MARKER, '').trim() || undefined;
-    }
-
-    return undefined;
-  }
-
-  return undefined;
-}
-
-function hasSourceKey(text: string): boolean {
-  return REGEX.SOURCE_KEY.test(text);
-}
-
-function escapeFrontmatterString(value: string): string {
-  return value.replace(/"/g, '\\"');
-}
-
-function injectSourceIntoBody(content: string, url: string): string {
-  const lineEnding = getLineEnding(content);
-  const lines = content.split(lineEnding);
-
-  const firstNonEmptyIndex = lines.findIndex((l) => l.trim().length > 0);
-  const firstNonEmptyLine = lines[firstNonEmptyIndex] ?? '';
-
-  if (
-    firstNonEmptyIndex !== -1 &&
-    REGEX.HEADING_MARKER.test(firstNonEmptyLine.trim())
-  ) {
-    lines.splice(firstNonEmptyIndex + 1, 0, '', `Source: ${url}`, '');
-    return lines.join(lineEnding);
-  }
-
-  lines.unshift(`Source: ${url}`, '');
-  return lines.join(lineEnding);
-}
-
-function injectSourceIntoFrontmatter(
-  content: string,
-  fm: FrontmatterData,
-  url: string
-): string {
-  const closeFenceIndex = fm.endIndex - fm.fence.length;
-  const fmBody = content.slice(fm.fence.length, closeFenceIndex);
-
-  if (hasSourceKey(fmBody)) return content;
-
-  const escapedUrl = escapeFrontmatterString(url);
-  const injection = `source: "${escapedUrl}"${fm.lineEnding}`;
-
-  return (
-    content.slice(0, closeFenceIndex) +
-    injection +
-    content.slice(closeFenceIndex)
-  );
-}
-
-function createFrontmatterWithSource(content: string, url: string): string {
-  const lineEnding = getLineEnding(content);
-  const escapedUrl = escapeFrontmatterString(url);
-
-  return `---${lineEnding}source: "${escapedUrl}"${lineEnding}---${lineEnding}${lineEnding}${content}`;
+  return scanBodyForTitle(content);
 }
 
 export function addSourceToMarkdown(content: string, url: string): string {
-  const fm = Frontmatter.detect(content);
+  const fm = detectFrontmatter(content);
   const useMarkdownFormat = config.transform.metadataFormat === 'markdown';
 
   if (useMarkdownFormat && !fm) {
-    if (hasSourceKey(content)) return content;
-    return injectSourceIntoBody(content, url);
+    if (REGEX.SOURCE_KEY.test(content)) return content;
+    const lineEnding = getLineEnding(content);
+    const firstH1Match = REGEX.HEADING_MARKER.exec(content);
+
+    if (firstH1Match) {
+      const h1Index = firstH1Match.index;
+      const lineEndIndex = content.indexOf(lineEnding, h1Index);
+      const insertPos =
+        lineEndIndex === -1 ? content.length : lineEndIndex + lineEnding.length;
+
+      const injection = `${lineEnding}Source: ${url}${lineEnding}`;
+      return content.slice(0, insertPos) + injection + content.slice(insertPos);
+    }
+
+    return `Source: ${url}${lineEnding}${lineEnding}${content}`;
   }
 
-  if (!fm) return createFrontmatterWithSource(content, url);
+  if (!fm) {
+    const lineEnding = getLineEnding(content);
+    const escapedUrl = url.replace(/"/g, '\\"');
+    return `---${lineEnding}source: "${escapedUrl}"${lineEnding}---${lineEnding}${lineEnding}${content}`;
+  }
 
-  return injectSourceIntoFrontmatter(content, fm, url);
+  const fmBody = content.slice(fm.linesStart, fm.linesEnd);
+  if (REGEX.SOURCE_KEY.test(fmBody)) return content;
+
+  const escapedUrl = url.replace(/"/g, '\\"');
+  const injection = `source: "${escapedUrl}"${fm.lineEnding}`;
+
+  return content.slice(0, fm.linesEnd) + injection + content.slice(fm.linesEnd);
 }
 
 function countCommonTags(content: string, limit: number): number {
@@ -513,7 +551,7 @@ export function isRawTextContent(content: string): boolean {
   const trimmed = content.trim();
   if (REGEX.HTML_DOC_START.test(trimmed)) return false;
 
-  if (Frontmatter.detect(trimmed) !== null) return true;
+  if (detectFrontmatter(trimmed) !== null) return true;
 
   const tagCount = countCommonTags(content, 5);
   if (tagCount > 5) return false;
