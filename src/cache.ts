@@ -2,6 +2,8 @@ import { EventEmitter } from 'node:events';
 import type { ServerResponse } from 'node:http';
 import { posix as pathPosix } from 'node:path';
 
+import { z } from 'zod';
+
 import { ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import {
@@ -15,13 +17,26 @@ import { config } from './config.js';
 import { sha256Hex } from './crypto.js';
 import { getErrorMessage } from './errors.js';
 import { stableStringify as stableJsonStringify } from './json.js';
-import { logDebug, logWarn } from './observability.js';
-import { isObject } from './type-guards.js';
+import { logWarn } from './observability.js';
 
 /* -------------------------------------------------------------------------------------------------
- * Types (public)
+ * Schemas & Types
  * ------------------------------------------------------------------------------------------------- */
 
+const CacheNamespace = z.literal('markdown');
+const HashString = z
+  .string()
+  .regex(/^[a-f0-9.]+$/i)
+  .min(8)
+  .max(64);
+const CachedPayloadSchema = z.strictObject({
+  content: z.string().optional(),
+  markdown: z.string().optional(),
+  title: z.string().optional(),
+});
+export type CachedPayload = z.infer<typeof CachedPayloadSchema>;
+
+// Cache Entry (Memory)
 export interface CacheEntry {
   url: string;
   title?: string;
@@ -30,10 +45,10 @@ export interface CacheEntry {
   expiresAt: string;
 }
 
-export interface CachedPayload {
-  content?: string;
-  markdown?: string;
-  title?: string;
+export interface McpIcon {
+  src: string;
+  mimeType: string;
+  sizes?: string[];
 }
 
 export interface CacheKeyParts {
@@ -41,36 +56,44 @@ export interface CacheKeyParts {
   urlHash: string;
 }
 
-export interface McpIcon {
-  src: string;
-  mimeType: string;
-  sizes?: string[];
+export interface CacheSetOptions {
+  force?: boolean;
 }
+
+export interface CacheGetOptions {
+  force?: boolean;
+}
+
+interface CacheEntryMetadata {
+  url: string;
+  title?: string;
+}
+
+interface StoredCacheEntry extends CacheEntry {
+  expiresAtMs: number;
+}
+
+interface CacheUpdateEvent {
+  cacheKey: string;
+  namespace: string;
+  urlHash: string;
+}
+
+type CacheUpdateListener = (event: CacheUpdateEvent) => unknown;
 
 /* -------------------------------------------------------------------------------------------------
- * Cached payload codec
+ * Core: Cache Key Logic
  * ------------------------------------------------------------------------------------------------- */
 
-function hasOptionalStringProperty(
-  value: Record<string, unknown>,
-  key: string
-): boolean {
-  const prop = value[key];
-  return prop === undefined ? true : typeof prop === 'string';
-}
-
-function isCachedPayload(value: unknown): value is CachedPayload {
-  if (!isObject(value)) return false;
-  if (!hasOptionalStringProperty(value, 'content')) return false;
-  if (!hasOptionalStringProperty(value, 'markdown')) return false;
-  if (!hasOptionalStringProperty(value, 'title')) return false;
-  return true;
-}
+const CACHE_CONSTANTS = {
+  URL_HASH_LENGTH: 32,
+  VARY_HASH_LENGTH: 16,
+} as const;
 
 export function parseCachedPayload(raw: string): CachedPayload | null {
   try {
     const parsed: unknown = JSON.parse(raw);
-    return isCachedPayload(parsed) ? parsed : null;
+    return CachedPayloadSchema.parse(parsed);
   } catch {
     return null;
   }
@@ -79,19 +102,8 @@ export function parseCachedPayload(raw: string): CachedPayload | null {
 export function resolveCachedPayloadContent(
   payload: CachedPayload
 ): string | null {
-  if (typeof payload.markdown === 'string') return payload.markdown;
-  if (typeof payload.content === 'string') return payload.content;
-  return null;
+  return payload.markdown ?? payload.content ?? null;
 }
-
-/* -------------------------------------------------------------------------------------------------
- * Cache key codec (hashing + parsing + resource URI)
- * ------------------------------------------------------------------------------------------------- */
-
-const CACHE_HASH = {
-  URL_HASH_LENGTH: 32,
-  VARY_HASH_LENGTH: 16,
-} as const;
 
 function stableStringify(value: unknown): string | null {
   try {
@@ -115,22 +127,6 @@ function buildCacheKey(
     : `${namespace}:${urlHash}`;
 }
 
-function getVaryHash(
-  vary?: Record<string, unknown> | string
-): string | undefined | null {
-  if (!vary) return undefined;
-
-  const varyString = typeof vary === 'string' ? vary : stableStringify(vary);
-  if (varyString === null) return null;
-  if (!varyString) return undefined;
-
-  return createHashFragment(varyString, CACHE_HASH.VARY_HASH_LENGTH);
-}
-
-function buildCacheResourceUri(namespace: string, urlHash: string): string {
-  return `superfetch://cache/${namespace}/${urlHash}`;
-}
-
 export function createCacheKey(
   namespace: string,
   url: string,
@@ -138,9 +134,20 @@ export function createCacheKey(
 ): string | null {
   if (!namespace || !url) return null;
 
-  const urlHash = createHashFragment(url, CACHE_HASH.URL_HASH_LENGTH);
-  const varyHash = getVaryHash(vary);
-  if (varyHash === null) return null;
+  const urlHash = createHashFragment(url, CACHE_CONSTANTS.URL_HASH_LENGTH);
+
+  let varyHash: string | undefined;
+
+  if (vary) {
+    const varyString = typeof vary === 'string' ? vary : stableStringify(vary);
+    if (varyString === null) return null;
+    if (varyString) {
+      varyHash = createHashFragment(
+        varyString,
+        CACHE_CONSTANTS.VARY_HASH_LENGTH
+      );
+    }
+  }
 
   return buildCacheKey(namespace, urlHash, varyHash);
 }
@@ -156,35 +163,12 @@ export function parseCacheKey(cacheKey: string): CacheKeyParts | null {
 export function toResourceUri(cacheKey: string): string | null {
   const parts = parseCacheKey(cacheKey);
   if (!parts) return null;
-  return buildCacheResourceUri(parts.namespace, parts.urlHash);
+  return `superfetch://cache/${parts.namespace}/${parts.urlHash}`;
 }
 
-interface CacheUpdateEvent {
-  cacheKey: string;
-  namespace: string;
-  urlHash: string;
-}
-type CacheUpdateListener = (event: CacheUpdateEvent) => unknown;
-
-interface PromiseLikeLike<T> {
-  then: (onfulfilled: (value: T) => unknown) => unknown;
-}
-
-function isPromiseLikeLike<T = unknown>(
-  value: unknown
-): value is PromiseLikeLike<T> {
-  if (typeof value !== 'object' || value === null) return false;
-  return (
-    'then' in value && typeof (value as { then?: unknown }).then === 'function'
-  );
-}
-
-interface CacheEntryMetadata {
-  url: string;
-  title?: string;
-}
-
-type StoredCacheEntry = CacheEntry & { expiresAtMs: number };
+/* -------------------------------------------------------------------------------------------------
+ * Core: In-Memory Store
+ * ------------------------------------------------------------------------------------------------- */
 
 class InMemoryCacheStore {
   private readonly max = config.cache.maxKeys;
@@ -198,68 +182,55 @@ class InMemoryCacheStore {
 
   keys(): readonly string[] {
     if (!this.isEnabled()) return [];
-
     const now = Date.now();
-    const result: string[] = [];
-    for (const [key, entry] of this.entries) {
-      if (entry.expiresAtMs > now) {
-        result.push(key);
-      }
-    }
-    return result;
+    return Array.from(this.entries.entries())
+      .filter(([, entry]) => entry.expiresAtMs > now)
+      .map(([key]) => key);
   }
 
   onUpdate(listener: CacheUpdateListener): () => void {
-    const wrapped: CacheUpdateListener = (event) => {
+    const wrapped = (event: CacheUpdateEvent): void => {
       try {
         const result = listener(event);
-        if (isPromiseLikeLike(result)) {
-          Promise.resolve(result).catch((error: unknown) => {
-            logWarn('Cache update listener failed', {
-              key:
-                event.cacheKey.length > 100
-                  ? event.cacheKey.slice(0, 100)
-                  : event.cacheKey,
-              error: getErrorMessage(error),
-            });
+        if (result instanceof Promise) {
+          void result.catch((error: unknown) => {
+            this.logError(
+              'Cache update listener failed (async)',
+              event.cacheKey,
+              error
+            );
           });
         }
-      } catch (error: unknown) {
-        logWarn('Cache update listener failed', {
-          key:
-            event.cacheKey.length > 100
-              ? event.cacheKey.slice(0, 100)
-              : event.cacheKey,
-          error: getErrorMessage(error),
-        });
+      } catch (error) {
+        this.logError('Cache update listener failed', event.cacheKey, error);
       }
     };
 
     this.updateEmitter.on('update', wrapped);
-    return () => this.updateEmitter.off('update', wrapped);
+    return () => {
+      this.updateEmitter.off('update', wrapped);
+    };
   }
 
   get(
     cacheKey: string | null,
     options?: CacheGetOptions
   ): CacheEntry | undefined {
-    if (!cacheKey || (!config.cache.enabled && !options?.force))
-      return undefined;
-    try {
-      const entry = this.entries.get(cacheKey);
-      if (!entry) return undefined;
-      if (entry.expiresAtMs <= Date.now()) {
-        this.entries.delete(cacheKey);
-        return undefined;
-      }
-      this.entries.delete(cacheKey);
-      this.entries.set(cacheKey, entry);
+    if (!cacheKey || (!this.isEnabled() && !options?.force)) return undefined;
 
-      return entry;
-    } catch (error: unknown) {
-      this.logError('Cache get error', cacheKey, error);
+    const entry = this.entries.get(cacheKey);
+    if (!entry) return undefined;
+
+    if (entry.expiresAtMs <= Date.now()) {
+      this.entries.delete(cacheKey);
       return undefined;
     }
+
+    // Refresh LRU position
+    this.entries.delete(cacheKey);
+    this.entries.set(cacheKey, entry);
+
+    return entry;
   }
 
   set(
@@ -269,42 +240,40 @@ class InMemoryCacheStore {
     options?: CacheSetOptions
   ): void {
     if (!cacheKey || !content) return;
-    if (!config.cache.enabled && !options?.force) return;
+    if (!this.isEnabled() && !options?.force) return;
 
-    try {
-      const now = Date.now();
-      const expiresAtMs = now + this.ttlMs;
-      const entry: StoredCacheEntry = {
-        url: metadata.url,
-        content,
-        fetchedAt: new Date(now).toISOString(),
-        expiresAt: new Date(expiresAtMs).toISOString(),
-        expiresAtMs,
-        ...(metadata.title === undefined ? {} : { title: metadata.title }),
-      };
-      this.entries.delete(cacheKey);
-      this.entries.set(cacheKey, entry);
-      if (this.entries.size > this.max) {
-        const oldestKey = this.entries.keys().next().value;
-        if (oldestKey !== undefined) {
-          this.entries.delete(oldestKey);
-        }
+    const now = Date.now();
+    const expiresAtMs = now + this.ttlMs;
+
+    const entry: StoredCacheEntry = {
+      url: metadata.url,
+      content,
+      fetchedAt: new Date(now).toISOString(),
+      expiresAt: new Date(expiresAtMs).toISOString(),
+      expiresAtMs,
+      ...(metadata.title ? { title: metadata.title } : {}),
+    };
+
+    this.entries.delete(cacheKey);
+    this.entries.set(cacheKey, entry);
+
+    // Eviction
+    if (this.entries.size > this.max) {
+      const firstKey = this.entries.keys().next();
+      if (!firstKey.done) {
+        this.entries.delete(firstKey.value);
       }
-
-      this.notify(cacheKey);
-    } catch (error: unknown) {
-      this.logError('Cache set error', cacheKey, error);
     }
+
+    this.notify(cacheKey);
   }
 
   private notify(cacheKey: string): void {
     if (this.updateEmitter.listenerCount('update') === 0) return;
-
     const parts = parseCacheKey(cacheKey);
-    if (!parts) return;
-
-    const event: CacheUpdateEvent = { cacheKey, ...parts };
-    this.updateEmitter.emit('update', event);
+    if (parts) {
+      this.updateEmitter.emit('update', { cacheKey, ...parts });
+    }
   }
 
   private logError(message: string, cacheKey: string, error: unknown): void {
@@ -315,8 +284,10 @@ class InMemoryCacheStore {
   }
 }
 
+// Singleton Instance
 const store = new InMemoryCacheStore();
 
+// Public Proxy API
 export function onCacheUpdate(listener: CacheUpdateListener): () => void {
   return store.onUpdate(listener);
 }
@@ -326,14 +297,6 @@ export function get(
   options?: CacheGetOptions
 ): CacheEntry | undefined {
   return store.get(cacheKey, options);
-}
-
-export interface CacheSetOptions {
-  force?: boolean;
-}
-
-export interface CacheGetOptions {
-  force?: boolean;
 }
 
 export function set(
@@ -354,246 +317,54 @@ export function isEnabled(): boolean {
 }
 
 /* -------------------------------------------------------------------------------------------------
- * MCP cached content resource (superfetch://cache/markdown/{urlHash})
+ * Adapter: MCP Cached Content Resource
  * ------------------------------------------------------------------------------------------------- */
 
-const CACHE_NAMESPACE = 'markdown';
-const HASH_PATTERN = /^[a-f0-9.]+$/i;
-const INVALID_CACHE_PARAMS_MESSAGE = 'Invalid cache resource parameters';
-
-function throwInvalidCacheParams(): never {
-  throw new McpError(ErrorCode.InvalidParams, INVALID_CACHE_PARAMS_MESSAGE);
-}
-
-function resolveStringParam(value: unknown): string | null {
-  return typeof value === 'string' ? value : null;
-}
-
-function isValidNamespace(namespace: string): boolean {
-  return namespace === CACHE_NAMESPACE;
-}
-
-function isValidHash(hash: string): boolean {
-  return HASH_PATTERN.test(hash) && hash.length >= 8 && hash.length <= 64;
-}
-
-function requireRecordParams(value: unknown): Record<string, unknown> {
-  if (!isObject(value)) throwInvalidCacheParams();
-  return value;
-}
-
-function requireParamString(
-  params: Record<string, unknown>,
-  key: 'namespace' | 'urlHash'
-): string {
-  const resolved = resolveStringParam(params[key]);
-  if (!resolved) {
-    throw new McpError(
-      ErrorCode.InvalidParams,
-      'Both namespace and urlHash parameters are required'
-    );
-  }
-  return resolved;
-}
-
-function resolveCacheParams(params: unknown): {
-  namespace: string;
-  urlHash: string;
-} {
-  const parsed = requireRecordParams(params);
-  const namespace = requireParamString(parsed, 'namespace');
-  const urlHash = requireParamString(parsed, 'urlHash');
-
-  if (!isValidNamespace(namespace) || !isValidHash(urlHash)) {
-    throwInvalidCacheParams();
-  }
-
-  return { namespace, urlHash };
-}
-
-function isValidCacheResourceUri(uri: string): boolean {
-  if (!uri) return false;
-
-  if (!URL.canParse(uri)) return false;
-  const parsed = new URL(uri);
-
-  if (parsed.protocol !== 'superfetch:') return false;
-  if (parsed.hostname !== 'cache') return false;
-
-  const parts = parsed.pathname.split('/').filter(Boolean);
-  if (parts.length !== 2) return false;
-
-  const [namespace, urlHash] = parts;
-  if (!namespace || !urlHash) return false;
-
-  return isValidNamespace(namespace) && isValidHash(urlHash);
-}
-
-function buildResourceEntry(
-  namespace: string,
-  urlHash: string
-): {
-  name: string;
-  uri: string;
-  description: string;
-  mimeType: string;
-} {
-  return {
-    name: `${namespace}:${urlHash}`,
-    uri: buildCacheResourceUri(namespace, urlHash),
-    description: `Cached content entry for ${namespace}`,
-    mimeType: 'text/markdown',
-  };
-}
+const CacheResourceParamsSchema = z.object({
+  namespace: CacheNamespace,
+  urlHash: HashString,
+});
 
 function listCachedResources(): {
-  resources: ReturnType<typeof buildResourceEntry>[];
+  resources: {
+    name: string;
+    uri: string;
+    description: string;
+    mimeType: string;
+  }[];
 } {
-  const resources = keys()
-    .map((key) => {
-      const parts = parseCacheKey(key);
-      if (parts?.namespace !== CACHE_NAMESPACE) return null;
-      return buildResourceEntry(parts.namespace, parts.urlHash);
-    })
-    .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+  const resources = store
+    .keys()
+    .map((key) => parseCacheKey(key))
+    .filter(
+      (parts): parts is CacheKeyParts =>
+        parts !== null && parts.namespace === 'markdown'
+    )
+    .map(({ namespace, urlHash }) => ({
+      name: `${namespace}:${urlHash}`,
+      uri: `superfetch://cache/${namespace}/${urlHash}`,
+      description: `Cached content entry for ${namespace}`,
+      mimeType: 'text/markdown',
+    }));
 
   return { resources };
 }
 
-function appendServerOnClose(server: McpServer, handler: () => void): void {
-  const previousOnClose = server.server.onclose;
-  server.server.onclose = () => {
-    previousOnClose?.();
-    handler();
-  };
-}
-
-function attachInitializedGate(server: McpServer): () => boolean {
-  let initialized = false;
-  const previousInitialized = server.server.oninitialized;
-  server.server.oninitialized = () => {
-    initialized = true;
-    previousInitialized?.();
-  };
-  return () => initialized;
-}
-
-function getClientResourceCapabilities(server: McpServer): {
-  listChanged: boolean;
-  subscribe: boolean;
-} {
-  const caps = server.server.getClientCapabilities();
-  if (!caps || !isObject(caps)) return { listChanged: false, subscribe: false };
-
-  const { resources } = caps as { resources?: unknown };
-  if (!isObject(resources)) return { listChanged: false, subscribe: false };
-
-  const { listChanged, subscribe } = resources as {
-    listChanged?: boolean;
-    subscribe?: boolean;
-  };
-
-  return { listChanged: listChanged === true, subscribe: subscribe === true };
-}
-
-function registerResourceSubscriptionHandlers(server: McpServer): Set<string> {
-  const subscriptions = new Set<string>();
-
-  server.server.setRequestHandler(SubscribeRequestSchema, (request) => {
-    const { uri } = request.params;
-    if (!isValidCacheResourceUri(uri)) {
-      throw new McpError(ErrorCode.InvalidParams, 'Invalid resource URI');
-    }
-    subscriptions.add(uri);
-    return {};
-  });
-
-  server.server.setRequestHandler(UnsubscribeRequestSchema, (request) => {
-    const { uri } = request.params;
-    if (!isValidCacheResourceUri(uri)) {
-      throw new McpError(ErrorCode.InvalidParams, 'Invalid resource URI');
-    }
-    subscriptions.delete(uri);
-    return {};
-  });
-
-  appendServerOnClose(server, () => {
-    subscriptions.clear();
-  });
-  return subscriptions;
-}
-
-function notifyResourceUpdate(
-  server: McpServer,
-  uri: string,
-  subscriptions: Set<string>
-): void {
-  if (!server.isConnected()) return;
-  if (!subscriptions.has(uri)) return;
-
-  void server.server.sendResourceUpdated({ uri }).catch((error: unknown) => {
-    logWarn('Failed to send resource update notification', {
-      uri,
-      error: getErrorMessage(error),
-    });
-  });
-}
-
-function requireCacheEntry(cacheKey: string): { content: string } {
-  const cached = get(cacheKey, { force: true });
-  if (!cached) {
-    throw new McpError(
-      -32002,
-      `Content not found in cache for key: ${cacheKey}`
-    );
-  }
-  return cached;
-}
-
 function resolveCachedMarkdownText(raw: string): string | null {
   if (!raw) return null;
-
   const payload = parseCachedPayload(raw);
   if (payload) return resolveCachedPayloadContent(payload);
 
   const trimmed = raw.trimStart();
   if (trimmed.startsWith('{') || trimmed.startsWith('[')) return null;
-
   return raw;
 }
 
-function buildMarkdownContentResponse(
-  uri: URL,
-  content: string
-): { contents: { uri: string; mimeType: string; text: string }[] } {
-  const resolvedContent = resolveCachedMarkdownText(content);
-
-  if (!resolvedContent) {
-    throw new McpError(
-      ErrorCode.InternalError,
-      'Cached markdown content is missing'
-    );
-  }
-
-  return {
-    contents: [
-      { uri: uri.href, mimeType: 'text/markdown', text: resolvedContent },
-    ],
-  };
-}
-
-function buildCachedContentResponse(
-  uri: URL,
-  cacheKey: string
-): { contents: { uri: string; mimeType: string; text: string }[] } {
-  const cached = requireCacheEntry(cacheKey);
-  return buildMarkdownContentResponse(uri, cached.content);
-}
-
-function registerCacheContentResource(
+export function registerCachedContentResource(
   server: McpServer,
   serverIcons?: McpIcon[]
 ): void {
+  // Resource Registration
   server.registerResource(
     'cached-content',
     new ResourceTemplate('superfetch://cache/{namespace}/{urlHash}', {
@@ -601,123 +372,125 @@ function registerCacheContentResource(
     }),
     {
       title: 'Cached Content',
-      description:
-        'Access previously fetched web content from cache. Namespace: markdown. UrlHash: SHA-256 hash of the URL.',
+      description: 'Access previously fetched web content from cache.',
       mimeType: 'text/markdown',
       ...(serverIcons ? { icons: serverIcons } : {}),
     },
     (uri, params) => {
-      const { namespace, urlHash } = resolveCacheParams(params);
+      const parsed = CacheResourceParamsSchema.safeParse(params);
+      if (!parsed.success) {
+        throw new McpError(
+          ErrorCode.InvalidParams,
+          'Invalid resource parameters'
+        );
+      }
+      const { namespace, urlHash } = parsed.data;
       const cacheKey = `${namespace}:${urlHash}`;
-      return buildCachedContentResponse(uri, cacheKey);
+
+      const cached = store.get(cacheKey, { force: true });
+      if (!cached) {
+        throw new McpError(-32002, `Content not found: ${cacheKey}`);
+      }
+
+      const text = resolveCachedMarkdownText(cached.content);
+      if (!text) {
+        throw new McpError(ErrorCode.InternalError, 'Cached content invalid');
+      }
+
+      return {
+        contents: [{ uri: uri.href, mimeType: 'text/markdown', text }],
+      };
     }
   );
-}
 
-function registerCacheUpdateSubscription(
-  server: McpServer,
-  subscriptions: Set<string>,
-  isInitialized: () => boolean
-): void {
-  const unsubscribe = onCacheUpdate(({ cacheKey }) => {
-    if (!server.isConnected() || !isInitialized()) return;
+  // Subscriptions
+  const subscriptions = new Set<string>();
 
-    const { listChanged, subscribe } = getClientResourceCapabilities(server);
-
-    if (subscribe) {
-      const resourceUri = toResourceUri(cacheKey);
-      if (resourceUri) notifyResourceUpdate(server, resourceUri, subscriptions);
+  server.server.setRequestHandler(SubscribeRequestSchema, (req) => {
+    if (isValidCacheUri(req.params.uri)) {
+      subscriptions.add(req.params.uri);
+    } else {
+      throw new McpError(ErrorCode.InvalidParams, 'Invalid resource URI');
     }
-
-    if (listChanged) {
-      server.sendResourceListChanged();
-    }
+    return {};
   });
 
-  appendServerOnClose(server, unsubscribe);
+  server.server.setRequestHandler(UnsubscribeRequestSchema, (req) => {
+    if (isValidCacheUri(req.params.uri)) {
+      subscriptions.delete(req.params.uri);
+    } else {
+      throw new McpError(ErrorCode.InvalidParams, 'Invalid resource URI');
+    }
+    return {};
+  });
+
+  // Notifications
+  let initialized = false;
+  const originalOnInitialized = server.server.oninitialized;
+  server.server.oninitialized = () => {
+    initialized = true;
+    originalOnInitialized?.();
+  };
+
+  store.onUpdate(({ cacheKey }) => {
+    if (!server.isConnected() || !initialized) return;
+
+    // Check capabilities via unsafe cast or helper (SDK limitation)
+    const capabilities = server.server.getClientCapabilities() as
+      | {
+          resources?: { listChanged?: boolean; subscribe?: boolean };
+        }
+      | undefined;
+
+    const uri = toResourceUri(cacheKey);
+
+    if (capabilities?.resources?.subscribe && uri && subscriptions.has(uri)) {
+      void server.server
+        .sendResourceUpdated({ uri })
+        .catch((error: unknown) => {
+          logWarn('Failed to send update', {
+            uri,
+            error: getErrorMessage(error),
+          });
+        });
+    }
+
+    if (capabilities?.resources?.listChanged) {
+      void server.server.sendResourceListChanged().catch(() => {});
+    }
+  });
 }
 
-export function registerCachedContentResource(
-  server: McpServer,
-  serverIcons?: McpIcon[]
-): void {
-  const isInitialized = attachInitializedGate(server);
-  const subscriptions = registerResourceSubscriptionHandlers(server);
-
-  registerCacheContentResource(server, serverIcons);
-  registerCacheUpdateSubscription(server, subscriptions, isInitialized);
+function isValidCacheUri(uri: string): boolean {
+  try {
+    const url = new URL(uri);
+    if (url.protocol !== 'superfetch:' || url.hostname !== 'cache')
+      return false;
+    const parts = url.pathname.split('/').filter(Boolean);
+    return parts.length === 2 && parts[0] === 'markdown';
+  } catch {
+    return false;
+  }
 }
 
 /* -------------------------------------------------------------------------------------------------
- * Filename generation
+ * Utils: Filename Logic
  * ------------------------------------------------------------------------------------------------- */
 
-const MAX_FILENAME_LENGTH = 200;
-const UNSAFE_CHARS_REGEX = /[<>:"/\\|?*]|\p{C}/gu;
-const WHITESPACE_REGEX = /\s+/g;
+const FILENAME_RULES = {
+  MAX_LEN: 200,
+  UNSAFE_CHARS: /[<>:"/\\|?*\p{C}]/gu,
+  WHITESPACE: /\s+/g,
+  EXTENSIONS: /\.(html?|php|aspx?|jsp)$/i,
+} as const;
 
-function trimHyphens(value: string): string {
-  let start = 0;
-  let end = value.length;
-
-  while (start < end && value[start] === '-') start += 1;
-  while (end > start && value[end - 1] === '-') end -= 1;
-
-  return value.slice(start, end);
-}
-
-function stripCommonPageExtension(segment: string): string {
-  return segment.replace(/\.(html?|php|aspx?|jsp)$/i, '');
-}
-
-function normalizeUrlFilenameSegment(segment: string): string | null {
-  const cleaned = stripCommonPageExtension(segment);
-  if (!cleaned) return null;
-  if (cleaned === 'index') return null;
-  return cleaned;
-}
-
-function getLastPathSegment(url: URL): string | null {
-  const segment = pathPosix.basename(url.pathname);
-  return segment || null;
-}
-
-function extractFilenameFromUrl(url: string): string | null {
-  if (!URL.canParse(url)) return null;
-  const urlObj = new URL(url);
-  const lastSegment = getLastPathSegment(urlObj);
-  if (!lastSegment) return null;
-  return normalizeUrlFilenameSegment(lastSegment);
-}
-
-function slugifyTitle(title: string): string | null {
-  const slug = title
+function sanitizeString(input: string): string {
+  return input
     .toLowerCase()
-    .trim()
-    .replace(UNSAFE_CHARS_REGEX, '')
-    .replace(WHITESPACE_REGEX, '-')
-    .replace(/-+/g, '-');
-
-  const trimmed = trimHyphens(slug);
-  return trimmed || null;
-}
-
-function sanitizeFilename(name: string, extension: string): string {
-  let sanitized = name
-    .replace(UNSAFE_CHARS_REGEX, '')
-    .replace(WHITESPACE_REGEX, '-')
-    .trim();
-
-  const maxBase = MAX_FILENAME_LENGTH - extension.length;
-  if (sanitized.length > maxBase) {
-    sanitized = sanitized.substring(0, maxBase);
-  }
-
-  if (!sanitized) {
-    return `download-${Date.now()}${extension}`;
-  }
-
-  return `${sanitized}${extension}`;
+    .replace(FILENAME_RULES.UNSAFE_CHARS, '')
+    .replace(FILENAME_RULES.WHITESPACE, '-')
+    .replace(/-+/g, '-')
+    .replace(/(?:^-|-$)/g, '');
 }
 
 export function generateSafeFilename(
@@ -726,146 +499,97 @@ export function generateSafeFilename(
   hashFallback?: string,
   extension = '.md'
 ): string {
-  const fromUrl = extractFilenameFromUrl(url);
-  if (fromUrl) return sanitizeFilename(fromUrl, extension);
+  const tryUrl = (): string | null => {
+    try {
+      if (!URL.canParse(url)) return null;
+      const { pathname } = new URL(url);
+      const basename = pathPosix.basename(pathname);
+      if (!basename || basename === 'index') return null;
 
-  if (title) {
-    const fromTitle = slugifyTitle(title);
-    if (fromTitle) return sanitizeFilename(fromTitle, extension);
-  }
+      const cleaned = basename.replace(FILENAME_RULES.EXTENSIONS, '');
+      const sanitized = sanitizeString(cleaned);
 
-  if (hashFallback) {
-    return `${hashFallback.substring(0, 16)}${extension}`;
-  }
+      if (sanitized === 'index') return null;
 
-  return `download-${Date.now()}${extension}`;
+      return sanitized || null;
+    } catch {
+      return null;
+    }
+  };
+
+  const tryTitle = (): string | null => {
+    if (!title) return null;
+    return sanitizeString(title) || null;
+  };
+
+  const name =
+    tryUrl() ??
+    tryTitle() ??
+    hashFallback?.substring(0, 16) ??
+    `download-${Date.now()}`;
+
+  const maxBase = FILENAME_RULES.MAX_LEN - extension.length;
+  const truncated = name.length > maxBase ? name.substring(0, maxBase) : name;
+
+  return `${truncated}${extension}`;
 }
 
 /* -------------------------------------------------------------------------------------------------
- * Download handler
+ * Adapter: Download Handler
  * ------------------------------------------------------------------------------------------------- */
 
-interface DownloadParams {
-  namespace: string;
-  hash: string;
-}
-
-interface DownloadPayload {
-  content: string;
-  contentType: string;
-  fileName: string;
-}
-
-function parseDownloadParams(
-  namespace: unknown,
-  hash: unknown
-): DownloadParams | null {
-  const resolvedNamespace = resolveStringParam(namespace);
-  const resolvedHash = resolveStringParam(hash);
-
-  if (!resolvedNamespace || !resolvedHash) return null;
-  if (!isValidNamespace(resolvedNamespace)) return null;
-  if (!isValidHash(resolvedHash)) return null;
-
-  return { namespace: resolvedNamespace, hash: resolvedHash };
-}
-
-function buildCacheKeyFromParams(params: DownloadParams): string {
-  return `${params.namespace}:${params.hash}`;
-}
-
-function sendJsonError(
-  res: ServerResponse,
-  status: number,
-  error: string,
-  code: string
-): void {
-  res.writeHead(status, {
-    'Content-Type': 'application/json; charset=utf-8',
-    'X-Content-Type-Options': 'nosniff',
-  });
-  res.end(JSON.stringify({ error, code }));
-}
-
-function respondBadRequest(res: ServerResponse, message: string): void {
-  sendJsonError(res, 400, message, 'BAD_REQUEST');
-}
-
-function respondNotFound(res: ServerResponse): void {
-  sendJsonError(res, 404, 'Content not found or expired', 'NOT_FOUND');
-}
-
-function buildContentDisposition(fileName: string): string {
-  const encodedName = encodeURIComponent(fileName).replace(/'/g, '%27');
-  return `attachment; filename="${fileName}"; filename*=UTF-8''${encodedName}`;
-}
-
-function sendDownloadPayload(
-  res: ServerResponse,
-  payload: DownloadPayload
-): void {
-  const disposition = buildContentDisposition(payload.fileName);
-  res.setHeader('Content-Type', payload.contentType);
-  res.setHeader('Content-Disposition', disposition);
-  res.setHeader('Cache-Control', `private, max-age=${config.cache.ttl}`);
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.end(payload.content);
-}
-
-function resolveDownloadPayload(
-  params: DownloadParams,
-  cacheEntry: CacheEntry
-): DownloadPayload | null {
-  const payload = parseCachedPayload(cacheEntry.content);
-  if (!payload) return null;
-
-  const content = resolveCachedPayloadContent(payload);
-  if (!content) return null;
-
-  const safeTitle =
-    typeof payload.title === 'string' ? payload.title : undefined;
-
-  const fileName = generateSafeFilename(
-    cacheEntry.url,
-    cacheEntry.title ?? safeTitle,
-    params.hash,
-    '.md'
-  );
-
-  return {
-    content,
-    contentType: 'text/markdown; charset=utf-8',
-    fileName,
-  };
-}
+const DownloadParamsSchema = z.object({
+  namespace: CacheNamespace,
+  hash: HashString,
+});
 
 export function handleDownload(
   res: ServerResponse,
   namespace: string,
   hash: string
 ): void {
-  const params = parseDownloadParams(namespace, hash);
-  if (!params) {
-    respondBadRequest(res, 'Invalid namespace or hash format');
+  const respond = (status: number, msg: string, code: string): void => {
+    res.writeHead(status, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: msg, code }));
+  };
+
+  const parsed = DownloadParamsSchema.safeParse({ namespace, hash });
+  if (!parsed.success) {
+    respond(400, 'Invalid namespace or hash', 'BAD_REQUEST');
     return;
   }
 
-  const cacheKey = buildCacheKeyFromParams(params);
-  const cacheEntry = get(cacheKey, { force: true });
+  const cacheKey = `${parsed.data.namespace}:${parsed.data.hash}`;
+  const entry = store.get(cacheKey, { force: true });
 
-  if (!cacheEntry) {
-    logDebug('Download request for missing cache key', { cacheKey });
-    respondNotFound(res);
+  if (!entry) {
+    respond(404, 'Not found or expired', 'NOT_FOUND');
     return;
   }
 
-  const payload = resolveDownloadPayload(params, cacheEntry);
-  if (!payload) {
-    logDebug('Download payload unavailable', { cacheKey });
-    respondNotFound(res);
+  const payload = parseCachedPayload(entry.content);
+  const content = payload ? resolveCachedPayloadContent(payload) : null;
+
+  if (!content) {
+    respond(404, 'Content missing', 'NOT_FOUND');
     return;
   }
 
-  logDebug('Serving download', { cacheKey, fileName: payload.fileName });
-  sendDownloadPayload(res, payload);
+  const fileName = generateSafeFilename(
+    entry.url,
+    payload?.title,
+    parsed.data.hash
+  );
+
+  // Safe header generation
+  const encoded = encodeURIComponent(fileName).replace(/'/g, '%27');
+
+  res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
+  res.setHeader(
+    'Content-Disposition',
+    `attachment; filename="${fileName}"; filename*=UTF-8''${encoded}`
+  );
+  res.setHeader('Cache-Control', `private, max-age=${config.cache.ttl}`);
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.end(content);
 }
