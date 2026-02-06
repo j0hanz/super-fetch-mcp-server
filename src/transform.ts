@@ -17,7 +17,6 @@ import {
   type TranslatorConfig,
   type TranslatorConfigObject,
 } from 'node-html-markdown';
-import { z } from 'zod';
 
 import { isProbablyReaderable, Readability } from '@mozilla/readability';
 
@@ -56,15 +55,12 @@ import type {
   TransformStageContext,
   TransformStageEvent,
   TransformWorkerCancelMessage,
+  TransformWorkerOutgoingMessage,
   TransformWorkerTransformMessage,
 } from './transform-types.js';
 import { isObject } from './type-guards.js';
 
-function spreadSignal(
-  signal: AbortSignal | undefined
-): { signal: AbortSignal } | Record<string, never> {
-  return signal ? { signal } : {};
-}
+const utf8Decoder = new TextDecoder('utf-8');
 
 function getTagName(node: unknown): string {
   if (!isObject(node)) return '';
@@ -291,15 +287,11 @@ function trimUtf8Buffer(buffer: Buffer, maxBytes: number): Buffer {
 
 function truncateHtml(html: string): { html: string; truncated: boolean } {
   const maxSize = config.constants.maxHtmlSize;
+  if (maxSize <= 0) return { html, truncated: false };
 
-  if (maxSize <= 0) {
-    return { html, truncated: false };
-  }
-
-  const byteLength = getUtf8ByteLength(html);
-  if (byteLength <= maxSize) {
-    return { html, truncated: false };
-  }
+  // Fast path: V8 optimized byte length check (no allocation)
+  const byteLength = Buffer.byteLength(html, 'utf8');
+  if (byteLength <= maxSize) return { html, truncated: false };
 
   const htmlBuffer = Buffer.from(html, 'utf8');
   let content = trimUtf8Buffer(htmlBuffer, maxSize).toString('utf8');
@@ -315,7 +307,7 @@ function truncateHtml(html: string): { html: string; truncated: boolean } {
   logWarn('HTML content exceeds maximum size, truncating', {
     size: byteLength,
     maxSize,
-    truncatedSize: getUtf8ByteLength(content),
+    truncatedSize: Buffer.byteLength(content, 'utf8'),
   });
   return { html: content, truncated: true };
 }
@@ -582,19 +574,16 @@ function extractArticle(
   }
 }
 
-function validateRequiredString(value: unknown, message: string): boolean {
-  if (typeof value === 'string' && value.length > 0) return true;
-  logWarn(message);
-  return false;
-}
-
 function isValidInput(html: string, url: string): boolean {
-  return (
-    validateRequiredString(
-      html,
-      'extractContent called with invalid HTML input'
-    ) && validateRequiredString(url, 'extractContent called with invalid URL')
-  );
+  if (typeof html !== 'string' || html.length === 0) {
+    logWarn('extractContent called with invalid HTML input');
+    return false;
+  }
+  if (typeof url !== 'string' || url.length === 0) {
+    logWarn('extractContent called with invalid URL');
+    return false;
+  }
+  return true;
 }
 
 function applyBaseUri(document: Document, url: string): void {
@@ -867,6 +856,24 @@ function resolveGfmAlertType(className: string): string | undefined {
   return undefined;
 }
 
+function resolveDlNodeName(child: unknown): string {
+  if (!isObject(child)) return '';
+  const raw = (child as { nodeName?: unknown }).nodeName;
+  return typeof raw === 'string' ? raw.toUpperCase() : '';
+}
+
+function resolveDlTextContent(child: unknown): string {
+  const raw = (child as { textContent?: unknown }).textContent;
+  return typeof raw === 'string' ? raw.trim() : '';
+}
+
+function buildDlChildFragment(child: unknown): string | null {
+  const nodeName = resolveDlNodeName(child);
+  if (nodeName === 'DT') return `**${resolveDlTextContent(child)}**\n`;
+  if (nodeName === 'DD') return `: ${resolveDlTextContent(child)}\n`;
+  return null;
+}
+
 function hasComplexTableLayout(node: unknown): boolean {
   if (!isObject(node)) return false;
   const innerHTML =
@@ -914,28 +921,13 @@ function createCustomTranslators(): TranslatorConfigObject {
       const { node } = ctx as { node: { childNodes?: unknown[] } };
       const childNodes = Array.isArray(node.childNodes) ? node.childNodes : [];
 
-      const items = childNodes
-        .map((child: unknown) => {
-          if (!isObject(child)) return '';
+      let items = '';
+      for (const child of childNodes) {
+        const fragment = buildDlChildFragment(child);
+        if (fragment !== null) items += fragment;
+      }
 
-          const nodeName =
-            typeof (child as { nodeName?: unknown }).nodeName === 'string'
-              ? (child as { nodeName: string }).nodeName.toUpperCase()
-              : '';
-
-          const textContent =
-            typeof (child as { textContent?: unknown }).textContent === 'string'
-              ? (child as { textContent: string }).textContent.trim()
-              : '';
-
-          if (nodeName === 'DT') return `**${textContent}**`;
-          if (nodeName === 'DD') return `: ${textContent}`;
-          return '';
-        })
-        .filter(Boolean)
-        .join('\n');
-
-      return { content: items ? `\n${items}\n\n` : '' };
+      return { content: items ? `\n${items}\n` : '' };
     },
     div: (ctx: unknown) => {
       if (!isObject(ctx) || !isObject((ctx as { node?: unknown }).node))
@@ -1492,17 +1484,63 @@ export function isExtractionSufficient(
   return articleLength / originalLength >= MIN_CONTENT_RATIO;
 }
 
+// Heuristic to detect if the content was truncated due to length limits by checking for incomplete sentences.
+const SENTENCE_ENDING_CODES = new Set([46, 33, 63, 58, 59]);
+
+function trimLineOffsets(
+  text: string,
+  lineStart: number,
+  lineEnd: number
+): { start: number; end: number } | null {
+  let start = lineStart;
+  while (start < lineEnd && isWhitespaceChar(text.charCodeAt(start))) start++;
+  let end = lineEnd - 1;
+  while (end >= start && isWhitespaceChar(text.charCodeAt(end))) end--;
+  if (end < start) return null;
+  const trimmedLen = end - start + 1;
+  return trimmedLen > MIN_LINE_LENGTH_FOR_TRUNCATION_CHECK
+    ? { start, end }
+    : null;
+}
+
+function classifyLine(
+  text: string,
+  lineStart: number,
+  lineEnd: number
+): { counted: boolean; incomplete: boolean } {
+  const lineLength = lineEnd - lineStart;
+  if (lineLength <= MIN_LINE_LENGTH_FOR_TRUNCATION_CHECK)
+    return { counted: false, incomplete: false };
+
+  const trimmed = trimLineOffsets(text, lineStart, lineEnd);
+  if (!trimmed) return { counted: false, incomplete: false };
+
+  const lastChar = text.charCodeAt(trimmed.end);
+  return { counted: true, incomplete: !SENTENCE_ENDING_CODES.has(lastChar) };
+}
+
 function hasTruncatedSentences(text: string): boolean {
-  const lines = text
-    .split('\n')
-    .filter(
-      (line) => line.trim().length > MIN_LINE_LENGTH_FOR_TRUNCATION_CHECK
-    );
+  let lineStart = 0;
+  let linesFound = 0;
+  let incompleteFound = 0;
+  const len = text.length;
 
-  if (lines.length < 3) return false;
+  for (let i = 0; i <= len; i++) {
+    const isEnd = i === len;
+    const isNewline = !isEnd && text.charCodeAt(i) === 10;
 
-  const incompleteLines = lines.filter((line) => !/[.!?:;]$/.test(line.trim()));
-  return incompleteLines.length / lines.length > MAX_TRUNCATED_LINE_RATIO;
+    if (isNewline || isEnd) {
+      const { counted, incomplete } = classifyLine(text, lineStart, i);
+      if (counted) {
+        linesFound++;
+        if (incomplete) incompleteFound++;
+      }
+      lineStart = i + 1;
+    }
+  }
+
+  if (linesFound < 3) return false;
+  return incompleteFound / linesFound > MAX_TRUNCATED_LINE_RATIO;
 }
 
 export function determineContentExtractionSource(
@@ -1713,7 +1751,7 @@ function resolveContentSource(params: {
     truncated,
   } = extractContentContext(params.html, params.url, {
     extractArticle: true,
-    ...spreadSignal(params.signal),
+    ...(params.signal ? { signal: params.signal } : {}),
   });
 
   const useArticleContent = article
@@ -1741,7 +1779,7 @@ function buildMarkdownFromContext(
   let content = stageTracker.run(url, 'transform:markdown', () =>
     htmlToMarkdown(context.sourceHtml, context.metadata, {
       url,
-      ...spreadSignal(signal),
+      ...(signal ? { signal } : {}),
       ...(context.document ? { document: context.document } : {}),
       ...(context.skipNoiseRemoval ? { skipNoiseRemoval: true } : {}),
     })
@@ -1813,7 +1851,7 @@ export function transformHtmlToMarkdownInProcess(
         html,
         url,
         includeMetadata: options.includeMetadata,
-        ...spreadSignal(signal),
+        ...(signal ? { signal } : {}),
         ...(options.skipNoiseRemoval ? { skipNoiseRemoval: true } : {}),
       })
     );
@@ -1827,28 +1865,11 @@ export function transformHtmlToMarkdownInProcess(
   }
 }
 
-const workerMessageSchema = z.discriminatedUnion('type', [
-  z.object({
-    type: z.literal('result'),
-    id: z.string(),
-    result: z.object({
-      markdown: z.string(),
-      title: z.string().optional(),
-      truncated: z.boolean(),
-    }),
-  }),
-  z.object({
-    type: z.literal('error'),
-    id: z.string(),
-    error: z.object({
-      name: z.string(),
-      message: z.string(),
-      url: z.string(),
-      statusCode: z.number().optional(),
-      details: z.record(z.string(), z.unknown()).optional(),
-    }),
-  }),
-]);
+function isWorkerResponse(raw: unknown): raw is TransformWorkerOutgoingMessage {
+  if (!raw || typeof raw !== 'object') return false;
+  const t = (raw as Record<string, unknown>).type;
+  return t === 'result' || t === 'error';
+}
 
 interface TaskContext {
   run: (fn: () => void) => void;
@@ -2382,10 +2403,9 @@ class WorkerPool implements TransformWorkerPool {
   }
 
   private onWorkerMessage(workerIndex: number, raw: unknown): void {
-    const parsed = workerMessageSchema.safeParse(raw);
-    if (!parsed.success) return;
+    if (!isWorkerResponse(raw)) return;
 
-    const message = parsed.data;
+    const message = raw;
     const inflight = this.takeInflight(message.id);
     if (!inflight) return;
 
@@ -2692,7 +2712,7 @@ function buildWorkerTransformOptions(options: TransformOptions): {
 } {
   return {
     includeMetadata: options.includeMetadata,
-    ...spreadSignal(options.signal),
+    ...(options.signal ? { signal: options.signal } : {}),
     ...(options.skipNoiseRemoval ? { skipNoiseRemoval: true } : {}),
   };
 }
@@ -2708,8 +2728,7 @@ async function transformWithWorkerPool(
     if (typeof htmlOrBuffer === 'string') {
       html = htmlOrBuffer;
     } else {
-      const decoder = new TextDecoder(options.encoding ?? 'utf-8');
-      html = decoder.decode(htmlOrBuffer);
+      html = utf8Decoder.decode(htmlOrBuffer);
     }
     return transformHtmlToMarkdownInProcess(html, url, options);
   }
@@ -2740,8 +2759,7 @@ function resolveWorkerFallback(
   if (typeof htmlOrBuffer === 'string') {
     html = htmlOrBuffer;
   } else {
-    const decoder = new TextDecoder(options.encoding ?? 'utf-8');
-    html = decoder.decode(htmlOrBuffer);
+    html = utf8Decoder.decode(htmlOrBuffer);
   }
 
   return transformHtmlToMarkdownInProcess(html, url, options);
