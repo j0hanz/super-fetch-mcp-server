@@ -1,14 +1,17 @@
 /* eslint-disable */
 import { spawn } from 'node:child_process';
 import { access, chmod, cp, glob, mkdir, rm, stat } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import process from 'node:process';
 import { parseArgs } from 'node:util';
 
+const require = createRequire(import.meta.url);
+
 // --- Configuration (Single Source of Truth) ---
 const BIN = {
-  tsc: join('node_modules', 'typescript', 'bin', 'tsc'),
+  tsc: require.resolve('typescript/bin/tsc'),
 };
 
 const CONFIG = {

@@ -1,13 +1,16 @@
-import { createRequire } from 'node:module';
+import { readFileSync } from 'node:fs';
+import { findPackageJSON } from 'node:module';
 import { isIP } from 'node:net';
 import process from 'node:process';
-import { domainToASCII, fileURLToPath } from 'node:url';
+import { domainToASCII } from 'node:url';
 
-const require = createRequire(import.meta.url);
-const packageJsonPath = fileURLToPath(
-  new URL('../package.json', import.meta.url)
-);
-const packageJson = require(packageJsonPath) as { version?: string };
+const packageJsonPath = findPackageJSON(import.meta.url);
+if (!packageJsonPath) {
+  throw new Error('package.json not found');
+}
+const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf-8')) as {
+  version?: string;
+};
 if (typeof packageJson.version !== 'string') {
   throw new Error('package.json version is missing');
 }
