@@ -62,6 +62,10 @@ import { isObject } from './type-guards.js';
 
 const utf8Decoder = new TextDecoder('utf-8');
 
+function decodeUtf8Input(input: string | Uint8Array): string {
+  return typeof input === 'string' ? input : utf8Decoder.decode(input);
+}
+
 function getTagName(node: unknown): string {
   if (!isObject(node)) return '';
   const raw = (node as { tagName?: unknown }).tagName;
@@ -232,7 +236,7 @@ class StageTracker {
     try {
       this.channel.publish(event);
     } catch {
-      /* ignore */
+      // Intentionally swallow publish errors to prevent cascading failures
     }
   }
 }
@@ -2028,14 +2032,17 @@ function createThreadWorkerHost(
 }
 
 function createProcessWorkerHost(
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  _workerIndex: number,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  _name: string
+  workerIndex: number,
+  name: string
 ): WorkerHost {
   const child = fork(TRANSFORM_CHILD_PATH, [], {
     stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
     serialization: 'advanced',
+    env: {
+      ...process.env,
+      SUPERFETCH_WORKER_INDEX: String(workerIndex),
+      SUPERFETCH_WORKER_NAME: name,
+    },
   });
 
   if (child.pid === undefined) {
@@ -2325,7 +2332,7 @@ class WorkerPool implements TransformWorkerPool {
       try {
         slot.host.postMessage({ type: 'cancel', id });
       } catch {
-        /* ignore */
+        // Worker may be unavailable; failure is acceptable during abort
       }
     }
     this.failTask(
@@ -2343,7 +2350,7 @@ class WorkerPool implements TransformWorkerPool {
     try {
       signal.removeEventListener('abort', listener);
     } catch {
-      /* ignore */
+      // Defensive: removeEventListener should not throw, but handle edge cases
     }
   }
 
@@ -2396,7 +2403,9 @@ class WorkerPool implements TransformWorkerPool {
     if (this.closed) return;
 
     const target = slot ?? this.workers[workerIndex];
-    if (target) void target.host.terminate();
+    if (target) {
+      target.host.terminate().catch(() => undefined);
+    }
 
     this.workers[workerIndex] = this.spawnWorker(workerIndex);
     this.drainQueue();
@@ -2552,7 +2561,7 @@ class WorkerPool implements TransformWorkerPool {
         try {
           slot.host.postMessage({ type: 'cancel', id: task.id });
         } catch {
-          /* ignore */
+          // Worker may be unavailable; proceed with timeout handling
         }
 
         const inflight = this.takeInflight(task.id);
@@ -2724,13 +2733,11 @@ async function transformWithWorkerPool(
 ): Promise<MarkdownTransformResult> {
   const pool = getOrCreateWorkerPool();
   if (pool.getCapacity() === 0) {
-    let html = '';
-    if (typeof htmlOrBuffer === 'string') {
-      html = htmlOrBuffer;
-    } else {
-      html = utf8Decoder.decode(htmlOrBuffer);
-    }
-    return transformHtmlToMarkdownInProcess(html, url, options);
+    return transformHtmlToMarkdownInProcess(
+      decodeUtf8Input(htmlOrBuffer),
+      url,
+      options
+    );
   }
 
   if (typeof htmlOrBuffer === 'string') {
@@ -2755,47 +2762,15 @@ function resolveWorkerFallback(
   if (error instanceof FetchError) throw error;
   abortPolicy.throwIfAborted(options.signal, url, 'transform:worker-fallback');
 
-  let html = '';
-  if (typeof htmlOrBuffer === 'string') {
-    html = htmlOrBuffer;
-  } else {
-    html = utf8Decoder.decode(htmlOrBuffer);
-  }
-
-  return transformHtmlToMarkdownInProcess(html, url, options);
+  return transformHtmlToMarkdownInProcess(
+    decodeUtf8Input(htmlOrBuffer),
+    url,
+    options
+  );
 }
 
-export async function transformHtmlToMarkdown(
-  html: string,
-  url: string,
-  options: TransformOptions
-): Promise<MarkdownTransformResult> {
-  const totalStage = stageTracker.start(url, 'transform:total');
-  let completed: MarkdownTransformResult | null = null;
-
-  try {
-    abortPolicy.throwIfAborted(options.signal, url, 'transform:begin');
-
-    const workerStage = stageTracker.start(url, 'transform:worker');
-    try {
-      const result = await transformWithWorkerPool(html, url, options);
-      completed = result;
-      return result;
-    } catch (error: unknown) {
-      const fallback = resolveWorkerFallback(error, html, url, options);
-      completed = fallback;
-      return fallback;
-    } finally {
-      stageTracker.end(workerStage);
-    }
-  } finally {
-    if (completed)
-      stageTracker.end(totalStage, { truncated: completed.truncated });
-  }
-}
-
-export async function transformBufferToMarkdown(
-  htmlBuffer: Uint8Array,
+async function transformInputToMarkdown(
+  htmlOrBuffer: string | Uint8Array,
   url: string,
   options: TransformOptions & { encoding?: string }
 ): Promise<MarkdownTransformResult> {
@@ -2807,18 +2782,35 @@ export async function transformBufferToMarkdown(
 
     const workerStage = stageTracker.start(url, 'transform:worker');
     try {
-      const result = await transformWithWorkerPool(htmlBuffer, url, options);
+      const result = await transformWithWorkerPool(htmlOrBuffer, url, options);
       completed = result;
       return result;
     } catch (error: unknown) {
-      const fallback = resolveWorkerFallback(error, htmlBuffer, url, options);
+      const fallback = resolveWorkerFallback(error, htmlOrBuffer, url, options);
       completed = fallback;
       return fallback;
     } finally {
       stageTracker.end(workerStage);
     }
   } finally {
-    if (completed)
+    if (completed) {
       stageTracker.end(totalStage, { truncated: completed.truncated });
+    }
   }
+}
+
+export async function transformHtmlToMarkdown(
+  html: string,
+  url: string,
+  options: TransformOptions
+): Promise<MarkdownTransformResult> {
+  return transformInputToMarkdown(html, url, options);
+}
+
+export async function transformBufferToMarkdown(
+  htmlBuffer: Uint8Array,
+  url: string,
+  options: TransformOptions & { encoding?: string }
+): Promise<MarkdownTransformResult> {
+  return transformInputToMarkdown(htmlBuffer, url, options);
 }
