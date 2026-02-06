@@ -1,21 +1,28 @@
-interface LanguagePattern {
-  keywords?: readonly string[];
-  wordBoundary?: readonly string[];
-  regex?: RegExp;
-  startsWith?: readonly string[];
-  custom?: (sample: CodeSample) => boolean;
+// This module provides a heuristic-based language detection mechanism for code snippets.
+class DetectionContext {
+  private _lower: string | undefined;
+  private _lines: readonly string[] | undefined;
+  private _trimmedStart: string | undefined;
+
+  constructor(readonly code: string) {}
+
+  get lower(): string {
+    this._lower ??= this.code.toLowerCase();
+    return this._lower;
+  }
+
+  get lines(): readonly string[] {
+    this._lines ??= this.code.split(/\r?\n/);
+    return this._lines;
+  }
+
+  get trimmedStart(): string {
+    this._trimmedStart ??= this.code.trimStart();
+    return this._trimmedStart;
+  }
 }
 
-interface CodeSample {
-  code: string;
-  lower: string;
-  lines: readonly string[];
-  trimmedStart: string;
-}
-
-type SamplePredicate = (sample: CodeSample) => boolean;
-
-const BASH_COMMANDS = [
+const BASH_COMMANDS = new Set([
   'sudo',
   'chmod',
   'mkdir',
@@ -23,7 +30,7 @@ const BASH_COMMANDS = [
   'ls',
   'cat',
   'echo',
-] as const;
+]);
 
 const BASH_PACKAGE_MANAGERS = [
   'npm',
@@ -37,7 +44,7 @@ const BASH_PACKAGE_MANAGERS = [
   'go',
 ] as const;
 
-const BASH_VERBS = ['install', 'add', 'run', 'build', 'start'] as const;
+const BASH_VERBS = new Set(['install', 'add', 'run', 'build', 'start']);
 
 const TYPESCRIPT_HINTS = [
   ': string',
@@ -54,72 +61,79 @@ const TYPESCRIPT_HINTS = [
   ':unknown',
   ': never',
   ':never',
-] as const;
+];
 
-function createCodeSample(code: string): CodeSample {
-  return {
-    code,
-    lower: code.toLowerCase(),
-    lines: code.split(/\r?\n/),
-    trimmedStart: code.trimStart(),
-  };
-}
+const HTML_TAGS = [
+  '<!doctype',
+  '<html',
+  '<head',
+  '<body',
+  '<div',
+  '<span',
+  '<p',
+  '<a',
+  '<script',
+  '<style',
+];
 
-function escapeRegExpLiteral(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-function resetStatefulRegex(regex: RegExp): void {
-  if (regex.global || regex.sticky) regex.lastIndex = 0;
-}
-
-function safeTest(regex: RegExp, input: string): boolean {
-  resetStatefulRegex(regex);
-  return regex.test(input);
-}
-
-function compileWordBoundaryRegex(word: string): RegExp {
-  return new RegExp(`\\b${escapeRegExpLiteral(word)}\\b`);
-}
+const RUST_REGEX = /\b(?:fn|impl|struct|enum)\b/;
+const JS_REGEX =
+  /\b(?:const|let|var|function|class|async|await|export|import)\b/;
+const PYTHON_REGEX = /\b(?:def|class|import|from)\b/;
+const CSS_REGEX = /@media|@import|@keyframes/;
 
 function containsJsxTag(code: string): boolean {
-  for (let i = 0; i < code.length - 1; i += 1) {
-    if (code[i] !== '<') continue;
-    const next = code[i + 1];
-    if (next && next >= 'A' && next <= 'Z') return true;
+  const len = code.length;
+  for (let i = 0; i < len - 1; i++) {
+    if (code.charCodeAt(i) === 60 /* < */) {
+      const next = code.charCodeAt(i + 1);
+      if (next >= 65 && next <= 90) return true; // A-Z
+    }
   }
   return false;
 }
 
-function isShellPrefix(line: string): boolean {
-  return (
-    line.startsWith('#!') || line.startsWith('$ ') || line.startsWith('# ')
-  );
-}
+function isBashLine(line: string): boolean {
+  const trimmed = line.trimStart();
+  if (trimmed.length === 0) return false;
 
-function matchesCommand(line: string): boolean {
-  return BASH_COMMANDS.some(
-    (cmd) => line === cmd || line.startsWith(`${cmd} `)
-  );
-}
-
-function matchesPackageManagerVerb(line: string): boolean {
-  for (const mgr of BASH_PACKAGE_MANAGERS) {
-    if (!line.startsWith(`${mgr} `)) continue;
-    const rest = line.slice(mgr.length + 1);
-    if (BASH_VERBS.some((verb) => rest === verb || rest.startsWith(`${verb} `)))
-      return true;
+  // Shell Prefix
+  if (
+    trimmed.startsWith('#!') ||
+    trimmed.startsWith('$ ') ||
+    trimmed.startsWith('# ')
+  ) {
+    return true;
   }
+
+  const spaceIdx = trimmed.indexOf(' ');
+  const firstWord = spaceIdx === -1 ? trimmed : trimmed.slice(0, spaceIdx);
+
+  if (BASH_COMMANDS.has(firstWord)) return true;
+
+  // Package Managers
+  let isPkgMgr = false;
+  for (const mgr of BASH_PACKAGE_MANAGERS) {
+    if (firstWord === mgr) {
+      isPkgMgr = true;
+      break;
+    }
+  }
+
+  if (isPkgMgr && spaceIdx !== -1) {
+    const rest = trimmed.slice(spaceIdx + 1);
+    const secondSpaceIdx = rest.indexOf(' ');
+    const secondWord =
+      secondSpaceIdx === -1 ? rest : rest.slice(0, secondSpaceIdx);
+    if (BASH_VERBS.has(secondWord)) return true;
+  }
+
   return false;
 }
 
 function detectBashIndicators(lines: readonly string[]): boolean {
   for (const line of lines) {
-    const trimmed = line.trimStart();
-    if (!trimmed) continue;
-    if (isShellPrefix(trimmed)) return true;
-    if (matchesCommand(trimmed)) return true;
-    if (matchesPackageManagerVerb(trimmed)) return true;
+    if (isBashLine(line)) return true;
   }
   return false;
 }
@@ -127,14 +141,15 @@ function detectBashIndicators(lines: readonly string[]): boolean {
 function detectCssStructure(lines: readonly string[]): boolean {
   for (const line of lines) {
     const trimmed = line.trimStart();
-    if (!trimmed) continue;
+    if (trimmed.length === 0) continue;
 
     const hasSelector =
       (trimmed.startsWith('.') || trimmed.startsWith('#')) &&
       trimmed.includes('{');
 
-    if (hasSelector || (trimmed.includes(':') && trimmed.includes(';')))
+    if (hasSelector || (trimmed.includes(':') && trimmed.includes(';'))) {
       return true;
+    }
   }
   return false;
 }
@@ -142,219 +157,159 @@ function detectCssStructure(lines: readonly string[]): boolean {
 function detectYamlStructure(lines: readonly string[]): boolean {
   for (const line of lines) {
     const trimmed = line.trim();
-    if (!trimmed) continue;
+    if (trimmed.length === 0) continue;
 
     const colonIdx = trimmed.indexOf(':');
     if (colonIdx <= 0) continue;
 
-    const after = trimmed[colonIdx + 1];
-    if (after === ' ' || after === '\t') return true;
+    const after = trimmed.charCodeAt(colonIdx + 1);
+    // space (32) or tab (9)
+    if (after === 32 || after === 9) return true;
   }
   return false;
 }
 
-const LANGUAGE_PATTERNS: readonly {
-  language: string;
+// Matcher type: returns true if matches.
+type Matcher = (ctx: DetectionContext) => boolean;
+
+interface LanguageDef {
+  lang: string;
   weight: number;
-  pattern: LanguagePattern;
-}[] = [
+  match: Matcher;
+}
+
+const LANGUAGES: LanguageDef[] = [
   {
-    language: 'jsx',
-    weight: 22,
-    pattern: {
-      keywords: ['classname=', 'jsx:', "from 'react'", 'from "react"'],
-      custom: (sample) => containsJsxTag(sample.code),
-    },
-  },
-  {
-    language: 'typescript',
-    weight: 20,
-    pattern: {
-      wordBoundary: ['interface', 'type'],
-      custom: (sample) =>
-        TYPESCRIPT_HINTS.some((hint) => sample.lower.includes(hint)),
-    },
-  },
-  {
-    language: 'rust',
+    lang: 'rust',
     weight: 25,
-    pattern: {
-      regex: /\b(?:fn|impl|struct|enum)\b/,
-      keywords: ['let mut'],
-      custom: (sample) =>
-        sample.lower.includes('use ') && sample.lower.includes('::'),
+    match: (ctx) => {
+      if (ctx.lower.includes('let mut')) return true;
+      if (RUST_REGEX.test(ctx.lower)) return true;
+      return ctx.lower.includes('use ') && ctx.lower.includes('::');
     },
   },
   {
-    language: 'javascript',
-    weight: 12,
-    pattern: {
-      regex: /\b(?:const|let|var|function|class|async|await|export|import)\b/,
-    },
-  },
-  {
-    language: 'python',
-    weight: 18,
-    pattern: {
-      regex: /\b(?:def|class|import|from)\b/,
-      keywords: ['print(', '__name__'],
-    },
-  },
-  {
-    language: 'bash',
-    weight: 15,
-    pattern: {
-      custom: (sample) => detectBashIndicators(sample.lines),
-    },
-  },
-  {
-    language: 'css',
-    weight: 18,
-    pattern: {
-      regex: /@media|@import|@keyframes/,
-      custom: (sample) => detectCssStructure(sample.lines),
-    },
-  },
-  {
-    language: 'html',
-    weight: 12,
-    pattern: {
-      keywords: [
-        '<!doctype',
-        '<html',
-        '<head',
-        '<body',
-        '<div',
-        '<span',
-        '<p',
-        '<a',
-        '<script',
-        '<style',
-      ],
-    },
-  },
-  {
-    language: 'json',
-    weight: 10,
-    pattern: {
-      startsWith: ['{', '['],
-    },
-  },
-  {
-    language: 'yaml',
-    weight: 15,
-    pattern: {
-      custom: (sample) => detectYamlStructure(sample.lines),
-    },
-  },
-  {
-    language: 'sql',
-    weight: 20,
-    pattern: {
-      wordBoundary: [
-        'select',
-        'insert',
-        'update',
-        'delete',
-        'create',
-        'alter',
-        'drop',
-      ],
-    },
-  },
-  {
-    language: 'go',
+    lang: 'go',
     weight: 22,
-    pattern: {
-      wordBoundary: ['package', 'func'],
-      keywords: ['import "'],
+    match: (ctx) => {
+      if (ctx.lower.includes('import "')) return true;
+      return /\b(?:package|func)\b/.test(ctx.lower);
+    },
+  },
+  {
+    lang: 'jsx',
+    weight: 22,
+    match: (ctx) => {
+      const l = ctx.lower;
+      if (
+        l.includes('classname=') ||
+        l.includes('jsx:') ||
+        l.includes("from 'react'") ||
+        l.includes('from "react"')
+      ) {
+        return true;
+      }
+      return containsJsxTag(ctx.code);
+    },
+  },
+  {
+    lang: 'typescript',
+    weight: 20,
+    match: (ctx) => {
+      if (/\b(?:interface|type)\b/.test(ctx.lower)) return true;
+      const l = ctx.lower;
+      for (const hint of TYPESCRIPT_HINTS) {
+        if (l.includes(hint)) return true;
+      }
+      return false;
+    },
+  },
+  {
+    lang: 'sql',
+    weight: 20,
+    match: (ctx) => {
+      const l = ctx.lower;
+      return /\b(?:select|insert|update|delete|create|alter|drop)\b/.test(l);
+    },
+  },
+  {
+    lang: 'python',
+    weight: 18,
+    match: (ctx) => {
+      const l = ctx.lower;
+      if (l.includes('print(') || l.includes('__name__')) return true;
+      return PYTHON_REGEX.test(l);
+    },
+  },
+  {
+    lang: 'css',
+    weight: 18,
+    match: (ctx) => {
+      if (CSS_REGEX.test(ctx.lower)) return true;
+      return detectCssStructure(ctx.lines);
+    },
+  },
+  {
+    lang: 'bash',
+    weight: 15,
+    match: (ctx) => detectBashIndicators(ctx.lines),
+  },
+  {
+    lang: 'yaml',
+    weight: 15,
+    match: (ctx) => detectYamlStructure(ctx.lines),
+  },
+  {
+    lang: 'javascript',
+    weight: 12,
+    match: (ctx) => JS_REGEX.test(ctx.lower),
+  },
+  {
+    lang: 'html',
+    weight: 12,
+    match: (ctx) => {
+      const l = ctx.lower;
+      for (const tag of HTML_TAGS) {
+        if (l.includes(tag)) return true;
+      }
+      return false;
+    },
+  },
+  {
+    lang: 'json',
+    weight: 10,
+    match: (ctx) => {
+      const s = ctx.trimmedStart;
+      return s.startsWith('{') || s.startsWith('[');
     },
   },
 ];
 
-function includesAny(haystack: string, needles: readonly string[]): boolean {
-  for (const needle of needles) {
-    if (haystack.includes(needle)) return true;
-  }
-  return false;
-}
+export function extractLanguageFromClassName(
+  className: string
+): string | undefined {
+  if (!className) return undefined;
 
-function startsWithAny(value: string, prefixes: readonly string[]): boolean {
-  for (const prefix of prefixes) {
-    if (value.startsWith(prefix)) return true;
-  }
-  return false;
-}
-
-function matchesAnyRegex(value: string, regexes: readonly RegExp[]): boolean {
-  for (const regex of regexes) {
-    if (safeTest(regex, value)) return true;
-  }
-  return false;
-}
-
-function toLowercaseList(values?: readonly string[]): readonly string[] {
-  if (!values || values.length === 0) return [];
-  return values.map((value) => value.toLowerCase());
-}
-
-function compilePattern(pattern: LanguagePattern): SamplePredicate {
-  const {
-    keywords: rawKeywords,
-    wordBoundary,
-    startsWith,
-    regex,
-    custom,
-  } = pattern;
-  const keywords = toLowercaseList(rawKeywords);
-  const boundaryRegexes = toLowercaseList(wordBoundary).map((w) =>
-    compileWordBoundaryRegex(w)
-  );
-  const startsWithList = startsWith ?? [];
-
-  const hasKeywords = keywords.length > 0;
-  const hasBoundaries = boundaryRegexes.length > 0;
-  const hasStartsWith = startsWithList.length > 0;
-  const hasRegex = Boolean(regex);
-  const hasCustom = Boolean(custom);
-
-  return (sample: CodeSample): boolean => {
-    if (hasKeywords && includesAny(sample.lower, keywords)) return true;
-    if (hasBoundaries && matchesAnyRegex(sample.lower, boundaryRegexes))
-      return true;
-    if (hasRegex && regex && safeTest(regex, sample.lower)) return true;
-    if (hasStartsWith && startsWithAny(sample.trimmedStart, startsWithList))
-      return true;
-    if (hasCustom && custom?.(sample)) return true;
-    return false;
-  };
-}
-
-const COMPILED_PATTERNS: readonly {
-  language: string;
-  weight: number;
-  matches: SamplePredicate;
-}[] = LANGUAGE_PATTERNS.map(({ language, weight, pattern }) => ({
-  language,
-  weight,
-  matches: compilePattern(pattern),
-}));
-
-function extractLanguageFromClassName(className: string): string | undefined {
+  // Split by whitespace and check for language indicators
   const tokens = className.match(/\S+/g);
   if (!tokens) return undefined;
 
+  // Fast path: check for prefixes
   for (const token of tokens) {
     const lower = token.toLowerCase();
-    if (lower.startsWith('language-')) return token.slice('language-'.length);
-    if (lower.startsWith('lang-')) return token.slice('lang-'.length);
-    if (lower.startsWith('highlight-')) return token.slice('highlight-'.length);
+    if (lower.startsWith('language-')) return token.slice(9);
+    if (lower.startsWith('lang-')) return token.slice(5);
+    if (lower.startsWith('highlight-')) return token.slice(10);
   }
 
+  // Fallback: check for hljs context
   if (!tokens.includes('hljs')) return undefined;
 
-  const langClass = tokens.find((t) => t !== 'hljs' && !t.startsWith('hljs-'));
-  return langClass ?? undefined;
+  const langClass = tokens.find((t) => {
+    const l = t.toLowerCase();
+    return l !== 'hljs' && !l.startsWith('hljs-');
+  });
+  return langClass;
 }
 
 function resolveLanguageFromDataAttribute(
@@ -362,10 +317,24 @@ function resolveLanguageFromDataAttribute(
 ): string | undefined {
   const trimmed = dataLang.trim();
   if (!trimmed) return undefined;
-  return /^\w+$/.test(trimmed) ? trimmed : undefined;
+
+  // Check if \w+
+  for (let i = 0; i < trimmed.length; i++) {
+    const c = trimmed.charCodeAt(i);
+    // valid: A-Z, a-z, 0-9, _
+    const isUpper = c >= 65 && c <= 90;
+    const isLower = c >= 97 && c <= 122;
+    const isDigit = c >= 48 && c <= 57;
+    const isUnder = c === 95;
+
+    if (!isUpper && !isLower && !isDigit && !isUnder) {
+      return undefined;
+    }
+  }
+  return trimmed;
 }
 
-function resolveLanguage(
+export function resolveLanguageFromAttributes(
   className: string,
   dataLang: string
 ): string | undefined {
@@ -375,36 +344,33 @@ function resolveLanguage(
   );
 }
 
-function detectLanguage(code: string): string | undefined {
-  const sample = createCodeSample(code);
-  const scores = new Map<string, number>();
+export function detectLanguageFromCode(code: string): string | undefined {
+  if (!code) return undefined;
+
+  // Fast path for empty/whitespace only
+  let empty = true;
+  for (let i = 0; i < code.length; i++) {
+    if (code.charCodeAt(i) > 32) {
+      empty = false;
+      break;
+    }
+  }
+  if (empty) return undefined;
+
+  const ctx = new DetectionContext(code);
 
   let bestLang: string | undefined;
   let bestScore = -1;
 
-  for (const { language, weight, matches } of COMPILED_PATTERNS) {
-    if (!matches(sample)) continue;
-
-    const nextScore = (scores.get(language) ?? 0) + weight;
-    scores.set(language, nextScore);
-
-    if (nextScore > bestScore) {
-      bestScore = nextScore;
-      bestLang = language;
+  for (const def of LANGUAGES) {
+    if (def.match(ctx)) {
+      if (def.weight > bestScore) {
+        bestScore = def.weight;
+        bestLang = def.lang;
+        if (bestScore >= 25) break;
+      }
     }
   }
 
   return bestLang;
-}
-
-export function detectLanguageFromCode(code: string): string | undefined {
-  if (!code || code.trim().length === 0) return undefined;
-  return detectLanguage(code);
-}
-
-export function resolveLanguageFromAttributes(
-  className: string,
-  dataLang: string
-): string | undefined {
-  return resolveLanguage(className, dataLang);
 }
