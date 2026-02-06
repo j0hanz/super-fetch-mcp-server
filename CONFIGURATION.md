@@ -35,58 +35,27 @@ SuperFetch runs with no configuration by default. Just run with `--stdio`:
 
 ### Core Server Settings
 
-| Variable                   | Default                           | Description                                                                                                        |
-| -------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `HOST`                     | `127.0.0.1`                       | HTTP server bind address                                                                                           |
-| `PORT`                     | `3000`                            | HTTP server port (1024-65535)                                                                                      |
-| `USER_AGENT`               | `superFetch-MCP│${serverVersion}` | User-Agent header for outgoing requests                                                                            |
-| `CACHE_ENABLED`            | `true`                            | Enable response caching                                                                                            |
-| `CACHE_TTL`                | `3600`                            | Cache lifetime in seconds (60-86400)                                                                               |
-| `LOG_LEVEL`                | `info`                            | Logging level. Only `debug` enables verbose logs; other values behave like `info`                                  |
-| `ALLOW_REMOTE`             | `false`                           | Allow binding to non-loopback hosts (OAuth required)                                                               |
-| `ALLOWED_HOSTS`            | (empty)                           | Additional allowed Host/Origin values (comma/space separated)                                                      |
-| `FETCH_TIMEOUT_MS`         | `15000`                           | Outgoing fetch timeout in milliseconds (1000-60000)                                                                |
-| `TRANSFORM_TIMEOUT_MS`     | `30000`                           | Worker transform timeout in milliseconds (5000-120000)                                                             |
-| `TOOL_TIMEOUT_MS`          | `50000`                           | Overall tool timeout in milliseconds (1000-300000). Defaults to `FETCH_TIMEOUT_MS` + `TRANSFORM_TIMEOUT_MS` + 5000 |
-| `MAX_HTML_BYTES`           | `0`                               | Maximum HTML response size in bytes; `0` disables the limit (unlimited)                                            |
-| `MAX_INLINE_CONTENT_CHARS` | `0`                               | Maximum inline markdown characters; `0` disables truncation (unlimited)                                            |
-
-> **Timeout Composition**: The tool timeout (`TOOL_TIMEOUT_MS`) is the overall deadline for a `fetch-url` call. It composes as: fetch (network I/O) + transform (HTML→Markdown) + 5s padding. Each layer has its own abort signal:
->
-> 1. **Fetch timeout** aborts the HTTP request if the server is slow to respond.
-> 2. **Transform timeout** aborts markdown conversion if parsing/extraction hangs.
-> 3. **Tool timeout** is the outermost deadline; if reached, both fetch and transform are cancelled.
->
-> For slow sites, increase `FETCH_TIMEOUT_MS`. For large/complex HTML, increase `TRANSFORM_TIMEOUT_MS`. The tool timeout auto-adjusts unless explicitly set.
-
-| `TRANSFORM_METADATA_FORMAT` | `markdown` | Metadata preamble format: `markdown` (title-first) or `frontmatter` (YAML) |
-| `TRANSFORM_STAGE_WARN_RATIO` | `0.5` | Emit a warning when a transform stage uses more than this fraction of the total budget |
-| `TRANSFORM_WORKER_MAX_SCALE` | `4` | Max worker pool scale factor (0-16) |
-| `ENABLED_TOOLS` | `fetch-url` | Comma/space-separated list of enabled tools |
-
-### HTTP Server Tuning (HTTP Mode, Advanced)
-
-These settings tune the underlying Node.js `http.Server`. All defaults are **no-op** unless you set the variables.
-
-> Caution: `SERVER_REQUEST_TIMEOUT_MS` can break long-lived Streamable HTTP / MCP sessions. Prefer `SERVER_HEADERS_TIMEOUT_MS` and `SERVER_KEEP_ALIVE_TIMEOUT_MS` unless you know you want a hard request deadline.
-
-| Variable                       | Default | Description                                                  |
-| ------------------------------ | ------- | ------------------------------------------------------------ |
-| `SERVER_HEADERS_TIMEOUT_MS`    | (unset) | Sets `server.headersTimeout` (1000-600000)                   |
-| `SERVER_REQUEST_TIMEOUT_MS`    | (unset) | Sets `server.requestTimeout` (1000-600000)                   |
-| `SERVER_KEEP_ALIVE_TIMEOUT_MS` | (unset) | Sets `server.keepAliveTimeout` (1000-600000)                 |
-| `SERVER_SHUTDOWN_CLOSE_IDLE`   | `false` | On shutdown, call `server.closeIdleConnections()` if present |
-| `SERVER_SHUTDOWN_CLOSE_ALL`    | `false` | On shutdown, call `server.closeAllConnections()` if present  |
+| Variable                           | Default                           | Description                                                                       |
+| ---------------------------------- | --------------------------------- | --------------------------------------------------------------------------------- |
+| `HOST`                             | `127.0.0.1`                       | HTTP server bind address                                                          |
+| `PORT`                             | `3000`                            | HTTP server port (1024-65535)                                                     |
+| `USER_AGENT`                       | `superFetch-MCP│${serverVersion}` | User-Agent header for outgoing requests                                           |
+| `CACHE_ENABLED`                    | `true`                            | Enable response caching                                                           |
+| `LOG_LEVEL`                        | `info`                            | Logging level. Only `debug` enables verbose logs; other values behave like `info` |
+| `ALLOW_REMOTE`                     | `false`                           | Allow binding to non-loopback hosts (OAuth required)                              |
+| `ALLOWED_HOSTS`                    | (empty)                           | Additional allowed Host/Origin values (comma/space separated)                     |
+| `FETCH_TIMEOUT_MS`                 | `15000`                           | Outgoing fetch timeout in milliseconds (1000-60000)                               |
+| `SUPERFETCH_EXTRA_NOISE_TOKENS`    | (empty)                           | Additional CSS class/ID tokens to flag as noise (comma/space separated)           |
+| `SUPERFETCH_EXTRA_NOISE_SELECTORS` | (empty)                           | Additional CSS selectors for noise removal (comma/space separated)                |
 
 ### Auth (HTTP Mode)
 
-| Variable        | Default | Description                                                                                                                              |
-| --------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `AUTH_MODE`     | auto    | `static` or `oauth`. Auto-selects OAuth if OAUTH_ISSUER_URL, OAUTH_AUTHORIZATION_URL, OAUTH_TOKEN_URL, or OAUTH_INTROSPECTION_URL is set |
-| `ACCESS_TOKENS` | (empty) | Comma/space-separated static bearer tokens                                                                                               |
-| `API_KEY`       | (empty) | Adds a static bearer token and enables `X-API-Key` header                                                                                |
+| Variable        | Default | Description                                               |
+| --------------- | ------- | --------------------------------------------------------- |
+| `ACCESS_TOKENS` | (empty) | Comma/space-separated static bearer tokens                |
+| `API_KEY`       | (empty) | Adds a static bearer token and enables `X-API-Key` header |
 
-Static mode requires at least one token (`ACCESS_TOKENS` or `API_KEY`).
+Static mode requires at least one token (`ACCESS_TOKENS` or `API_KEY`). OAuth is auto-selected when any OAuth URL is set.
 
 ### OAuth (HTTP Mode)
 
@@ -101,58 +70,18 @@ Required when `AUTH_MODE=oauth` (or auto-selected by presence of OAuth URLs):
 
 Optional:
 
-| Variable                         | Default                    | Description                             |
-| -------------------------------- | -------------------------- | --------------------------------------- |
-| `OAUTH_REVOCATION_URL`           | -                          | Revocation endpoint                     |
-| `OAUTH_REGISTRATION_URL`         | -                          | Dynamic client registration endpoint    |
-| `OAUTH_RESOURCE_URL`             | `http://<host>:<port>/mcp` | Protected resource URL                  |
-| `OAUTH_REQUIRED_SCOPES`          | (empty)                    | Required scopes (comma/space separated) |
-| `OAUTH_CLIENT_ID`                | -                          | Client ID for introspection             |
-| `OAUTH_CLIENT_SECRET`            | -                          | Client secret for introspection         |
-| `OAUTH_INTROSPECTION_TIMEOUT_MS` | `5000`                     | Introspection timeout (1000-30000)      |
+| Variable                 | Default | Description                             |
+| ------------------------ | ------- | --------------------------------------- |
+| `OAUTH_REVOCATION_URL`   | -       | Revocation endpoint                     |
+| `OAUTH_REGISTRATION_URL` | -       | Dynamic client registration endpoint    |
+| `OAUTH_REQUIRED_SCOPES`  | (empty) | Required scopes (comma/space separated) |
+| `OAUTH_CLIENT_ID`        | -       | Client ID for introspection             |
+| `OAUTH_CLIENT_SECRET`    | -       | Client secret for introspection         |
 
 ### Parsing Rules
 
 - **Integers**: Parsed with `parseInt`. Invalid values use defaults.
 - **Booleans**: The string `false` (lowercase) is `false`; any other non-empty value is `true`.
-
-### Noise Removal Tuning (Advanced)
-
-Control DOM noise filtering behavior. Higher weights increase likelihood of removal.
-
-| Variable                           | Default                                              | Description                                                              |
-| ---------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------ |
-| `NOISE_WEIGHT_HIDDEN`              | `50`                                                 | Weight for hidden elements (0-100)                                       |
-| `NOISE_WEIGHT_STRUCTURAL`          | `50`                                                 | Weight for structural noise tags like script, style (0-100)              |
-| `NOISE_WEIGHT_PROMO`               | `35`                                                 | Weight for promotional content (banners, ads) (0-100)                    |
-| `NOISE_WEIGHT_STICKY_FIXED`        | `30`                                                 | Weight for fixed/sticky positioned elements (0-100)                      |
-| `NOISE_WEIGHT_THRESHOLD`           | `50`                                                 | Removal threshold: elements with score ≥ threshold are removed (0-100)   |
-| `SUPERFETCH_EXTRA_NOISE_TOKENS`    | (empty)                                              | Additional CSS class/ID tokens to flag as noise (comma/space separated)  |
-| `SUPERFETCH_EXTRA_NOISE_SELECTORS` | (empty)                                              | Additional CSS selectors for noise removal (comma/space separated)       |
-| `NOISE_REMOVAL_CATEGORIES`         | `cookie-banners,newsletters,social-share,nav-footer` | Enabled noise categories (comma/space separated)                         |
-| `SUPERFETCH_AGGRESSIVE_NOISE`      | `false`                                              | Enable aggressive mode (includes tokens with higher false-positive risk) |
-| `SUPERFETCH_PRESERVE_SVG_CANVAS`   | `false`                                              | Preserve SVG and canvas elements (don't treat as structural noise)       |
-| `DEBUG_NOISE_REMOVAL`              | `false`                                              | Log noise removal decisions for debugging                                |
-
-### Markdown Cleanup Tuning (Advanced)
-
-Control post-processing of converted markdown.
-
-| Variable                           | Default | Description                                             |
-| ---------------------------------- | ------- | ------------------------------------------------------- |
-| `MARKDOWN_PROMOTE_ORPHAN_HEADINGS` | `true`  | Auto-promote title-case lines to headings               |
-| `MARKDOWN_REMOVE_SKIP_LINKS`       | `true`  | Remove "Skip to content/navigation" accessibility links |
-| `MARKDOWN_REMOVE_TOC_BLOCKS`       | `true`  | Remove auto-generated table of contents blocks          |
-| `MARKDOWN_REMOVE_TYPEDOC_COMMENTS` | `true`  | Remove TypeDoc-style comments from markdown             |
-
-### Rate Limiting (HTTP Mode)
-
-These settings control the per-IP HTTP request rate limiter.
-
-| Variable               | Default | Description                          |
-| ---------------------- | ------- | ------------------------------------ |
-| `RATE_LIMIT_MAX`       | `100`   | Max requests per window (1-10000)    |
-| `RATE_LIMIT_WINDOW_MS` | `60000` | Window duration in ms (1000-3600000) |
 
 ## Configuration Presets
 
@@ -193,7 +122,9 @@ These settings control the per-IP HTTP request rate limiter.
 </details>
 
 <details>
-<summary><strong>Long Cache</strong> - 2-hour cache for speed</summary>
+<summary><strong>Long Cache</strong> - Extended cache for speed</summary>
+
+Cache TTL is hardcoded at 3600 seconds (1 hour). To disable caching entirely:
 
 ```json
 {
@@ -202,7 +133,7 @@ These settings control the per-IP HTTP request rate limiter.
       "command": "npx",
       "args": ["-y", "@j0hanz/superfetch@latest", "--stdio"],
       "env": {
-        "CACHE_TTL": "7200"
+        "CACHE_ENABLED": "false"
       }
     }
   }
@@ -254,12 +185,29 @@ npm start
 
 These values are not configurable (sensible defaults for all use cases):
 
-| Setting              | Value       | Notes                              |
-| -------------------- | ----------- | ---------------------------------- |
-| Request timeout      | 15 seconds  | Fast failure for unresponsive URLs |
-| Max redirects        | 5           | Per request                        |
-| Cache max entries    | 100         | LRU eviction when exceeded         |
-| Session TTL          | 30 minutes  | HTTP mode only                     |
-| Session init timeout | 10 seconds  | HTTP mode only                     |
-| Max sessions         | 200         | HTTP mode only                     |
-| Rate limit           | 100 req/min | HTTP mode only, per IP             |
+| Setting                     | Value                       | Notes                              |
+| --------------------------- | --------------------------- | ---------------------------------- |
+| Fetch timeout               | 15 seconds                  | Fast failure for unresponsive URLs |
+| Transform timeout           | 30 seconds                  | HTML-to-Markdown conversion        |
+| Tool timeout                | 50 seconds                  | fetch + transform + 5s padding     |
+| Max redirects               | 5                           | Per request                        |
+| Cache TTL                   | 3600 seconds                | 1 hour                             |
+| Cache max entries           | 100                         | LRU eviction when exceeded         |
+| Max HTML bytes              | Unlimited                   | No cap on download size            |
+| Max inline content chars    | Unlimited                   | No inline truncation               |
+| Metadata format             | `markdown`                  | Title-first preamble               |
+| Transform stage warn ratio  | 0.5                         | Warn when stage exceeds 50%        |
+| Max worker scale            | 4                           | Worker pool scale factor           |
+| Enabled tools               | `fetch-url`                 | Single tool                        |
+| Noise weights               | hidden/structural=50, etc.  | DOM noise scoring                  |
+| Noise categories            | cookie, newsletter, social… | Default enabled categories         |
+| Aggressive noise mode       | Disabled                    | Lower false-positive risk          |
+| Markdown cleanup            | All enabled                 | Headings, skip links, TOC, TypeDoc |
+| Rate limit                  | 100 req/min                 | HTTP mode only, per IP             |
+| Auth mode                   | Auto-detected               | OAuth when URLs set, else static   |
+| OAuth resource URL          | `http://<host>:<port>/mcp`  | Computed from HOST/PORT            |
+| OAuth introspection timeout | 5 seconds                   | Introspection deadline             |
+| Shutdown behavior           | Close idle connections      | Always enabled                     |
+| Session TTL                 | 30 minutes                  | HTTP mode only                     |
+| Session init timeout        | 10 seconds                  | HTTP mode only                     |
+| Max sessions                | 200                         | HTTP mode only                     |

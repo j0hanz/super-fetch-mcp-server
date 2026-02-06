@@ -61,32 +61,7 @@ describe('http server tuning helpers', () => {
     assert.equal(server.keepAliveTimeout, 789);
   });
 
-  it('applyHttpServerTuning applies configured timeouts', async () => {
-    const script = `
-      import { applyHttpServerTuning } from './dist/server-tuning.js';
-      const server = {};
-      applyHttpServerTuning(server);
-      console.error('${RESULT_MARKER}' + JSON.stringify(server));
-    `;
-
-    const result = runIsolatedNode(script, {
-      SERVER_HEADERS_TIMEOUT_MS: '5000',
-      SERVER_REQUEST_TIMEOUT_MS: '6000',
-      SERVER_KEEP_ALIVE_TIMEOUT_MS: '7000',
-    });
-
-    assert.equal(result.status, 0, result.stderr);
-    const server = parseMarkedJson<{
-      headersTimeout?: number;
-      requestTimeout?: number;
-      keepAliveTimeout?: number;
-    }>(result.stderr);
-    assert.equal(server.headersTimeout, 5000);
-    assert.equal(server.requestTimeout, 6000);
-    assert.equal(server.keepAliveTimeout, 7000);
-  });
-
-  it('drainConnectionsOnShutdown is a no-op by default', async () => {
+  it('drainConnectionsOnShutdown always closes idle connections', async () => {
     const script = `
       import { drainConnectionsOnShutdown } from './dist/server-tuning.js';
       let idleCalls = 0;
@@ -109,7 +84,7 @@ describe('http server tuning helpers', () => {
       idleCalls: number;
       allCalls: number;
     }>(result.stderr);
-    assert.equal(payload.idleCalls, 0);
+    assert.equal(payload.idleCalls, 1);
     assert.equal(payload.allCalls, 0);
   });
 
@@ -132,27 +107,6 @@ describe('http server tuning helpers', () => {
     assert.equal(result.status, 0, result.stderr);
     const payload = parseMarkedJson<{ idleCalls: number }>(result.stderr);
     assert.equal(payload.idleCalls, 1);
-  });
-
-  it('drainConnectionsOnShutdown closes all connections when enabled', async () => {
-    const script = `
-      import { drainConnectionsOnShutdown } from './dist/server-tuning.js';
-      let allCalls = 0;
-      const server = {
-        closeAllConnections: () => { allCalls += 1; },
-      };
-      drainConnectionsOnShutdown(server);
-      console.error('${RESULT_MARKER}' + JSON.stringify({ allCalls }));
-    `;
-
-    const result = runIsolatedNode(script, {
-      SERVER_SHUTDOWN_CLOSE_ALL: 'true',
-      SERVER_SHUTDOWN_CLOSE_IDLE: undefined,
-    });
-
-    assert.equal(result.status, 0, result.stderr);
-    const payload = parseMarkedJson<{ allCalls: number }>(result.stderr);
-    assert.equal(payload.allCalls, 1);
   });
 
   it('requires ALLOW_REMOTE for non-loopback bindings', async () => {

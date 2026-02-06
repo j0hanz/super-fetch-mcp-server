@@ -149,39 +149,23 @@ server. For the full reference, see `CONFIGURATION.md`.
 | `PORT`                             | `3000`               | HTTP port (1024-65535, `0` for ephemeral).                     |
 | `USER_AGENT`                       | `superFetch-MCP/2.0` | User-Agent for outbound requests.                              |
 | `CACHE_ENABLED`                    | `true`               | Enable in-memory cache.                                        |
-| `CACHE_TTL`                        | `3600`               | Cache TTL in seconds (60-86400).                               |
 | `LOG_LEVEL`                        | `info`               | Logging level (`debug`, `info`, `warn`, `error`).              |
 | `ALLOW_REMOTE`                     | `false`              | Allow non-loopback binds (OAuth required).                     |
 | `ALLOWED_HOSTS`                    | (empty)              | Additional allowed Host/Origin values (comma/space separated). |
-| `TRANSFORM_TIMEOUT_MS`             | `30000`              | Worker transform timeout in ms (5000-120000).                  |
-| `TRANSFORM_STAGE_WARN_RATIO`       | `0.5`                | Emit warnings when stage exceeds ratio of timeout.             |
-| `TOOL_TIMEOUT_MS`                  | computed             | Overall tool timeout in ms (1000-300000).                      |
-| `TRANSFORM_METADATA_FORMAT`        | `markdown`           | Metadata format: `markdown` or `frontmatter`.                  |
-| `ENABLED_TOOLS`                    | `fetch-url`          | Comma/space-separated list of enabled tools.                   |
+| `FETCH_TIMEOUT_MS`                 | `15000`              | Outgoing fetch timeout in milliseconds (1000-60000).           |
 | `SUPERFETCH_EXTRA_NOISE_TOKENS`    | (empty)              | Extra noise tokens for DOM noise removal.                      |
 | `SUPERFETCH_EXTRA_NOISE_SELECTORS` | (empty)              | Extra CSS selectors for DOM noise removal.                     |
 
-`TOOL_TIMEOUT_MS` defaults to 15s fetch + `TRANSFORM_TIMEOUT_MS` + 5s.
-
-### HTTP server tuning (optional)
-
-| Variable                       | Default | Description                                   |
-| ------------------------------ | ------- | --------------------------------------------- |
-| `SERVER_HEADERS_TIMEOUT_MS`    | (unset) | Sets `server.headersTimeout` (1000-600000).   |
-| `SERVER_REQUEST_TIMEOUT_MS`    | (unset) | Sets `server.requestTimeout` (1000-600000).   |
-| `SERVER_KEEP_ALIVE_TIMEOUT_MS` | (unset) | Sets `server.keepAliveTimeout` (1000-600000). |
-| `SERVER_SHUTDOWN_CLOSE_IDLE`   | `false` | Close idle connections on shutdown.           |
-| `SERVER_SHUTDOWN_CLOSE_ALL`    | `false` | Close all connections on shutdown.            |
+All other settings (transform timeouts, noise weights, markdown cleanup, rate limits, etc.) use sensible hardcoded defaults. See `CONFIGURATION.md` for the full list.
 
 ### Auth (HTTP mode)
 
-| Variable        | Default | Description                                                 |
-| --------------- | ------- | ----------------------------------------------------------- |
-| `AUTH_MODE`     | auto    | `static` or `oauth` (auto-selects OAuth when URLs are set). |
-| `ACCESS_TOKENS` | (empty) | Comma/space-separated static bearer tokens.                 |
-| `API_KEY`       | (empty) | Adds a static bearer token and enables `X-API-Key`.         |
+| Variable        | Default | Description                                         |
+| --------------- | ------- | --------------------------------------------------- |
+| `ACCESS_TOKENS` | (empty) | Comma/space-separated static bearer tokens.         |
+| `API_KEY`       | (empty) | Adds a static bearer token and enables `X-API-Key`. |
 
-Static mode requires at least one token (`ACCESS_TOKENS` or `API_KEY`).
+Static mode requires at least one token (`ACCESS_TOKENS` or `API_KEY`). OAuth is auto-selected when any OAuth URL is set.
 
 ### OAuth (HTTP mode)
 
@@ -196,15 +180,13 @@ Required when `AUTH_MODE=oauth` (or auto-selected by OAuth URLs):
 
 Optional:
 
-| Variable                         | Default                    | Description                              |
-| -------------------------------- | -------------------------- | ---------------------------------------- |
-| `OAUTH_REVOCATION_URL`           | -                          | Revocation endpoint.                     |
-| `OAUTH_REGISTRATION_URL`         | -                          | Dynamic client registration endpoint.    |
-| `OAUTH_RESOURCE_URL`             | `http://<host>:<port>/mcp` | Protected resource URL.                  |
-| `OAUTH_REQUIRED_SCOPES`          | (empty)                    | Required scopes (comma/space separated). |
-| `OAUTH_CLIENT_ID`                | -                          | Client ID for introspection.             |
-| `OAUTH_CLIENT_SECRET`            | -                          | Client secret for introspection.         |
-| `OAUTH_INTROSPECTION_TIMEOUT_MS` | `5000`                     | Introspection timeout (1000-30000).      |
+| Variable                 | Default | Description                              |
+| ------------------------ | ------- | ---------------------------------------- |
+| `OAUTH_REVOCATION_URL`   | -       | Revocation endpoint.                     |
+| `OAUTH_REGISTRATION_URL` | -       | Dynamic client registration endpoint.    |
+| `OAUTH_REQUIRED_SCOPES`  | (empty) | Required scopes (comma/space separated). |
+| `OAUTH_CLIENT_ID`        | -       | Client ID for introspection.             |
+| `OAUTH_CLIENT_SECRET`    | -       | Client secret for introspection.         |
 
 ## Usage
 

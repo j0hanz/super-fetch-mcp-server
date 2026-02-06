@@ -393,13 +393,7 @@ describe('fetchUrlToolHandler', () => {
 
   it('does not drop aggressive promo matches inside main content', () => {
     const originalAggressiveMode = config.noiseRemoval.aggressiveMode;
-    const originalThreshold = config.noiseRemoval.weights.threshold;
-    const originalPromoWeight = config.noiseRemoval.weights.promo;
-    const originalStickyWeight = config.noiseRemoval.weights.stickyFixed;
     config.noiseRemoval.aggressiveMode = true;
-    config.noiseRemoval.weights.threshold = 50;
-    config.noiseRemoval.weights.promo = 35;
-    config.noiseRemoval.weights.stickyFixed = 30;
 
     const html = `
       <html>
@@ -416,9 +410,6 @@ describe('fetchUrlToolHandler', () => {
       assert.match(markdown, /KEEP\\?_RELATED/);
     } finally {
       config.noiseRemoval.aggressiveMode = originalAggressiveMode;
-      config.noiseRemoval.weights.threshold = originalThreshold;
-      config.noiseRemoval.weights.promo = originalPromoWeight;
-      config.noiseRemoval.weights.stickyFixed = originalStickyWeight;
     }
   });
 });

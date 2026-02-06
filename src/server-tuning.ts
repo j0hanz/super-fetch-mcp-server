@@ -1,4 +1,3 @@
-import { config } from './config.js';
 import { logDebug } from './observability.js';
 
 export interface HttpServerTuningTarget {
@@ -9,39 +8,16 @@ export interface HttpServerTuningTarget {
   closeAllConnections?: () => void;
 }
 
-export function applyHttpServerTuning(server: HttpServerTuningTarget): void {
-  const { headersTimeoutMs, requestTimeoutMs, keepAliveTimeoutMs } =
-    config.server.http;
-
-  if (headersTimeoutMs !== undefined) {
-    server.headersTimeout = headersTimeoutMs;
-  }
-  if (requestTimeoutMs !== undefined) {
-    server.requestTimeout = requestTimeoutMs;
-  }
-  if (keepAliveTimeoutMs !== undefined) {
-    server.keepAliveTimeout = keepAliveTimeoutMs;
-  }
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export function applyHttpServerTuning(_server: HttpServerTuningTarget): void {
+  // No-op for now; placeholder for future tuning parameters.
 }
 
 export function drainConnectionsOnShutdown(
   server: HttpServerTuningTarget
 ): void {
-  const { shutdownCloseAllConnections, shutdownCloseIdleConnections } =
-    config.server.http;
-
-  if (shutdownCloseAllConnections) {
-    if (typeof server.closeAllConnections === 'function') {
-      server.closeAllConnections();
-      logDebug('Closed all HTTP connections during shutdown');
-    }
-    return;
-  }
-
-  if (shutdownCloseIdleConnections) {
-    if (typeof server.closeIdleConnections === 'function') {
-      server.closeIdleConnections();
-      logDebug('Closed idle HTTP connections during shutdown');
-    }
+  if (typeof server.closeIdleConnections === 'function') {
+    server.closeIdleConnections();
+    logDebug('Closed idle HTTP connections during shutdown');
   }
 }

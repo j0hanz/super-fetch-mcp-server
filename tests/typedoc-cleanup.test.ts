@@ -1,21 +1,9 @@
 import assert from 'node:assert/strict';
-import { after, before, describe, it } from 'node:test';
+import { describe, it } from 'node:test';
 
-import { config } from '../dist/config.js';
 import { htmlToMarkdown } from '../dist/transform.js';
 
 describe('TypeDoc cleanup', () => {
-  let originalConfigValue: boolean;
-
-  before(() => {
-    originalConfigValue = config.markdownCleanup.removeTypeDocComments;
-    config.markdownCleanup.removeTypeDocComments = true;
-  });
-
-  after(() => {
-    config.markdownCleanup.removeTypeDocComments = originalConfigValue;
-  });
-
   it('removes TypeDoc style comments from text', () => {
     const html = `
       <p>Here is some /* internal implementation details */ text.</p>

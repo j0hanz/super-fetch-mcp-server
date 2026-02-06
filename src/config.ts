@@ -17,7 +17,8 @@ export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
 const LOG_LEVELS: readonly LogLevel[] = ['debug', 'info', 'warn', 'error'];
 
-export type TransformMetadataFormat = 'markdown' | 'frontmatter';
+/** Hardcoded to 'markdown'. Type retained for consumer compatibility. */
+export type TransformMetadataFormat = 'markdown';
 
 type AuthMode = 'oauth' | 'static';
 
@@ -83,14 +84,6 @@ function parseInteger(
   return parseIntegerValue(envValue, min, max) ?? defaultValue;
 }
 
-function parseOptionalInteger(
-  envValue: string | undefined,
-  min?: number,
-  max?: number
-): number | undefined {
-  return parseIntegerValue(envValue, min, max) ?? undefined;
-}
-
 function parseBoolean(
   envValue: string | undefined,
   defaultValue: boolean
@@ -106,15 +99,6 @@ function parseList(envValue: string | undefined): string[] {
     .split(/[\s,]+/)
     .map((entry) => entry.trim())
     .filter((entry) => entry.length > 0);
-}
-
-function parseFloatOrDefault(
-  envValue: string | undefined,
-  defaultValue: number
-): number {
-  if (!envValue) return defaultValue;
-  const parsed = Number.parseFloat(envValue);
-  return Number.isFinite(parsed) ? parsed : defaultValue;
 }
 
 function parseUrlEnv(value: string | undefined, name: string): URL | undefined {
@@ -150,35 +134,19 @@ function parseLogLevel(envValue: string | undefined): LogLevel {
   return isLogLevel(level) ? level : 'info';
 }
 
-function parseTransformMetadataFormat(
-  envValue: string | undefined
-): TransformMetadataFormat {
-  if (!envValue) return 'markdown';
-  const normalized = envValue.trim().toLowerCase();
-  return normalized === 'frontmatter' ? 'frontmatter' : 'markdown';
-}
-
 function parsePort(envValue: string | undefined): number {
   if (envValue?.trim() === '0') return 0;
   return parseInteger(envValue, 3000, 1024, 65535);
 }
 
-const DEFAULT_MAX_HTML_BYTES = 0;
-const DEFAULT_MAX_INLINE_CONTENT_CHARS = 0;
-
-const MAX_HTML_BYTES =
-  parseIntegerValue(env.MAX_HTML_BYTES, 0) ?? DEFAULT_MAX_HTML_BYTES;
-const MAX_INLINE_CONTENT_CHARS =
-  parseIntegerValue(env.MAX_INLINE_CONTENT_CHARS, 0) ??
-  DEFAULT_MAX_INLINE_CONTENT_CHARS;
+const MAX_HTML_BYTES = 0;
+const MAX_INLINE_CONTENT_CHARS = 0;
 const DEFAULT_SESSION_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_SESSION_INIT_TIMEOUT_MS = 10000;
 const DEFAULT_MAX_SESSIONS = 200;
-const DEFAULT_USER_AGENT = `superFetch-MCP│${serverVersion}`;
-const DEFAULT_ENABLED_TOOLS = 'fetch-url';
-const DEFAULT_NOISE_REMOVAL_CATEGORIES =
-  'cookie-banners,newsletters,social-share,nav-footer';
+const DEFAULT_USER_AGENT = `superFetch-MCP/${serverVersion}`;
 const DEFAULT_TOOL_TIMEOUT_PADDING_MS = 5000;
+const DEFAULT_TRANSFORM_TIMEOUT_MS = 30000;
 
 const DEFAULT_FETCH_TIMEOUT_MS = parseInteger(
   env.FETCH_TIMEOUT_MS,
@@ -186,18 +154,10 @@ const DEFAULT_FETCH_TIMEOUT_MS = parseInteger(
   1000,
   60000
 );
-const DEFAULT_TRANSFORM_TIMEOUT_MS = parseInteger(
-  env.TRANSFORM_TIMEOUT_MS,
-  30000,
-  5000,
-  120000
-);
 const DEFAULT_TOOL_TIMEOUT_MS =
   DEFAULT_FETCH_TIMEOUT_MS +
   DEFAULT_TRANSFORM_TIMEOUT_MS +
   DEFAULT_TOOL_TIMEOUT_PADDING_MS;
-
-const SERVER_TIMEOUT_RANGE = { min: 1000, max: 600000 };
 
 interface AuthConfig {
   mode: AuthMode;
@@ -237,9 +197,7 @@ function readOAuthUrls(baseUrl: URL): OAuthUrls {
   const revocationUrl = readUrlEnv('OAUTH_REVOCATION_URL');
   const registrationUrl = readUrlEnv('OAUTH_REGISTRATION_URL');
   const introspectionUrl = readUrlEnv('OAUTH_INTROSPECTION_URL');
-  const resourceUrl =
-    parseUrlEnv(env.OAUTH_RESOURCE_URL, 'OAUTH_RESOURCE_URL') ??
-    new URL('/mcp', baseUrl);
+  const resourceUrl = new URL('/mcp', baseUrl);
 
   return {
     issuerUrl,
@@ -252,16 +210,7 @@ function readOAuthUrls(baseUrl: URL): OAuthUrls {
   };
 }
 
-function resolveAuthMode(
-  authModeEnv: string | undefined,
-  urls: OAuthModeInputs
-): AuthMode {
-  if (authModeEnv) {
-    const normalized = authModeEnv.toLowerCase();
-    if (normalized === 'oauth') return 'oauth';
-    if (normalized === 'static') return 'static';
-  }
-
+function resolveAuthMode(urls: OAuthModeInputs): AuthMode {
   const oauthConfigured = [
     urls.issuerUrl,
     urls.authorizationUrl,
@@ -280,7 +229,7 @@ function collectStaticTokens(): string[] {
 
 function buildAuthConfig(baseUrl: URL): AuthConfig {
   const urls = readOAuthUrls(baseUrl);
-  const mode = resolveAuthMode(env.AUTH_MODE, urls);
+  const mode = resolveAuthMode(urls);
 
   return {
     mode,
@@ -288,12 +237,7 @@ function buildAuthConfig(baseUrl: URL): AuthConfig {
     requiredScopes: parseList(env.OAUTH_REQUIRED_SCOPES),
     clientId: env.OAUTH_CLIENT_ID,
     clientSecret: env.OAUTH_CLIENT_SECRET,
-    introspectionTimeoutMs: parseInteger(
-      env.OAUTH_INTROSPECTION_TIMEOUT_MS,
-      5000,
-      1000,
-      30000
-    ),
+    introspectionTimeoutMs: 5000,
     staticTokens: collectStaticTokens(),
   };
 }
@@ -363,29 +307,11 @@ export const config = {
     sessionInitTimeoutMs: DEFAULT_SESSION_INIT_TIMEOUT_MS,
     maxSessions: DEFAULT_MAX_SESSIONS,
     http: {
-      headersTimeoutMs: parseOptionalInteger(
-        env.SERVER_HEADERS_TIMEOUT_MS,
-        SERVER_TIMEOUT_RANGE.min,
-        SERVER_TIMEOUT_RANGE.max
-      ),
-      requestTimeoutMs: parseOptionalInteger(
-        env.SERVER_REQUEST_TIMEOUT_MS,
-        SERVER_TIMEOUT_RANGE.min,
-        SERVER_TIMEOUT_RANGE.max
-      ),
-      keepAliveTimeoutMs: parseOptionalInteger(
-        env.SERVER_KEEP_ALIVE_TIMEOUT_MS,
-        SERVER_TIMEOUT_RANGE.min,
-        SERVER_TIMEOUT_RANGE.max
-      ),
-      shutdownCloseIdleConnections: parseBoolean(
-        env.SERVER_SHUTDOWN_CLOSE_IDLE,
-        false
-      ),
-      shutdownCloseAllConnections: parseBoolean(
-        env.SERVER_SHUTDOWN_CLOSE_ALL,
-        false
-      ),
+      headersTimeoutMs: undefined,
+      requestTimeoutMs: undefined,
+      keepAliveTimeoutMs: undefined,
+      shutdownCloseIdleConnections: true,
+      shutdownCloseAllConnections: false,
     },
   },
   fetcher: {
@@ -396,22 +322,17 @@ export const config = {
   },
   transform: {
     timeoutMs: DEFAULT_TRANSFORM_TIMEOUT_MS,
-    stageWarnRatio: parseFloatOrDefault(env.TRANSFORM_STAGE_WARN_RATIO, 0.5),
-    metadataFormat: parseTransformMetadataFormat(env.TRANSFORM_METADATA_FORMAT),
-    maxWorkerScale: parseInteger(env.TRANSFORM_WORKER_MAX_SCALE, 4, 0, 16),
+    stageWarnRatio: 0.5,
+    metadataFormat: 'markdown',
+    maxWorkerScale: 4,
   },
   tools: {
-    enabled: parseList(env.ENABLED_TOOLS ?? DEFAULT_ENABLED_TOOLS),
-    timeoutMs: parseInteger(
-      env.TOOL_TIMEOUT_MS,
-      DEFAULT_TOOL_TIMEOUT_MS,
-      1000,
-      300000
-    ),
+    enabled: ['fetch-url'],
+    timeoutMs: DEFAULT_TOOL_TIMEOUT_MS,
   },
   cache: {
     enabled: parseBoolean(env.CACHE_ENABLED, true),
-    ttl: parseInteger(env.CACHE_TTL, 3600, 60, 86400),
+    ttl: 86400,
     maxKeys: 100,
   },
   extraction: {
@@ -421,31 +342,28 @@ export const config = {
   noiseRemoval: {
     extraTokens: parseList(env.SUPERFETCH_EXTRA_NOISE_TOKENS),
     extraSelectors: parseList(env.SUPERFETCH_EXTRA_NOISE_SELECTORS),
-    enabledCategories: parseList(
-      env.NOISE_REMOVAL_CATEGORIES ?? DEFAULT_NOISE_REMOVAL_CATEGORIES
-    ),
-    debug: parseBoolean(env.DEBUG_NOISE_REMOVAL, false),
-    aggressiveMode: parseBoolean(env.SUPERFETCH_AGGRESSIVE_NOISE, false),
-    preserveSvgCanvas: parseBoolean(env.SUPERFETCH_PRESERVE_SVG_CANVAS, false),
+    enabledCategories: [
+      'cookie-banners',
+      'newsletters',
+      'social-share',
+      'nav-footer',
+    ],
+    debug: false,
+    aggressiveMode: false,
+    preserveSvgCanvas: false,
     weights: {
-      hidden: parseInteger(env.NOISE_WEIGHT_HIDDEN, 50, 0, 100),
-      structural: parseInteger(env.NOISE_WEIGHT_STRUCTURAL, 50, 0, 100),
-      promo: parseInteger(env.NOISE_WEIGHT_PROMO, 35, 0, 100),
-      stickyFixed: parseInteger(env.NOISE_WEIGHT_STICKY_FIXED, 30, 0, 100),
-      threshold: parseInteger(env.NOISE_WEIGHT_THRESHOLD, 50, 0, 100),
+      hidden: 50,
+      structural: 50,
+      promo: 35,
+      stickyFixed: 30,
+      threshold: 50,
     },
   },
   markdownCleanup: {
-    promoteOrphanHeadings: parseBoolean(
-      env.MARKDOWN_PROMOTE_ORPHAN_HEADINGS,
-      true
-    ),
-    removeSkipLinks: parseBoolean(env.MARKDOWN_REMOVE_SKIP_LINKS, true),
-    removeTocBlocks: parseBoolean(env.MARKDOWN_REMOVE_TOC_BLOCKS, true),
-    removeTypeDocComments: parseBoolean(
-      env.MARKDOWN_REMOVE_TYPEDOC_COMMENTS,
-      false
-    ),
+    promoteOrphanHeadings: true,
+    removeSkipLinks: true,
+    removeTocBlocks: true,
+    removeTypeDocComments: true,
   },
   logging: {
     level: parseLogLevel(env.LOG_LEVEL),
@@ -467,8 +385,8 @@ export const config = {
   auth: buildAuthConfig(baseUrl),
   rateLimit: {
     enabled: true,
-    maxRequests: parseInteger(env.RATE_LIMIT_MAX, 100, 1, 10000),
-    windowMs: parseInteger(env.RATE_LIMIT_WINDOW_MS, 60000, 1000, 3600000),
+    maxRequests: 100,
+    windowMs: 60000,
     cleanupIntervalMs: 60000,
   },
   runtime: runtimeState,
