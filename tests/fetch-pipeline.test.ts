@@ -8,19 +8,6 @@ import { executeFetchPipeline } from '../dist/tools.js';
 
 type CachedPayload = { value: string };
 
-function withMockedFetch(
-  mock: typeof fetch,
-  execute: () => Promise<void>
-): Promise<void> {
-  const originalFetch: typeof fetch = fetch;
-  (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = mock;
-
-  return execute().finally(() => {
-    (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch =
-      originalFetch;
-  });
-}
-
 function createCachedPayload(value: string): CachedPayload {
   return { value };
 }
@@ -70,7 +57,7 @@ describe('executeFetchPipeline', () => {
     assert.deepEqual(result.data, payload);
   });
 
-  it('bypasses cache when a deserializer is missing', async () => {
+  it('bypasses cache when a deserializer is missing', async (t) => {
     const url = buildTestUrl();
     const normalizedUrl = normalizeUrl(url).normalizedUrl;
     const cacheNamespace = 'pipeline-test-missing-deserializer';
@@ -82,29 +69,26 @@ describe('executeFetchPipeline', () => {
       url: normalizedUrl,
     });
 
-    await withMockedFetch(
-      async () => {
-        return new Response('<p>fresh</p>', { status: 200 });
-      },
-      async () => {
-        const result = await executeFetchPipeline<CachedPayload>({
-          url,
-          cacheNamespace,
-          transform: async (input) => {
-            const text = new TextDecoder(input.encoding).decode(input.buffer);
-            return createCachedPayload(`fresh:${text}`);
-          },
-        });
+    t.mock.method(globalThis, 'fetch', async () => {
+      return new Response('<p>fresh</p>', { status: 200 });
+    });
 
-        assert.equal(result.fromCache, false);
-        assert.equal(result.cacheKey, cacheKey);
-        assert.equal(result.url, normalizedUrl);
-        assert.equal(result.data.value, 'fresh:<p>fresh</p>');
-      }
-    );
+    const result = await executeFetchPipeline<CachedPayload>({
+      url,
+      cacheNamespace,
+      transform: async (input) => {
+        const text = new TextDecoder(input.encoding).decode(input.buffer);
+        return createCachedPayload(`fresh:${text}`);
+      },
+    });
+
+    assert.equal(result.fromCache, false);
+    assert.equal(result.cacheKey, cacheKey);
+    assert.equal(result.url, normalizedUrl);
+    assert.equal(result.data.value, 'fresh:<p>fresh</p>');
   });
 
-  it('caches even when cacheVary is large', async () => {
+  it('caches even when cacheVary is large', async (t) => {
     const url = buildTestUrl();
     const normalizedUrl = normalizeUrl(url).normalizedUrl;
     const cacheNamespace = 'pipeline-test-large-vary';
@@ -115,72 +99,66 @@ describe('executeFetchPipeline', () => {
 
     let transformCalls = 0;
 
-    await withMockedFetch(
-      async () => {
-        return new Response('<p>fresh</p>', { status: 200 });
+    t.mock.method(globalThis, 'fetch', async () => {
+      return new Response('<p>fresh</p>', { status: 200 });
+    });
+
+    const first = await executeFetchPipeline<CachedPayload>({
+      url,
+      cacheNamespace,
+      cacheVary,
+      deserialize: deserializePayload,
+      serialize: serializePayload,
+      transform: async (input) => {
+        const text = new TextDecoder(input.encoding).decode(input.buffer);
+        transformCalls += 1;
+        return createCachedPayload(`fresh:${text}`);
       },
-      async () => {
-        const first = await executeFetchPipeline<CachedPayload>({
-          url,
-          cacheNamespace,
-          cacheVary,
-          deserialize: deserializePayload,
-          serialize: serializePayload,
-          transform: async (input) => {
-            const text = new TextDecoder(input.encoding).decode(input.buffer);
-            transformCalls += 1;
-            return createCachedPayload(`fresh:${text}`);
-          },
-        });
+    });
 
-        const second = await executeFetchPipeline<CachedPayload>({
-          url,
-          cacheNamespace,
-          cacheVary,
-          deserialize: deserializePayload,
-          serialize: serializePayload,
-          transform: async (input) => {
-            const text = new TextDecoder(input.encoding).decode(input.buffer);
-            transformCalls += 1;
-            return createCachedPayload(`fresh:${text}`);
-          },
-        });
+    const second = await executeFetchPipeline<CachedPayload>({
+      url,
+      cacheNamespace,
+      cacheVary,
+      deserialize: deserializePayload,
+      serialize: serializePayload,
+      transform: async (input) => {
+        const text = new TextDecoder(input.encoding).decode(input.buffer);
+        transformCalls += 1;
+        return createCachedPayload(`fresh:${text}`);
+      },
+    });
 
-        assert.equal(first.fromCache, false);
-        assert.equal(second.fromCache, true);
-        assert.equal(first.cacheKey, cacheKey);
-        assert.equal(second.cacheKey, cacheKey);
-        assert.equal(first.url, normalizedUrl);
-        assert.equal(second.url, normalizedUrl);
-        assert.equal(transformCalls, 1);
-      }
-    );
+    assert.equal(first.fromCache, false);
+    assert.equal(second.fromCache, true);
+    assert.equal(first.cacheKey, cacheKey);
+    assert.equal(second.cacheKey, cacheKey);
+    assert.equal(first.url, normalizedUrl);
+    assert.equal(second.url, normalizedUrl);
+    assert.equal(transformCalls, 1);
   });
 
-  it('returns transformed raw URL when source is a GitHub blob', async () => {
+  it('returns transformed raw URL when source is a GitHub blob', async (t) => {
     const url = 'https://github.com/octocat/Hello-World/blob/main/README.md';
     const expectedRaw =
       'https://raw.githubusercontent.com/octocat/Hello-World/main/README.md';
     const cacheNamespace = 'pipeline-test-raw-url';
 
-    await withMockedFetch(
-      async () => {
-        return new Response('raw content', { status: 200 });
-      },
-      async () => {
-        const result = await executeFetchPipeline<string>({
-          url,
-          cacheNamespace,
-          transform: async (input, normalizedUrl) => {
-            assert.equal(normalizedUrl, expectedRaw);
-            const text = new TextDecoder(input.encoding).decode(input.buffer);
-            return text;
-          },
-        });
+    t.mock.method(globalThis, 'fetch', async () => {
+      return new Response('raw content', { status: 200 });
+    });
 
-        assert.equal(result.fromCache, false);
-        assert.equal(result.url, expectedRaw);
-      }
-    );
+    const result = await executeFetchPipeline<string>({
+      url,
+      cacheNamespace,
+      transform: async (input, normalizedUrl) => {
+        assert.equal(normalizedUrl, expectedRaw);
+        const text = new TextDecoder(input.encoding).decode(input.buffer);
+        return text;
+      },
+    });
+
+    assert.equal(result.fromCache, false);
+    assert.equal(result.url, expectedRaw);
   });
 });

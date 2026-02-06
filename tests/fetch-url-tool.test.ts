@@ -17,15 +17,6 @@ after(async () => {
   await shutdownTransformWorkerPool();
 });
 
-function withMockedFetch(mock, execute) {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = mock;
-
-  return execute().finally(() => {
-    globalThis.fetch = originalFetch;
-  });
-}
-
 describe('fetchUrlToolHandler', () => {
   it('inserts spaces after inline links/code without touching fenced code blocks', () => {
     const input = [
@@ -67,37 +58,36 @@ describe('fetchUrlToolHandler', () => {
     });
   });
 
-  it('returns markdown content for successful fetches', async () => {
+  it('returns markdown content for successful fetches', async (t) => {
     const html =
       '<html><head><title>Test Page</title></head><body><p>Hello</p></body></html>';
 
-    await withMockedFetch(
-      async () => {
-        return new Response(html, {
-          status: 200,
-          headers: { 'content-type': 'text/html' },
-        });
-      },
-      async () => {
-        const response = await fetchUrlToolHandler({
-          url: 'https://example.com/test',
-        });
+    t.mock.method(globalThis, 'fetch', async () => {
+      return new Response(html, {
+        status: 200,
+        headers: { 'content-type': 'text/html' },
+      });
+    });
 
-        const structured = response.structuredContent;
-        assert.ok(structured);
-        assert.equal(structured.url, 'https://example.com/test');
-        assert.equal(typeof structured.markdown, 'string');
-        assert.ok((structured.markdown as string).includes('Hello'));
-      }
-    );
+    const response = await fetchUrlToolHandler({
+      url: 'https://example.com/test',
+    });
+
+    const structured = response.structuredContent;
+    assert.ok(structured);
+    assert.equal(structured.url, 'https://example.com/test');
+    assert.equal(typeof structured.markdown, 'string');
+    assert.ok((structured.markdown as string).includes('Hello'));
   });
 
-  it('respects cancellation via the MCP request abort signal', async () => {
+  it('respects cancellation via the MCP request abort signal', async (t) => {
     const controller = new AbortController();
     controller.abort();
 
-    await withMockedFetch(
-      async (_url, init) => {
+    t.mock.method(
+      globalThis,
+      'fetch',
+      async (_url: RequestInfo | URL, init?: RequestInit) => {
         const signal = init?.signal as unknown;
         if (
           typeof signal === 'object' &&
@@ -113,24 +103,23 @@ describe('fetchUrlToolHandler', () => {
           status: 200,
           headers: { 'content-type': 'text/html' },
         });
-      },
-      async () => {
-        const url = 'https://example.com/cancelled-test';
-        const response = await fetchUrlToolHandler(
-          { url },
-          { signal: controller.signal }
-        );
-
-        assert.equal(response.isError, true);
-        const structured = response.structuredContent;
-        assert.ok(structured);
-        assert.equal(structured.url, url);
-        assert.match(String(structured.error), /cancel|abort/i);
       }
     );
+
+    const url = 'https://example.com/cancelled-test';
+    const response = await fetchUrlToolHandler(
+      { url },
+      { signal: controller.signal }
+    );
+
+    assert.equal(response.isError, true);
+    const structured = response.structuredContent;
+    assert.ok(structured);
+    assert.equal(structured.url, url);
+    assert.match(String(structured.error), /cancel|abort/i);
   });
 
-  it('exposes truncated flag when inline content is trimmed', async () => {
+  it('exposes truncated flag when inline content is trimmed', async (t) => {
     const originalCacheEnabled = config.cache.enabled;
     const originalInlineLimit = config.constants.maxInlineContentChars;
     config.cache.enabled = false;
@@ -139,23 +128,20 @@ describe('fetchUrlToolHandler', () => {
     const html = `<html><body><p>${'a'.repeat(21000)}</p></body></html>`;
 
     try {
-      await withMockedFetch(
-        async () => {
-          return new Response(html, {
-            status: 200,
-            headers: { 'content-type': 'text/html' },
-          });
-        },
-        async () => {
-          const response = await fetchUrlToolHandler({
-            url: 'https://example.com/large',
-          });
+      t.mock.method(globalThis, 'fetch', async () => {
+        return new Response(html, {
+          status: 200,
+          headers: { 'content-type': 'text/html' },
+        });
+      });
 
-          const structured = response.structuredContent;
-          assert.ok(structured);
-          assert.equal(structured.truncated, true);
-        }
-      );
+      const response = await fetchUrlToolHandler({
+        url: 'https://example.com/large',
+      });
+
+      const structured = response.structuredContent;
+      assert.ok(structured);
+      assert.equal(structured.truncated, true);
     } finally {
       config.cache.enabled = originalCacheEnabled;
       config.constants.maxInlineContentChars = originalInlineLimit;
@@ -180,7 +166,7 @@ describe('fetchUrlToolHandler', () => {
     assert.equal(structured.truncated, true);
   });
 
-  it('returns truncated markdown even when cache + http mode are enabled', async () => {
+  it('returns truncated markdown even when cache + http mode are enabled', async (t) => {
     const originalHttpMode = config.runtime.httpMode;
     const originalCacheEnabled = config.cache.enabled;
     const originalInlineLimit = config.constants.maxInlineContentChars;
@@ -191,25 +177,22 @@ describe('fetchUrlToolHandler', () => {
     const html = `<html><body><p>${'a'.repeat(25000)}</p></body></html>`;
 
     try {
-      await withMockedFetch(
-        async () => {
-          return new Response(html, {
-            status: 200,
-            headers: { 'content-type': 'text/html' },
-          });
-        },
-        async () => {
-          const response = await fetchUrlToolHandler({
-            url: 'https://example.com/large-http',
-          });
+      t.mock.method(globalThis, 'fetch', async () => {
+        return new Response(html, {
+          status: 200,
+          headers: { 'content-type': 'text/html' },
+        });
+      });
 
-          const structured = response.structuredContent;
-          assert.ok(structured);
-          assert.equal(structured.truncated, true);
-          assert.equal(typeof structured.markdown, 'string');
-          assert.ok(String(structured.markdown).includes('[truncated]'));
-        }
-      );
+      const response = await fetchUrlToolHandler({
+        url: 'https://example.com/large-http',
+      });
+
+      const structured = response.structuredContent;
+      assert.ok(structured);
+      assert.equal(structured.truncated, true);
+      assert.equal(typeof structured.markdown, 'string');
+      assert.ok(String(structured.markdown).includes('[truncated]'));
     } finally {
       config.runtime.httpMode = originalHttpMode;
       config.cache.enabled = originalCacheEnabled;
@@ -217,7 +200,7 @@ describe('fetchUrlToolHandler', () => {
     }
   });
 
-  it('preserves anchor lists without a TOC heading', async () => {
+  it('preserves anchor lists without a TOC heading', async (t) => {
     const html = `
       <html>
         <body>
@@ -229,53 +212,47 @@ describe('fetchUrlToolHandler', () => {
       </html>
     `;
 
-    await withMockedFetch(
-      async () => {
-        return new Response(html, {
-          status: 200,
-          headers: { 'content-type': 'text/html' },
-        });
-      },
-      async () => {
-        const response = await fetchUrlToolHandler({
-          url: 'https://example.com/anchors',
-        });
+    t.mock.method(globalThis, 'fetch', async () => {
+      return new Response(html, {
+        status: 200,
+        headers: { 'content-type': 'text/html' },
+      });
+    });
 
-        const structured = response.structuredContent;
-        assert.ok(structured);
-        const markdown = String(structured.markdown);
-        assert.ok(markdown.includes('[Intro](#intro)'));
-        assert.ok(markdown.includes('[Usage](#usage)'));
-      }
-    );
+    const response = await fetchUrlToolHandler({
+      url: 'https://example.com/anchors',
+    });
+
+    const structured = response.structuredContent;
+    assert.ok(structured);
+    const markdown = String(structured.markdown);
+    assert.ok(markdown.includes('[Intro](#intro)'));
+    assert.ok(markdown.includes('[Usage](#usage)'));
   });
 
-  it('preserves raw markdown content even with inline HTML', async () => {
+  it('preserves raw markdown content even with inline HTML', async (t) => {
     const rawContent =
       '# Title\n\n<details><summary>More</summary>Details</details>';
 
-    await withMockedFetch(
-      async () => {
-        return new Response(rawContent, {
-          status: 200,
-          headers: { 'content-type': 'text/plain' },
-        });
-      },
-      async () => {
-        const response = await fetchUrlToolHandler({
-          url: 'https://example.com/readme.md',
-        });
+    t.mock.method(globalThis, 'fetch', async () => {
+      return new Response(rawContent, {
+        status: 200,
+        headers: { 'content-type': 'text/plain' },
+      });
+    });
 
-        const structured = response.structuredContent;
-        assert.ok(structured);
-        const markdown = String(structured.markdown);
-        assert.ok(markdown.includes('<details>'));
-        assert.ok(markdown.includes('Source: https://example.com/readme.md'));
-      }
-    );
+    const response = await fetchUrlToolHandler({
+      url: 'https://example.com/readme.md',
+    });
+
+    const structured = response.structuredContent;
+    assert.ok(structured);
+    const markdown = String(structured.markdown);
+    assert.ok(markdown.includes('<details>'));
+    assert.ok(markdown.includes('Source: https://example.com/readme.md'));
   });
 
-  it('returns an error response when markdown conversion fails', async () => {
+  it('returns an error response when markdown conversion fails', async (t) => {
     // Ensure clean state
     await shutdownTransformWorkerPool();
 
@@ -283,112 +260,99 @@ describe('fetchUrlToolHandler', () => {
     const originalMaxWorkerScale = config.transform.maxWorkerScale;
     config.transform.maxWorkerScale = 0;
 
-    const originalTranslate = NodeHtmlMarkdown.prototype.translate;
-    NodeHtmlMarkdown.prototype.translate = () => {
-      throw new Error('Translate failed');
-    };
-
     try {
-      await withMockedFetch(
-        async () => {
-          return new Response('<html><body><p>Fail</p></body></html>', {
-            status: 200,
-            headers: { 'content-type': 'text/html' },
-          });
-        },
-        async () => {
-          const response = await fetchUrlToolHandler({
-            url: 'https://example.com/convert-fail',
-          });
+      t.mock.method(NodeHtmlMarkdown.prototype, 'translate', () => {
+        throw new Error('Translate failed');
+      });
 
-          assert.equal(response.isError, true);
-          const structured = response.structuredContent;
-          assert.ok(structured);
-          assert.match(String(structured.error), /convert|markdown/i);
-        }
-      );
+      t.mock.method(globalThis, 'fetch', async () => {
+        return new Response('<html><body><p>Fail</p></body></html>', {
+          status: 200,
+          headers: { 'content-type': 'text/html' },
+        });
+      });
+
+      const response = await fetchUrlToolHandler({
+        url: 'https://example.com/convert-fail',
+      });
+
+      assert.equal(response.isError, true);
+      const structured = response.structuredContent;
+      assert.ok(structured);
+      assert.match(String(structured.error), /convert|markdown/i);
     } finally {
-      NodeHtmlMarkdown.prototype.translate = originalTranslate;
       config.transform.maxWorkerScale = originalMaxWorkerScale;
     }
   });
 
-  it('includes status code and details for fetch errors', async () => {
-    await withMockedFetch(
-      async () => {
-        return new Response('busy', {
-          status: 429,
-          headers: { 'retry-after': '30' },
-        });
-      },
-      async () => {
-        const response = await fetchUrlToolHandler({
-          url: 'https://example.com/rate-limited',
-        });
+  it('includes status code and details for fetch errors', async (t) => {
+    t.mock.method(globalThis, 'fetch', async () => {
+      return new Response('busy', {
+        status: 429,
+        headers: { 'retry-after': '30' },
+      });
+    });
 
-        assert.equal(response.isError, true);
-        const structured = response.structuredContent;
-        assert.ok(structured);
-        assert.equal(structured.statusCode, 429);
-        assert.equal(structured.details?.retryAfter, 30);
-      }
-    );
+    const response = await fetchUrlToolHandler({
+      url: 'https://example.com/rate-limited',
+    });
+
+    assert.equal(response.isError, true);
+    const structured = response.structuredContent;
+    assert.ok(structured);
+    assert.equal(structured.statusCode, 429);
+    const details = structured.details as { retryAfter?: number } | undefined;
+    assert.equal(details?.retryAfter, 30);
   });
 
-  it('closes tilde code fences when truncating inline content', async () => {
+  it('closes tilde code fences when truncating inline content', async (t) => {
     const originalInlineLimit = config.constants.maxInlineContentChars;
     config.constants.maxInlineContentChars = 20000;
     const longBody = 'a'.repeat(config.constants.maxInlineContentChars + 500);
     const rawContent = `# Title\n\n~~~\n${longBody}\n~~~\n`;
 
     try {
-      await withMockedFetch(
-        async () => {
-          return new Response(rawContent, {
-            status: 200,
-            headers: { 'content-type': 'text/plain' },
-          });
-        },
-        async () => {
-          const response = await fetchUrlToolHandler({
-            url: 'https://example.com/tilde-fence',
-          });
+      t.mock.method(globalThis, 'fetch', async () => {
+        return new Response(rawContent, {
+          status: 200,
+          headers: { 'content-type': 'text/plain' },
+        });
+      });
 
-          const structured = response.structuredContent;
-          assert.ok(structured);
-          assert.equal(structured.truncated, true);
-          const markdown = String(structured.markdown);
-          assert.match(markdown, /~~~\n\.\.\.\[truncated\]/);
-          assert.equal(markdown.includes('```\n...[truncated]'), false);
-        }
-      );
+      const response = await fetchUrlToolHandler({
+        url: 'https://example.com/tilde-fence',
+      });
+
+      const structured = response.structuredContent;
+      assert.ok(structured);
+      assert.equal(structured.truncated, true);
+      const markdown = String(structured.markdown);
+      assert.match(markdown, /~~~\n\.\.\.\[truncated\]/);
+      assert.equal(markdown.includes('```\n...[truncated]'), false);
     } finally {
       config.constants.maxInlineContentChars = originalInlineLimit;
     }
   });
 
-  it('converts html fragments even when markdown-like markers appear', async () => {
+  it('converts html fragments even when markdown-like markers appear', async (t) => {
     const html = `<div>\n# Title\n</div>\n<p>Body</p>`;
 
-    await withMockedFetch(
-      async () => {
-        return new Response(html, {
-          status: 200,
-          headers: { 'content-type': 'text/plain' },
-        });
-      },
-      async () => {
-        const response = await fetchUrlToolHandler({
-          url: 'https://example.com/html-fragment',
-        });
+    t.mock.method(globalThis, 'fetch', async () => {
+      return new Response(html, {
+        status: 200,
+        headers: { 'content-type': 'text/plain' },
+      });
+    });
 
-        const structured = response.structuredContent;
-        assert.ok(structured);
-        const markdown = String(structured.markdown);
-        assert.equal(markdown.includes('<div>'), false);
-        assert.equal(markdown.includes('<p>'), false);
-      }
-    );
+    const response = await fetchUrlToolHandler({
+      url: 'https://example.com/html-fragment',
+    });
+
+    const structured = response.structuredContent;
+    assert.ok(structured);
+    const markdown = String(structured.markdown);
+    assert.equal(markdown.includes('<div>'), false);
+    assert.equal(markdown.includes('<p>'), false);
   });
 
   it('does not drop aggressive promo matches inside main content', () => {
