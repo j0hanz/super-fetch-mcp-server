@@ -13,7 +13,7 @@ after(async () => {
 });
 
 describe('Inline content truncation', () => {
-  it('does not produce malformed markdown when truncating mid-code-fence', async () => {
+  it('does not produce malformed markdown when truncating mid-code-fence', async (t) => {
     const originalInlineLimit = config.constants.maxInlineContentChars;
     config.constants.maxInlineContentChars = 20000;
     // Create a mock fetch that returns markdown with a code fence
@@ -32,16 +32,14 @@ Text after fence.
 `;
 
     // Mock fetch to return our test content
-    const mockFetch = async () => {
+    const mockFetch = async (_url: RequestInfo | URL, _init?: RequestInit) => {
       return new Response(markdownWithCodeFence, {
         status: 200,
         headers: { 'content-type': 'text/plain' },
       });
     };
 
-    // Temporarily replace global fetch
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = mockFetch as typeof fetch;
+    t.mock.method(globalThis, 'fetch', mockFetch);
 
     try {
       const result = await fetchUrlToolHandler(
@@ -93,12 +91,11 @@ Text after fence.
         );
       }
     } finally {
-      globalThis.fetch = originalFetch;
       config.constants.maxInlineContentChars = originalInlineLimit;
     }
   });
 
-  it('handles truncation of nested code fences correctly', async () => {
+  it('handles truncation of nested code fences correctly', async (t) => {
     const originalInlineLimit = config.constants.maxInlineContentChars;
     config.constants.maxInlineContentChars = 20000;
     // Test with markdown containing nested fences (e.g., in documentation)
@@ -118,15 +115,14 @@ ${longContent}
 End of example.
 `;
 
-    const mockFetch = async () => {
+    const mockFetch = async (_url: RequestInfo | URL, _init?: RequestInit) => {
       return new Response(nestedFenceMarkdown, {
         status: 200,
         headers: { 'content-type': 'text/plain' },
       });
     };
 
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = mockFetch as typeof fetch;
+    t.mock.method(globalThis, 'fetch', mockFetch);
 
     try {
       const result = await fetchUrlToolHandler(
@@ -161,7 +157,6 @@ End of example.
         );
       }
     } finally {
-      globalThis.fetch = originalFetch;
       config.constants.maxInlineContentChars = originalInlineLimit;
     }
   });

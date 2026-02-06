@@ -892,17 +892,6 @@ export interface FetchTelemetryContext {
 
 const SLOW_REQUEST_THRESHOLD_MS = 5000;
 
-function withContextIds(fields: {
-  contextRequestId?: string;
-  operationId?: string;
-}): Record<string, string> {
-  const result: Record<string, string> = {};
-  if (fields.contextRequestId)
-    result.contextRequestId = fields.contextRequestId;
-  if (fields.operationId) result.operationId = fields.operationId;
-  return result;
-}
-
 class FetchTelemetry {
   constructor(
     private readonly logger: Logger,
@@ -924,25 +913,29 @@ class FetchTelemetry {
       startTime: performance.now(),
       url: safeUrl,
       method: method.toUpperCase(),
-      ...(contextRequestId ? { contextRequestId } : {}),
-      ...(operationId ? { operationId } : {}),
     };
+    if (contextRequestId) ctx.contextRequestId = contextRequestId;
+    if (operationId) ctx.operationId = operationId;
 
-    this.publish({
+    const event: FetchChannelEvent = {
       v: 1,
       type: 'start',
       requestId: ctx.requestId,
       method: ctx.method,
       url: ctx.url,
-      ...withContextIds(ctx),
-    });
+    };
+    if (ctx.contextRequestId) event.contextRequestId = ctx.contextRequestId;
+    if (ctx.operationId) event.operationId = ctx.operationId;
+    this.publish(event);
 
-    this.logger.debug('HTTP Request', {
+    const logData: Record<string, unknown> = {
       requestId: ctx.requestId,
       method: ctx.method,
       url: ctx.url,
-      ...withContextIds(ctx),
-    });
+    };
+    if (ctx.contextRequestId) logData.contextRequestId = ctx.contextRequestId;
+    if (ctx.operationId) logData.operationId = ctx.operationId;
+    this.logger.debug('HTTP Request', logData);
 
     return ctx;
   }
@@ -955,14 +948,17 @@ class FetchTelemetry {
     const duration = performance.now() - context.startTime;
     const durationLabel = `${Math.round(duration)}ms`;
 
-    this.publish({
+    const event: FetchChannelEvent = {
       v: 1,
       type: 'end',
       requestId: context.requestId,
       status: response.status,
       duration,
-      ...withContextIds(context),
-    });
+    };
+    if (context.contextRequestId)
+      event.contextRequestId = context.contextRequestId;
+    if (context.operationId) event.operationId = context.operationId;
+    this.publish(event);
 
     const contentType = response.headers.get('content-type') ?? undefined;
     const contentLengthHeader = response.headers.get('content-length');
@@ -970,23 +966,31 @@ class FetchTelemetry {
       contentLengthHeader ??
       (contentSize === undefined ? undefined : String(contentSize));
 
-    this.logger.debug('HTTP Response', {
+    const logData: Record<string, unknown> = {
       requestId: context.requestId,
       status: response.status,
       url: context.url,
       duration: durationLabel,
-      ...withContextIds(context),
-      ...(contentType ? { contentType } : {}),
-      ...(size ? { size } : {}),
-    });
+    };
+    if (context.contextRequestId)
+      logData.contextRequestId = context.contextRequestId;
+    if (context.operationId) logData.operationId = context.operationId;
+    if (contentType) logData.contentType = contentType;
+    if (size) logData.size = size;
+
+    this.logger.debug('HTTP Response', logData);
 
     if (duration > SLOW_REQUEST_THRESHOLD_MS) {
-      this.logger.warn('Slow HTTP request detected', {
+      const warnData: Record<string, unknown> = {
         requestId: context.requestId,
         url: context.url,
         duration: durationLabel,
-        ...withContextIds(context),
-      });
+      };
+      if (context.contextRequestId)
+        warnData.contextRequestId = context.contextRequestId;
+      if (context.operationId) warnData.operationId = context.operationId;
+
+      this.logger.warn('Slow HTTP request detected', warnData);
     }
   }
 
@@ -999,38 +1003,38 @@ class FetchTelemetry {
     const err = isError(error) ? error : new Error(String(error));
     const code = isSystemError(err) ? err.code : undefined;
 
-    this.publish({
+    const event: Extract<FetchChannelEvent, { type: 'error' }> = {
       v: 1,
       type: 'error',
       requestId: context.requestId,
       url: context.url,
       error: err.message,
       duration,
-      ...(code !== undefined ? { code } : {}),
-      ...(status !== undefined ? { status } : {}),
-      ...withContextIds(context),
-    });
+    };
+    if (code !== undefined) event.code = code;
+    if (status !== undefined) event.status = status;
+    if (context.contextRequestId)
+      event.contextRequestId = context.contextRequestId;
+    if (context.operationId) event.operationId = context.operationId;
+    this.publish(event);
 
-    if (status === 429) {
-      this.logger.warn('HTTP Request Error', {
-        requestId: context.requestId,
-        url: context.url,
-        status,
-        code,
-        error: err.message,
-        ...withContextIds(context),
-      });
-      return;
-    }
-
-    this.logger.error('HTTP Request Error', {
+    const logData: Record<string, unknown> = {
       requestId: context.requestId,
       url: context.url,
       status,
       code,
       error: err.message,
-      ...withContextIds(context),
-    });
+    };
+    if (context.contextRequestId)
+      logData.contextRequestId = context.contextRequestId;
+    if (context.operationId) logData.operationId = context.operationId;
+
+    if (status === 429) {
+      this.logger.warn('HTTP Request Error', logData);
+      return;
+    }
+
+    this.logger.error('HTTP Request Error', logData);
   }
 
   private publish(event: FetchChannelEvent): void {
@@ -1225,22 +1229,22 @@ function isUnicodeWideEncoding(encoding: string | undefined): boolean {
   );
 }
 
+const BOM_SIGNATURES: readonly {
+  bytes: readonly number[];
+  encoding: string;
+}[] = [
+  // 4-byte BOMs must come first to avoid false matches with 2-byte prefixes
+  { bytes: [0xff, 0xfe, 0x00, 0x00], encoding: 'utf-32le' },
+  { bytes: [0x00, 0x00, 0xfe, 0xff], encoding: 'utf-32be' },
+  { bytes: [0xef, 0xbb, 0xbf], encoding: 'utf-8' },
+  { bytes: [0xff, 0xfe], encoding: 'utf-16le' },
+  { bytes: [0xfe, 0xff], encoding: 'utf-16be' },
+];
+
 function detectBomEncoding(buffer: Uint8Array): string | undefined {
-  const startsWith = (...values: number[]): boolean =>
-    values.every((value, index) => buffer[index] === value);
-
-  if (buffer.length >= 4 && startsWith(0xff, 0xfe, 0x00, 0x00)) {
-    return 'utf-32le';
+  for (const { bytes, encoding } of BOM_SIGNATURES) {
+    if (startsWithBytes(buffer, bytes)) return encoding;
   }
-
-  if (buffer.length >= 4 && startsWith(0x00, 0x00, 0xfe, 0xff)) {
-    return 'utf-32be';
-  }
-
-  if (buffer.length >= 3 && startsWith(0xef, 0xbb, 0xbf)) return 'utf-8';
-  if (buffer.length >= 2 && startsWith(0xff, 0xfe)) return 'utf-16le';
-  if (buffer.length >= 2 && startsWith(0xfe, 0xff)) return 'utf-16be';
-
   return undefined;
 }
 
@@ -1354,8 +1358,13 @@ function startsWithBytes(
   buffer: Uint8Array,
   signature: readonly number[]
 ): boolean {
-  if (buffer.length < signature.length) return false;
-  return signature.every((value, index) => buffer[index] === value);
+  const sigLen = signature.length;
+  if (buffer.length < sigLen) return false;
+
+  for (let i = 0; i < sigLen; i += 1) {
+    if (buffer[i] !== signature[i]) return false;
+  }
+  return true;
 }
 
 function hasNullByte(buffer: Uint8Array, limit: number): boolean {
@@ -1364,16 +1373,11 @@ function hasNullByte(buffer: Uint8Array, limit: number): boolean {
 }
 
 function isBinaryContent(buffer: Uint8Array, encoding?: string): boolean {
-  if (
-    BINARY_SIGNATURES.some((signature) => startsWithBytes(buffer, signature))
-  ) {
-    return true;
+  for (const signature of BINARY_SIGNATURES) {
+    if (startsWithBytes(buffer, signature)) return true;
   }
 
-  if (!isUnicodeWideEncoding(encoding) && hasNullByte(buffer, 1000))
-    return true;
-
-  return false;
+  return !isUnicodeWideEncoding(encoding) && hasNullByte(buffer, 1000);
 }
 
 class ResponseTextReader {
@@ -1541,17 +1545,17 @@ class ResponseTextReader {
   }
 }
 
-const DEFAULT_HEADERS = {
+const DEFAULT_HEADERS: Record<string, string> = {
   'User-Agent': config.fetcher.userAgent,
   Accept:
     'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
   'Accept-Language': 'en-US,en;q=0.5',
   'Accept-Encoding': 'gzip, deflate, br',
   Connection: 'keep-alive',
-} as const satisfies Record<string, string>;
+};
 
 function buildHeaders(): Record<string, string> {
-  return { ...DEFAULT_HEADERS };
+  return DEFAULT_HEADERS;
 }
 
 function buildRequestSignal(
@@ -1593,8 +1597,11 @@ function resolveResponseError(
 
 function resolveMediaType(contentType: string | null): string | null {
   if (!contentType) return null;
-  const [mediaType] = contentType.split(';', 1);
-  const trimmed = mediaType?.trim();
+
+  const semiIndex = contentType.indexOf(';');
+  const mediaType =
+    semiIndex === -1 ? contentType : contentType.slice(0, semiIndex);
+  const trimmed = mediaType.trim();
   return trimmed ? trimmed.toLowerCase() : null;
 }
 
@@ -1635,12 +1642,43 @@ function assertSupportedContentType(
   }
 }
 
-function parseContentEncodings(value: string | null): string[] {
-  if (!value) return [];
-  return value
-    .split(',')
-    .map((token) => token.trim().toLowerCase())
-    .filter((token) => token.length > 0);
+function extractEncodingTokens(value: string): string[] {
+  const tokens: string[] = [];
+  let i = 0;
+  const len = value.length;
+
+  while (i < len) {
+    while (
+      i < len &&
+      (value.charCodeAt(i) === 44 || value.charCodeAt(i) <= 32)
+    ) {
+      i += 1;
+    }
+    if (i >= len) break;
+
+    const start = i;
+    while (i < len && value.charCodeAt(i) !== 44) i += 1;
+
+    const token = value.slice(start, i).trim().toLowerCase();
+    if (token) tokens.push(token);
+
+    if (i < len && value.charCodeAt(i) === 44) i += 1;
+  }
+
+  return tokens;
+}
+
+function parseSingleContentEncoding(
+  value: string | null
+): string | null | undefined {
+  if (!value) return null;
+
+  const tokens = extractEncodingTokens(value);
+
+  if (tokens.length === 0) return null;
+  if (tokens.length > 1) return undefined;
+
+  return tokens[0] ?? null;
 }
 
 function createUnsupportedContentEncodingError(
@@ -1664,15 +1702,13 @@ function decodeResponseIfNeeded(
   signal?: AbortSignal
 ): Response {
   const encodingHeader = response.headers.get('content-encoding');
-  const encodings = parseContentEncodings(encodingHeader);
+  const encoding = parseSingleContentEncoding(encodingHeader);
 
-  if (encodings.length === 0) return response;
-  if (encodings.length === 1 && encodings[0] === 'identity') return response;
-  if (encodings.length !== 1) {
+  if (encoding === null) return response;
+  if (encoding === undefined) {
     throw createUnsupportedContentEncodingError(url, encodingHeader ?? '');
   }
-
-  const encoding = encodings[0] ?? '';
+  if (encoding === 'identity') return response;
   if (!response.body) return response;
 
   let decompressor: ReturnType<typeof createGunzip> | null = null;
