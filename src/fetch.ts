@@ -1763,6 +1763,14 @@ async function decodeResponseIfNeeded(
   if (encoding === undefined) {
     throw createUnsupportedContentEncodingError(url, encodingHeader ?? '');
   }
+
+  if (encoding !== 'gzip' && encoding !== 'deflate' && encoding !== 'br') {
+    throw createUnsupportedContentEncodingError(
+      url,
+      encodingHeader ?? encoding
+    );
+  }
+
   if (!response.body) return response;
 
   // Peek at first chunk to check if actually compressed
@@ -1787,9 +1795,7 @@ async function decodeResponseIfNeeded(
     );
   }
 
-  if (
-    !isLikelyCompressed(initialChunk, encoding as 'gzip' | 'deflate' | 'br')
-  ) {
+  if (!isLikelyCompressed(initialChunk, encoding)) {
     // Already decompressed (or invalid), pass through
     const body = createPumpedStream(initialChunk, reader);
     return new Response(body, {
