@@ -187,7 +187,7 @@ describe('transformHtmlToMarkdown favicon rendering', () => {
     // Title should include favicon img tag
     assert.ok(
       result.markdown.includes(
-        '<img src="https://example.com/favicon.png" width="20" height="20" alt="" />'
+        '<img src="https://example.com/favicon.png" width="32" height="32" alt="" />'
       ),
       'Expected favicon img tag in markdown'
     );
@@ -217,7 +217,7 @@ describe('transformHtmlToMarkdown favicon rendering', () => {
     // Default fallback is /favicon.ico
     assert.ok(
       result.markdown.includes(
-        '<img src="https://example.com/favicon.ico" width="20" height="20" alt="" />'
+        '<img src="https://example.com/favicon.ico" width="32" height="32" alt="" />'
       ),
       'Expected fallback favicon img tag in markdown'
     );
