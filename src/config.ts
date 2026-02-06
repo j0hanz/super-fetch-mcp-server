@@ -246,7 +246,7 @@ function parsePort(envValue: string | undefined): number {
   return parseInteger(envValue, 3000, 1024, 65535);
 }
 
-const MAX_HTML_BYTES = 0;
+const MAX_HTML_BYTES = 10 * 1024 * 1024; // 10 MB
 const MAX_INLINE_CONTENT_CHARS = 0;
 const DEFAULT_SESSION_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_SESSION_INIT_TIMEOUT_MS = 10000;

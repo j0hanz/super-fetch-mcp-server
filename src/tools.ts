@@ -92,6 +92,7 @@ export interface PipelineResult<T> {
   data: T;
   fromCache: boolean;
   url: string;
+  originalUrl?: string;
   fetchedAt: string;
   cacheKey?: string | null;
 }
@@ -166,9 +167,10 @@ const fetchUrlOutputSchema = z.strictObject({
     .optional()
     .describe('The normalized or transformed URL that was fetched'),
   title: z.string().max(512).optional().describe('Page title'),
-  markdown: z
-    .string()
-    .max(config.constants.maxInlineContentChars)
+  markdown: (config.constants.maxInlineContentChars > 0
+    ? z.string().max(config.constants.maxInlineContentChars)
+    : z.string()
+  )
     .optional()
     .describe('The extracted content in Markdown format'),
   truncated: z
@@ -737,7 +739,9 @@ export async function executeFetchPipeline<T>(
       cacheNamespace: options.cacheNamespace,
       normalizedUrl: resolvedUrl.normalizedUrl,
     });
-    if (cachedResult) return cachedResult;
+    if (cachedResult) {
+      return { ...cachedResult, originalUrl: resolvedUrl.originalUrl };
+    }
   }
 
   logDebug('Fetching URL', { url: resolvedUrl.normalizedUrl });
@@ -765,6 +769,7 @@ export async function executeFetchPipeline<T>(
     data,
     fromCache: false,
     url: resolvedUrl.normalizedUrl,
+    originalUrl: resolvedUrl.originalUrl,
     fetchedAt: new Date().toISOString(),
     cacheKey,
   };
@@ -967,7 +972,7 @@ function buildStructuredContent(
   const truncated = inlineResult.truncated ?? pipeline.data.truncated;
 
   return {
-    url: pipeline.url,
+    url: pipeline.originalUrl ?? pipeline.url,
     resolvedUrl: pipeline.url,
     inputUrl,
     title: pipeline.data.title,

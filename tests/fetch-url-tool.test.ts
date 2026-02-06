@@ -377,3 +377,25 @@ describe('fetchUrlToolHandler', () => {
     }
   });
 });
+
+describe('htmlToMarkdown resolves parenthesized URLs correctly', () => {
+  it('preserves balanced parentheses in resolved relative URLs', () => {
+    const html = '<a href="/wiki/Foo_(bar)">Foo (bar)</a>';
+    const result = htmlToMarkdown(html, undefined, {
+      url: 'https://en.wikipedia.org/wiki/Main_Page',
+    });
+    assert.match(
+      result,
+      /\[Foo \(bar\)\]\(https:\/\/en\.wikipedia\.org\/wiki\/Foo_(%28|\()bar(%29|\))\)/,
+      'Link with parenthesized URL should resolve correctly'
+    );
+  });
+
+  it('handles simple relative URLs without parentheses', () => {
+    const html = '<a href="/about">About</a>';
+    const result = htmlToMarkdown(html, undefined, {
+      url: 'https://example.com/page',
+    });
+    assert.match(result, /\[About\]\(https:\/\/example\.com\/about\)/);
+  });
+});

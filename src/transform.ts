@@ -1160,6 +1160,20 @@ function resolveRelativeHref(
   }
 }
 
+function findBalancedCloseParen(text: string, start: number): number {
+  let depth = 1;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '(') {
+      depth++;
+    } else if (ch === ')') {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
 function findInlineLink(
   markdown: string,
   start: number
@@ -1183,7 +1197,7 @@ function findInlineLink(
       continue;
     }
 
-    const closeParen = markdown.indexOf(')', closeBracket + 2);
+    const closeParen = findBalancedCloseParen(markdown, closeBracket + 2);
     if (closeParen === -1) return null;
 
     const prefixStart =

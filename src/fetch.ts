@@ -1796,12 +1796,14 @@ async function decodeResponseIfNeeded(
   }
 
   if (!isLikelyCompressed(initialChunk, encoding)) {
-    // Already decompressed (or invalid), pass through
     const body = createPumpedStream(initialChunk, reader);
+    const headers = new Headers(response.headers);
+    headers.delete('content-encoding');
+    headers.delete('content-length');
     return new Response(body, {
       status: response.status,
       statusText: response.statusText,
-      headers: response.headers,
+      headers,
     });
   }
 
