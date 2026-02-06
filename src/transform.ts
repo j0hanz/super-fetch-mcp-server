@@ -1228,17 +1228,11 @@ function preprocessPropertySections(html: string): string {
   return output;
 }
 
-const ABSOLUTE_URL_PREFIXES = [
-  'http://',
-  'https://',
-  'mailto:',
-  'data:',
-  '#',
-  'tel:',
-] as const;
-
 function isAbsoluteOrSpecialUrl(href: string): boolean {
-  return ABSOLUTE_URL_PREFIXES.some((p) => href.startsWith(p));
+  const trimmedHref = href.trim();
+  if (!trimmedHref) return false;
+  if (trimmedHref.startsWith('#')) return true;
+  return URL.canParse(trimmedHref);
 }
 
 function resolveRelativeUrls(markdown: string, baseUrl: string): string {

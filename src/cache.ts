@@ -466,6 +466,7 @@ function isValidCacheUri(uri: string): boolean {
     const url = new URL(uri);
     if (url.protocol !== 'superfetch:' || url.hostname !== 'cache')
       return false;
+    if (url.search || url.hash) return false;
     const parts = url.pathname.split('/').filter(Boolean);
     return parts.length === 2 && parts[0] === 'markdown';
   } catch {
@@ -502,7 +503,10 @@ export function generateSafeFilename(
   const tryUrl = (): string | null => {
     try {
       if (!URL.canParse(url)) return null;
-      const { pathname } = new URL(url);
+      const parsed = new URL(url);
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:')
+        return null;
+      const { pathname } = parsed;
       const basename = pathPosix.basename(pathname);
       if (!basename || basename === 'index') return null;
 
