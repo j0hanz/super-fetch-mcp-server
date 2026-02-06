@@ -110,11 +110,25 @@ class UrlNormalizer {
 
   normalize(urlString: string): { normalizedUrl: string; hostname: string } {
     const trimmedUrl = this.requireTrimmedUrl(urlString);
-    this.assertUrlLength(trimmedUrl);
-
-    const url = this.parseUrl(trimmedUrl);
-    this.assertHttpProtocol(url);
-    this.assertNoCredentials(url);
+    if (trimmedUrl.length > this.constants.maxUrlLength) {
+      throw createValidationError(
+        `URL exceeds maximum length of ${this.constants.maxUrlLength} characters`
+      );
+    }
+    if (!URL.canParse(trimmedUrl)) {
+      throw createValidationError('Invalid URL format');
+    }
+    const url = new URL(trimmedUrl);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      throw createValidationError(
+        `Invalid protocol: ${url.protocol}. Only http: and https: are allowed`
+      );
+    }
+    if (url.username || url.password) {
+      throw createValidationError(
+        'URLs with embedded credentials are not allowed'
+      );
+    }
 
     const hostname = this.normalizeHostname(url);
     this.assertHostnameAllowed(hostname);
@@ -135,34 +149,6 @@ class UrlNormalizer {
     const trimmed = urlString.trim();
     if (!trimmed) throw createValidationError('URL cannot be empty');
     return trimmed;
-  }
-
-  private assertUrlLength(url: string): void {
-    if (url.length <= this.constants.maxUrlLength) return;
-    throw createValidationError(
-      `URL exceeds maximum length of ${this.constants.maxUrlLength} characters`
-    );
-  }
-
-  private parseUrl(urlString: string): URL {
-    if (!URL.canParse(urlString)) {
-      throw createValidationError('Invalid URL format');
-    }
-    return new URL(urlString);
-  }
-
-  private assertHttpProtocol(url: URL): void {
-    if (url.protocol === 'http:' || url.protocol === 'https:') return;
-    throw createValidationError(
-      `Invalid protocol: ${url.protocol}. Only http: and https: are allowed`
-    );
-  }
-
-  private assertNoCredentials(url: URL): void {
-    if (!url.username && !url.password) return;
-    throw createValidationError(
-      'URLs with embedded credentials are not allowed'
-    );
   }
 
   private normalizeHostname(url: URL): string {
@@ -277,9 +263,19 @@ class RawUrlTransformer {
   transformToRawUrl(url: string): TransformResult {
     if (!url) return { url, transformed: false };
     if (this.isRawUrl(url)) return { url, transformed: false };
+    let base: string;
+    let hash: string;
+    let parsed: URL | undefined;
 
-    const { base, hash } = this.splitParams(url);
-    const match = this.tryTransformWithUrl(base, hash);
+    try {
+      parsed = new URL(url);
+      base = parsed.origin + parsed.pathname;
+      ({ hash } = parsed);
+    } catch {
+      ({ base, hash } = this.splitParams(url));
+    }
+
+    const match = this.tryTransformWithUrl(base, hash, parsed);
     if (!match) return { url, transformed: false };
 
     this.logger.debug('URL transformed to raw content URL', {
@@ -342,10 +338,16 @@ class RawUrlTransformer {
 
   private tryTransformWithUrl(
     base: string,
-    hash: string
+    hash: string,
+    preParsed?: URL
   ): { url: string; platform: string } | null {
-    if (!URL.canParse(base)) return null;
-    const parsed = new URL(base);
+    let parsed: URL | null = null;
+    if (preParsed?.href.startsWith(base)) {
+      parsed = preParsed;
+    } else if (URL.canParse(base)) {
+      parsed = new URL(base);
+    }
+    if (!parsed) return null;
 
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:')
       return null;
@@ -1358,7 +1360,7 @@ function startsWithBytes(
 
 function hasNullByte(buffer: Uint8Array, limit: number): boolean {
   const checkLen = Math.min(buffer.length, limit);
-  return Buffer.from(buffer.buffer, buffer.byteOffset, checkLen).includes(0x00);
+  return buffer.subarray(0, checkLen).includes(0x00);
 }
 
 function isBinaryContent(buffer: Uint8Array, encoding?: string): boolean {
@@ -1452,7 +1454,7 @@ class ResponseTextReader {
   ): Promise<{ buffer: Uint8Array; encoding: string; size: number }> {
     let effectiveEncoding = encoding;
     let decoder: TextDecoder | null = null;
-    const chunks: Buffer[] = [];
+    const chunks: Uint8Array[] = [];
     let total = 0;
 
     const reader = stream.getReader();
@@ -1472,15 +1474,10 @@ class ResponseTextReader {
       let checkedBinary = false;
       while (!result.done) {
         const chunk = result.value;
-        const buf = Buffer.from(
-          chunk.buffer,
-          chunk.byteOffset,
-          chunk.byteLength
-        );
 
         if (!checkedBinary) {
           checkedBinary = true;
-          if (isBinaryContent(buf, decoder?.encoding)) {
+          if (isBinaryContent(chunk, decoder?.encoding)) {
             await this.cancelReaderQuietly(reader);
             throw new FetchError(
               'Detailed content type check failed: binary content detected',
@@ -1491,19 +1488,19 @@ class ResponseTextReader {
           }
         }
 
-        const newTotal = total + buf.length;
+        const newTotal = total + chunk.length;
 
         if (newTotal > maxBytes) {
           const remaining = maxBytes - total;
           if (remaining > 0) {
-            chunks.push(buf.subarray(0, remaining));
+            chunks.push(chunk.subarray(0, remaining));
             total += remaining;
           }
           await this.cancelReaderQuietly(reader);
           break;
         }
 
-        chunks.push(buf);
+        chunks.push(chunk);
         total = newTotal;
 
         result = await this.readNext(reader, abortRace.abortPromise);
@@ -1661,31 +1658,6 @@ function createUnsupportedContentEncodingError(
   );
 }
 
-function createDecompressionFailedError(
-  url: string,
-  encoding: string,
-  message?: string
-): FetchError {
-  return new FetchError(
-    message
-      ? `Failed to decompress ${encoding} response: ${message}`
-      : `Failed to decompress ${encoding} response`,
-    url,
-    500,
-    {
-      reason: 'decompression_failed',
-      encoding,
-    }
-  );
-}
-
-function toUint8Chunk(value: unknown): Uint8Array {
-  if (value instanceof Uint8Array) return value;
-  if (typeof value === 'string') return Buffer.from(value);
-  if (value instanceof ArrayBuffer) return new Uint8Array(value);
-  throw new Error('Unsupported decompressor chunk type');
-}
-
 function decodeResponseIfNeeded(
   response: Response,
   url: string,
@@ -1740,38 +1712,9 @@ function decodeResponseIfNeeded(
     signal.addEventListener('abort', abortHandler, { once: true });
   }
 
-  const iterator = decodedNodeStream[
-    Symbol.asyncIterator
-  ]() as AsyncIterator<unknown>;
-
-  const decodedBody = new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      try {
-        const result: IteratorResult<unknown> = await iterator.next();
-        if (result.done) {
-          controller.close();
-          return;
-        }
-
-        controller.enqueue(toUint8Chunk(result.value));
-      } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : undefined;
-        controller.error(
-          createDecompressionFailedError(url, encoding, message)
-        );
-      }
-    },
-    async cancel() {
-      try {
-        await iterator.return?.();
-      } finally {
-        decodedNodeStream.destroy();
-        decompressor.destroy();
-        sourceStream.destroy();
-        if (signal) signal.removeEventListener('abort', abortHandler);
-      }
-    },
-  });
+  const decodedBody = Readable.toWeb(
+    decodedNodeStream
+  ) as unknown as ReadableStream<Uint8Array>;
 
   const headers = new Headers(response.headers);
   headers.delete('content-encoding');
