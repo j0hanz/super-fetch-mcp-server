@@ -386,13 +386,7 @@ class RawUrlTransformer {
     hash: string
   ): { url: string; platform: string } | null {
     if (!URL.canParse(base)) return null;
-
-    let parsed: URL;
-    try {
-      parsed = new URL(base);
-    } catch {
-      return null;
-    }
+    const parsed = new URL(base);
 
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:')
       return null;

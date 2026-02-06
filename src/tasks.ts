@@ -195,10 +195,18 @@ class TaskManager {
     return new Promise((resolve, reject) => {
       const runInContext: RunInContext = AsyncLocalStorage.snapshot();
       const resolveInContext = (value: TaskState | undefined): void => {
-        runInContext(() => resolve(value));
+        runInContext(() => {
+          resolve(value);
+        });
       };
       const rejectInContext = (error: unknown): void => {
-        runInContext(() => reject(error));
+        runInContext(() => {
+          if (error instanceof Error) {
+            reject(error);
+          } else {
+            reject(new Error(String(error)));
+          }
+        });
       };
 
       let timeoutId: NodeJS.Timeout | undefined;

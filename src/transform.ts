@@ -6,7 +6,6 @@ import diagnosticsChannel from 'node:diagnostics_channel';
 import { availableParallelism } from 'node:os';
 import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
-import { types as utilTypes } from 'node:util';
 import {
   type Transferable as NodeTransferable,
   Worker,
@@ -269,13 +268,13 @@ function trimUtf8Buffer(buffer: Buffer, maxBytes: number): Buffer {
   let end = maxBytes;
   let cursor = end - 1;
 
-  while (cursor >= 0 && (buffer[cursor] & 0xc0) === 0x80) {
+  while (cursor >= 0 && ((buffer[cursor] ?? 0) & 0xc0) === 0x80) {
     cursor -= 1;
   }
 
   if (cursor < 0) return buffer.subarray(0, maxBytes);
 
-  const lead = buffer[cursor];
+  const lead = buffer[cursor] ?? 0;
   let sequenceLength = 1;
 
   if (lead >= 0xc0 && lead < 0xe0) sequenceLength = 2;
@@ -717,11 +716,12 @@ function deriveAltFromImageUrl(src: string): string {
 
   try {
     const isAbsolute = URL.canParse(src);
-    const parsed = isAbsolute
-      ? new URL(src)
-      : URL.canParse(src, 'http://localhost')
-        ? new URL(src, 'http://localhost')
-        : null;
+    let parsed: URL | null = null;
+    if (isAbsolute) {
+      parsed = new URL(src);
+    } else if (URL.canParse(src, 'http://localhost')) {
+      parsed = new URL(src, 'http://localhost');
+    }
 
     if (!parsed) return '';
     if (
@@ -732,7 +732,7 @@ function deriveAltFromImageUrl(src: string): string {
       return '';
     }
 
-    const pathname = parsed.pathname;
+    const { pathname } = parsed;
     const segments = pathname.split('/');
     const filename = segments.pop() ?? '';
     if (!filename) return '';
@@ -1965,8 +1965,10 @@ function ensureTightBuffer(buffer: Uint8Array): Uint8Array {
   return Buffer.from(buffer);
 }
 
-function createThreadWorkerHost(workerIndex: number, name: string): WorkerHost {
-  void workerIndex;
+function createThreadWorkerHost(
+  _workerIndex: number,
+  name: string
+): WorkerHost {
   const resourceLimits = config.transform.workerResourceLimits;
   const worker = new Worker(
     new URL('./workers/transform-worker.js', import.meta.url),
@@ -1979,36 +1981,48 @@ function createThreadWorkerHost(workerIndex: number, name: string): WorkerHost {
   return {
     kind: 'thread',
     threadId: worker.threadId,
-    postMessage: (message, transferList) =>
-      worker.postMessage(message, transferList),
+    postMessage: (message, transferList) => {
+      worker.postMessage(message, transferList);
+    },
     terminate: async () => {
       await worker.terminate();
     },
-    unref: () => worker.unref(),
-    onMessage: (handler) => worker.on('message', handler),
+    unref: () => {
+      worker.unref();
+    },
+    onMessage: (handler) => {
+      worker.on('message', handler);
+    },
     onError: (handler) => {
       worker.on('error', handler);
       worker.on('messageerror', handler);
     },
-    onExit: (handler) => worker.on('exit', (code) => handler(code, null)),
+    onExit: (handler) => {
+      worker.on('exit', (code) => {
+        handler(code, null);
+      });
+    },
   };
 }
 
 function createProcessWorkerHost(
-  workerIndex: number,
-  name: string
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _workerIndex: number,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _name: string
 ): WorkerHost {
-  void workerIndex;
-  void name;
   const child = fork(TRANSFORM_CHILD_PATH, [], {
     stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
     serialization: 'advanced',
-    windowsHide: true,
   });
+
+  if (child.pid === undefined) {
+    throw new Error('Failed to fork process');
+  }
 
   return {
     kind: 'process',
-    pid: child.pid ?? undefined,
+    pid: child.pid,
     postMessage: (message) => {
       if (!child.connected) {
         throw new Error('Transform worker IPC channel is closed');
@@ -2021,18 +2035,29 @@ function createProcessWorkerHost(
           resolve();
           return;
         }
-        child.once('exit', () => resolve());
+        child.once('exit', () => {
+          resolve();
+        });
         try {
           child.kill();
         } catch {
           resolve();
         }
       }),
-    unref: () => child.unref(),
-    onMessage: (handler) => child.on('message', handler),
-    onError: (handler) => child.on('error', handler),
-    onExit: (handler) =>
-      child.on('exit', (code, signal) => handler(code, signal)),
+    unref: () => {
+      child.unref();
+    },
+    onMessage: (handler) => {
+      child.on('message', handler);
+    },
+    onError: (handler) => {
+      child.on('error', handler);
+    },
+    onExit: (handler) => {
+      child.on('exit', (code, signal) => {
+        handler(code, signal);
+      });
+    },
   };
 }
 
@@ -2548,10 +2573,11 @@ class WorkerPool implements TransformWorkerPool {
         const htmlBuffer = ensureTightBuffer(task.htmlBuffer);
         message.htmlBuffer = htmlBuffer;
         message.encoding = task.encoding;
-        const transferBuffer = htmlBuffer.buffer;
-        if (!utilTypes.isSharedArrayBuffer(transferBuffer)) {
-          transferList.push(transferBuffer as ArrayBuffer);
-        }
+        // Data cloning is safer for fallback scenarios if the worker crashes.
+        // const transferBuffer = htmlBuffer.buffer;
+        // if (!utilTypes.isSharedArrayBuffer(transferBuffer)) {
+        //   transferList.push(transferBuffer);
+        // }
       } else {
         message.html = task.html;
       }

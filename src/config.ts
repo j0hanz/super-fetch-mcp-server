@@ -26,7 +26,7 @@ type AuthMode = 'oauth' | 'static';
 
 function isMissingEnvFileError(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
-  const code = (error as { code?: string }).code;
+  const { code } = error as { code?: string };
   return code === 'ENOENT' || code === 'ERR_ENV_FILE_NOT_FOUND';
 }
 
@@ -127,7 +127,7 @@ function parseOptionalInteger(
   max?: number
 ): number | undefined {
   const parsed = parseIntegerValue(envValue, min, max);
-  return parsed === null ? undefined : parsed;
+  return parsed ?? undefined;
 }
 
 function parseInteger(

@@ -13,7 +13,7 @@ import type {
 import { transformHtmlToMarkdownInProcess } from '../transform.js';
 
 const send =
-  process.send ??
+  process.send?.bind(process) ??
   (() => {
     throw new Error('transform-child started without IPC channel');
   });
