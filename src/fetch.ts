@@ -4,7 +4,9 @@ import diagnosticsChannel from 'node:diagnostics_channel';
 import dns from 'node:dns';
 import { isIP } from 'node:net';
 import { performance } from 'node:perf_hooks';
-import { Readable } from 'node:stream';
+import { PassThrough, Readable, Transform } from 'node:stream';
+import { buffer as consumeBuffer } from 'node:stream/consumers';
+import { finished, pipeline } from 'node:stream/promises';
 import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createBrotliDecompress, createGunzip, createInflate } from 'node:zlib';
@@ -1214,6 +1216,48 @@ function createDecoder(encoding: string | undefined): TextDecoder {
   }
 }
 
+async function decodeWithTextDecoderStream(
+  buffer: Uint8Array,
+  encoding: string
+): Promise<string> {
+  if (typeof TextDecoderStream === 'undefined') {
+    const decoder = createDecoder(encoding);
+    return decoder.decode(buffer);
+  }
+
+  let decoderStream: ReadableWritablePair<string, Uint8Array>;
+  try {
+    decoderStream = new TextDecoderStream(
+      encoding
+    ) as unknown as ReadableWritablePair<string, Uint8Array>;
+  } catch {
+    const decoder = createDecoder(encoding);
+    return decoder.decode(buffer);
+  }
+
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(buffer);
+      controller.close();
+    },
+  }).pipeThrough(decoderStream);
+
+  const reader = stream.getReader();
+  let text = '';
+
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      text += value;
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  return text;
+}
+
 function normalizeEncodingLabel(encoding: string | undefined): string {
   return encoding?.trim().toLowerCase() ?? '';
 }
@@ -1396,8 +1440,7 @@ class ResponseTextReader {
       encoding
     );
 
-    const decoder = createDecoder(effectiveEncoding);
-    const text = decoder.decode(buffer);
+    const text = await decodeWithTextDecoderStream(buffer, effectiveEncoding);
     return { text, size: buffer.byteLength };
   }
 
@@ -1437,16 +1480,13 @@ class ResponseTextReader {
       return { buffer, encoding: effectiveEncoding, size: buffer.byteLength };
     }
 
-    return this.readStreamToBuffer(response.body, url, limit, signal, encoding);
-  }
-
-  private async readNext(
-    reader: ReadableStreamDefaultReader<Uint8Array>,
-    abortPromise: Promise<never> | null
-  ): Promise<ReadableStreamReadResult<Uint8Array>> {
-    return abortPromise
-      ? await Promise.race([reader.read(), abortPromise])
-      : await reader.read();
+    return this.readStreamToBuffer(
+      response.body,
+      url,
+      maxBytes,
+      signal,
+      encoding
+    );
   }
 
   private async readStreamToBuffer(
@@ -1456,91 +1496,103 @@ class ResponseTextReader {
     signal?: AbortSignal,
     encoding?: string
   ): Promise<{ buffer: Uint8Array; encoding: string; size: number }> {
-    let effectiveEncoding = encoding;
-    let decoder: TextDecoder | null = null;
-    const chunks: Uint8Array[] = [];
-    let total = 0;
-
-    const reader = stream.getReader();
-    const abortRace = createAbortRace(signal, () =>
-      createAbortedFetchError(url)
-    );
-
-    try {
-      let result = await this.readNext(reader, abortRace.abortPromise);
-
-      if (!result.done) {
-        effectiveEncoding =
-          resolveEncoding(encoding, result.value) ?? encoding ?? 'utf-8';
-        decoder = createDecoder(effectiveEncoding);
+    class MaxBytesError extends Error {
+      constructor() {
+        super('max-bytes-reached');
       }
-
-      let checkedBinary = false;
-      while (!result.done) {
-        const chunk = result.value;
-
-        if (!checkedBinary) {
-          checkedBinary = true;
-          if (isBinaryContent(chunk, decoder?.encoding)) {
-            await this.cancelReaderQuietly(reader);
-            throw new FetchError(
-              'Detailed content type check failed: binary content detected',
-              url,
-              500,
-              { reason: 'binary_content_detected' }
-            );
-          }
-        }
-
-        const newTotal = total + chunk.length;
-
-        if (newTotal > maxBytes) {
-          const remaining = maxBytes - total;
-          if (remaining > 0) {
-            chunks.push(chunk.subarray(0, remaining));
-            total += remaining;
-          }
-          await this.cancelReaderQuietly(reader);
-          break;
-        }
-
-        chunks.push(chunk);
-        total = newTotal;
-
-        result = await this.readNext(reader, abortRace.abortPromise);
-      }
-    } catch (error: unknown) {
-      await this.cancelReaderQuietly(reader);
-      this.handleReadingError(error, url, signal);
-    } finally {
-      abortRace.cleanup();
-      reader.releaseLock();
     }
 
-    return {
-      buffer: Buffer.concat(chunks, total),
-      encoding: effectiveEncoding ?? 'utf-8',
-      size: total,
+    const byteLimit = maxBytes <= 0 ? Number.POSITIVE_INFINITY : maxBytes;
+    const captureChunks = byteLimit !== Number.POSITIVE_INFINITY;
+    let effectiveEncoding = encoding ?? 'utf-8';
+    let checkedBinary = false;
+    let total = 0;
+    const chunks: Buffer[] = [];
+
+    const source = Readable.fromWeb(
+      stream as unknown as NodeReadableStream<Uint8Array>
+    );
+
+    const guard = new Transform({
+      transform(this: Transform, chunk, _encoding, callback): void {
+        try {
+          const buf = Buffer.isBuffer(chunk)
+            ? chunk
+            : Buffer.from(
+                (chunk as Uint8Array).buffer,
+                (chunk as Uint8Array).byteOffset,
+                (chunk as Uint8Array).byteLength
+              );
+
+          if (!checkedBinary) {
+            checkedBinary = true;
+            effectiveEncoding =
+              resolveEncoding(encoding, buf) ?? encoding ?? 'utf-8';
+            if (isBinaryContent(buf, effectiveEncoding)) {
+              callback(
+                new FetchError(
+                  'Detailed content type check failed: binary content detected',
+                  url,
+                  500,
+                  { reason: 'binary_content_detected' }
+                )
+              );
+              return;
+            }
+          }
+
+          const newTotal = total + buf.length;
+          if (newTotal > byteLimit) {
+            const remaining = byteLimit - total;
+            if (remaining > 0) {
+              const slice = buf.subarray(0, remaining);
+              total += remaining;
+              if (captureChunks) chunks.push(slice);
+              this.push(slice);
+            }
+            callback(new MaxBytesError());
+            return;
+          }
+
+          total = newTotal;
+          if (captureChunks) chunks.push(buf);
+          callback(null, buf);
+        } catch (error: unknown) {
+          callback(error instanceof Error ? error : new Error(String(error)));
+        }
+      },
+    });
+
+    const guarded = source.pipe(guard);
+    const abortHandler = (): void => {
+      source.destroy();
+      guard.destroy();
     };
-  }
 
-  private handleReadingError(
-    error: unknown,
-    url: string,
-    signal?: AbortSignal
-  ): never {
-    if (error instanceof FetchError) throw error;
-    if (signal?.aborted) throw createAbortedFetchError(url);
-    throw error;
-  }
+    if (signal) {
+      signal.addEventListener('abort', abortHandler, { once: true });
+    }
 
-  private async cancelReaderQuietly(
-    reader: ReadableStreamDefaultReader<Uint8Array>
-  ): Promise<void> {
     try {
-      await reader.cancel();
-    } catch {
-      // Ignore cancellation failures; stream teardown must proceed.
+      const buffer = await consumeBuffer(guarded);
+      return { buffer, encoding: effectiveEncoding, size: total };
+    } catch (error: unknown) {
+      if (signal?.aborted) throw createAbortedFetchError(url);
+      if (error instanceof FetchError) throw error;
+      if (error instanceof MaxBytesError) {
+        source.destroy();
+        guard.destroy();
+        return {
+          buffer: Buffer.concat(chunks, total),
+          encoding: effectiveEncoding,
+          size: total,
+        };
+      }
+      throw error;
+    } finally {
+      if (signal) {
+        signal.removeEventListener('abort', abortHandler);
+      }
     }
   }
 }
@@ -1843,7 +1895,12 @@ async function decodeResponseIfNeeded(
       reader
     ) as unknown as NodeReadableStream<Uint8Array>
   );
-  const decodedNodeStream = sourceStream.pipe(decompressor);
+  const decodedNodeStream = new PassThrough();
+  const pipelinePromise = pipeline(
+    sourceStream,
+    decompressor,
+    decodedNodeStream
+  );
 
   const abortHandler = (): void => {
     sourceStream.destroy();
@@ -1855,6 +1912,12 @@ async function decodeResponseIfNeeded(
     signal.addEventListener('abort', abortHandler, { once: true });
   }
 
+  void pipelinePromise.catch((error: unknown) => {
+    decodedNodeStream.destroy(
+      error instanceof Error ? error : new Error(String(error))
+    );
+  });
+
   const decodedBody = Readable.toWeb(
     decodedNodeStream
   ) as unknown as ReadableStream<Uint8Array>;
@@ -1864,10 +1927,7 @@ async function decodeResponseIfNeeded(
   headers.delete('content-length');
 
   if (signal) {
-    decodedNodeStream.once('close', () => {
-      signal.removeEventListener('abort', abortHandler);
-    });
-    decodedNodeStream.once('error', () => {
+    void finished(decodedNodeStream, { cleanup: true }).finally(() => {
       signal.removeEventListener('abort', abortHandler);
     });
   }

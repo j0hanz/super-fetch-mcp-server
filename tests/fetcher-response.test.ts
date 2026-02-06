@@ -17,6 +17,20 @@ function createStreamResponse(text: string) {
   return new Response(stream, { status: 200 });
 }
 
+function createChunkedStreamResponse(chunks: string[]) {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    start(controller) {
+      for (const chunk of chunks) {
+        controller.enqueue(encoder.encode(chunk));
+      }
+      controller.close();
+    },
+  });
+
+  return new Response(stream, { status: 200 });
+}
+
 describe('readResponseText', () => {
   it('reads text and size from responses', async () => {
     const response = new Response('hello', {
@@ -47,6 +61,45 @@ describe('readResponseText', () => {
     const result = await readResponseText(response, 'https://example.com', 5);
     assert.equal(result.text, 'hello');
     assert.equal(result.size, 5);
+  });
+
+  it('truncates multi-chunk streams when the limit is reached', async () => {
+    const response = createChunkedStreamResponse(['hello ', 'world']);
+
+    const result = await readResponseText(response, 'https://example.com', 7);
+    assert.equal(result.text, 'hello w');
+    assert.equal(result.size, 7);
+  });
+
+  it('aborts when the signal fires during a streaming read', async () => {
+    const controller = new AbortController();
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controllerRef) {
+        controllerRef.enqueue(encoder.encode('hello'));
+      },
+    });
+
+    const response = new Response(stream, { status: 200 });
+    const readPromise = readResponseText(
+      response,
+      'https://example.com',
+      1024,
+      controller.signal
+    );
+
+    await Promise.resolve();
+    controller.abort();
+
+    await assert.rejects(
+      () => readPromise,
+      (error) => {
+        assert.ok(error instanceof FetchError);
+        assert.equal(error.statusCode, 499);
+        assert.equal(error.message, 'Request was aborted during response read');
+        return true;
+      }
+    );
   });
 
   it('returns an abort error when the signal is already aborted', async () => {
