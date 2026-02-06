@@ -174,8 +174,15 @@ interface NoiseContext {
   readonly extraSelectors: readonly string[];
 }
 
+function toLocaleLower(value: string): string {
+  const { locale } = config.i18n;
+  return locale ? value.toLocaleLowerCase(locale) : value.toLocaleLowerCase();
+}
+
 function normalizeCategories(categories: readonly string[]): Set<string> {
-  return new Set(categories.map((entry) => entry.toLowerCase().trim()));
+  return new Set(
+    categories.map((entry) => toLocaleLower(entry).trim()).filter(Boolean)
+  );
 }
 
 function isCategoryEnabled(
@@ -270,7 +277,7 @@ function collectPromoTokens(
   }
 
   for (const token of extraTokens) {
-    const normalized = token.toLowerCase().trim();
+    const normalized = toLocaleLower(token).trim();
     if (normalized) base.add(normalized);
   }
 

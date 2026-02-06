@@ -36,27 +36,14 @@ function splitLinesLf(content: string): string[] {
   return content.split(/\r?\n/);
 }
 
-const HEADING_KEYWORDS = new Set([
-  'overview',
-  'introduction',
-  'summary',
-  'conclusion',
-  'prerequisites',
-  'requirements',
-  'installation',
-  'configuration',
-  'usage',
-  'features',
-  'limitations',
-  'troubleshooting',
-  'faq',
-  'resources',
-  'references',
-  'changelog',
-  'license',
-  'acknowledgments',
-  'appendix',
-]);
+function toLocaleLower(value: string): string {
+  const { locale } = config.i18n;
+  return locale ? value.toLocaleLowerCase(locale) : value.toLocaleLowerCase();
+}
+
+const HEADING_KEYWORDS = new Set(
+  config.markdownCleanup.headingKeywords.map((value) => toLocaleLower(value))
+);
 
 const SPECIAL_PREFIXES =
   /^(?:example|note|tip|warning|important|caution):\s+\S/i;
@@ -130,7 +117,7 @@ const HeadingHeuristics = {
 
     if (words.length === 1) {
       return (
-        /^[A-Z]/.test(trimmed) && HEADING_KEYWORDS.has(trimmed.toLowerCase())
+        /^[A-Z]/.test(trimmed) && HEADING_KEYWORDS.has(toLocaleLower(trimmed))
       );
     }
 
@@ -542,11 +529,13 @@ function formatFetchedAt(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
 
-  const dd = String(date.getDate()).padStart(2, '0');
-  const mm = String(date.getMonth() + 1).padStart(2, '0');
-  const yyyy = String(date.getFullYear());
+  const formatter = new Intl.DateTimeFormat(config.i18n.locale, {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  });
 
-  return `${dd}-${mm}-${yyyy}`;
+  return formatter.format(date);
 }
 
 export function buildMetadataFooter(

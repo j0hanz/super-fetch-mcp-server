@@ -21,6 +21,28 @@ export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
 const LOG_LEVELS: readonly LogLevel[] = ['debug', 'info', 'warn', 'error'];
 
+const DEFAULT_HEADING_KEYWORDS = [
+  'overview',
+  'introduction',
+  'summary',
+  'conclusion',
+  'prerequisites',
+  'requirements',
+  'installation',
+  'configuration',
+  'usage',
+  'features',
+  'limitations',
+  'troubleshooting',
+  'faq',
+  'resources',
+  'references',
+  'changelog',
+  'license',
+  'acknowledgments',
+  'appendix',
+] as const;
+
 /** Hardcoded to 'markdown'. Type retained for consumer compatibility. */
 export type TransformMetadataFormat = 'markdown';
 export type TransformWorkerMode = 'threads' | 'process';
@@ -157,6 +179,23 @@ function parseList(envValue: string | undefined): string[] {
     .split(/[\s,]+/)
     .map((entry) => entry.trim())
     .filter((entry) => entry.length > 0);
+}
+
+function parseListOrDefault(
+  envValue: string | undefined,
+  defaultValue: readonly string[]
+): string[] {
+  const parsed = parseList(envValue);
+  return parsed.length > 0 ? parsed : [...defaultValue];
+}
+
+function normalizeLocale(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  const lowered = trimmed.toLowerCase();
+  if (lowered === 'system' || lowered === 'default') return undefined;
+  return trimmed;
 }
 
 function parseUrlEnv(value: string | undefined, name: string): URL | undefined {
@@ -480,6 +519,13 @@ export const config = {
     removeSkipLinks: true,
     removeTocBlocks: true,
     removeTypeDocComments: true,
+    headingKeywords: parseListOrDefault(
+      env.MARKDOWN_HEADING_KEYWORDS,
+      DEFAULT_HEADING_KEYWORDS
+    ),
+  },
+  i18n: {
+    locale: normalizeLocale(env.SUPERFETCH_LOCALE),
   },
   logging: {
     level: parseLogLevel(env.LOG_LEVEL),

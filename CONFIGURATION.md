@@ -42,11 +42,13 @@ SuperFetch runs with no configuration by default. Just run with `--stdio`:
 | `USER_AGENT`                       | `superFetch-MCP│${serverVersion}` | User-Agent header for outgoing requests                                           |
 | `CACHE_ENABLED`                    | `true`                            | Enable response caching                                                           |
 | `LOG_LEVEL`                        | `info`                            | Logging level. Only `debug` enables verbose logs; other values behave like `info` |
+| `SUPERFETCH_LOCALE`                | (system default)                  | Locale used for casing and date formatting (e.g. `en-US`, `fr-FR`)                |
 | `ALLOW_REMOTE`                     | `false`                           | Allow binding to non-loopback hosts (OAuth required)                              |
 | `ALLOWED_HOSTS`                    | (empty)                           | Additional allowed Host/Origin values (comma/space separated)                     |
 | `SERVER_MAX_CONNECTIONS`           | `0`                               | Max concurrent TCP connections; `0` disables the limit                            |
 | `SERVER_BLOCK_PRIVATE_CONNECTIONS` | `false`                           | Drop inbound connections from private/reserved IP ranges (includes loopback)      |
 | `FETCH_TIMEOUT_MS`                 | `15000`                           | Outgoing fetch timeout in milliseconds (1000-60000)                               |
+| `MARKDOWN_HEADING_KEYWORDS`        | (built-in list)                   | Keywords treated as headings (comma/space separated, locale-aware)                |
 | `SUPERFETCH_EXTRA_NOISE_TOKENS`    | (empty)                           | Additional CSS class/ID tokens to flag as noise (comma/space separated)           |
 | `SUPERFETCH_EXTRA_NOISE_SELECTORS` | (empty)                           | Additional CSS selectors for noise removal (comma/space separated)                |
 
