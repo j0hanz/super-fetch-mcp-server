@@ -386,7 +386,7 @@ describe('htmlToMarkdown resolves parenthesized URLs correctly', () => {
     });
     assert.match(
       result,
-      /\[Foo \(bar\)\]\(https:\/\/en\.wikipedia\.org\/wiki\/Foo_(%28|\()bar(%29|\))\)/,
+      /\[Foo \(bar\)\]\(https:\/\/en\.wikipedia\.org\/wiki\/Foo(?:_|%5F)(%28|\()bar(%29|\))\)/,
       'Link with parenthesized URL should resolve correctly'
     );
   });

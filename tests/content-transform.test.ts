@@ -9,6 +9,19 @@ after(async () => {
   await shutdownTransformWorkerPool();
 });
 
+async function withWorkerPoolDisabled<T>(fn: () => Promise<T>): Promise<T> {
+  const { config } = await import('../dist/config.js');
+  const original = config.transform.maxWorkerScale;
+  config.transform.maxWorkerScale = 0;
+  await shutdownTransformWorkerPool();
+  try {
+    return await fn();
+  } finally {
+    await shutdownTransformWorkerPool();
+    config.transform.maxWorkerScale = original;
+  }
+}
+
 type TransformResult = Awaited<ReturnType<typeof transformHtmlToMarkdown>>;
 
 type RawContentCase = {
@@ -137,15 +150,17 @@ describe('transformHtmlToMarkdown raw content detection', () => {
     const binaryGarbage =
       replacementChar.repeat(300) + 'some text' + replacementChar.repeat(300);
 
-    await assert.rejects(
-      () =>
-        transformHtmlToMarkdown(binaryGarbage, 'https://example.com/binary', {
-          includeMetadata: false,
-        }),
-      (error: unknown) =>
-        error instanceof FetchError &&
-        error.statusCode === 415 &&
-        error.message.includes('binary')
+    await withWorkerPoolDisabled(() =>
+      assert.rejects(
+        () =>
+          transformHtmlToMarkdown(binaryGarbage, 'https://example.com/binary', {
+            includeMetadata: false,
+          }),
+        (error: unknown) =>
+          error instanceof FetchError &&
+          error.statusCode === 415 &&
+          error.message.includes('binary')
+      )
     );
   });
 
@@ -153,15 +168,21 @@ describe('transformHtmlToMarkdown raw content detection', () => {
     // Content with null bytes should trigger binary detection
     const contentWithNull = '<html><body>\x00binary\x00data</body></html>';
 
-    await assert.rejects(
-      () =>
-        transformHtmlToMarkdown(contentWithNull, 'https://example.com/binary', {
-          includeMetadata: false,
-        }),
-      (error: unknown) =>
-        error instanceof FetchError &&
-        error.statusCode === 415 &&
-        error.message.includes('binary')
+    await withWorkerPoolDisabled(() =>
+      assert.rejects(
+        () =>
+          transformHtmlToMarkdown(
+            contentWithNull,
+            'https://example.com/binary',
+            {
+              includeMetadata: false,
+            }
+          ),
+        (error: unknown) =>
+          error instanceof FetchError &&
+          error.statusCode === 415 &&
+          error.message.includes('binary')
+      )
     );
   });
 });
@@ -180,9 +201,11 @@ describe('transformHtmlToMarkdown favicon rendering', () => {
       </html>
     `;
 
-    const result = await transformHtmlToMarkdown(html, 'https://example.com', {
-      includeMetadata: false,
-    });
+    const result = await withWorkerPoolDisabled(() =>
+      transformHtmlToMarkdown(html, 'https://example.com', {
+        includeMetadata: false,
+      })
+    );
 
     assert.ok(
       result.markdown.includes(
@@ -205,9 +228,11 @@ describe('transformHtmlToMarkdown favicon rendering', () => {
       </html>
     `;
 
-    const result = await transformHtmlToMarkdown(html, 'https://example.com', {
-      includeMetadata: false,
-    });
+    const result = await withWorkerPoolDisabled(() =>
+      transformHtmlToMarkdown(html, 'https://example.com', {
+        includeMetadata: false,
+      })
+    );
 
     // Title should be present without favicon
     assert.ok(result.markdown.includes('# '));

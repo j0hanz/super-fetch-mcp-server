@@ -28,7 +28,6 @@ const REGEX = {
   SPACING_ADJ_COMBINED: /(?:\]\([^)]+\)|`[^`]+`)(?=[A-Za-z0-9])/g,
   SPACING_CODE_DASH: /(`[^`]+`)\s*\\-\s*/g,
   SPACING_ESCAPES: /\\([[\].])/g,
-  SPACING_URL_ENC: /\]\([^)]*%5[Ff][^)]*\)/g,
   SPACING_LIST_NUM_COMBINED:
     /^((?![-*+] |\d+\. |[ \t]).+)\n((?:[-*+]|\d+\.) )/gm,
   TYPEDOC: /(`+)(?:(?!\1)[\s\S])*?\1|\s?\/\\?\*[\s\S]*?\\?\*\//g,
@@ -246,7 +245,6 @@ function applyGlobalRegexes(text: string): string {
     .replace(REGEX.SPACING_ADJ_COMBINED, '$& ')
     .replace(REGEX.SPACING_CODE_DASH, '$1 - ')
     .replace(REGEX.SPACING_ESCAPES, '$1')
-    .replace(REGEX.SPACING_URL_ENC, (m) => m.replace(/%5[Ff]/g, '_'))
     .replace(REGEX.SPACING_LIST_NUM_COMBINED, '$1\n\n$2')
     .replace(REGEX.DOUBLE_NEWLINE_REDUCER, '\n\n');
 

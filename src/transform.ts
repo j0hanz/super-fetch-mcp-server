@@ -2912,14 +2912,35 @@ function resolveWorkerFallback(
   url: string,
   options: TransformOptions & { encoding?: string }
 ): MarkdownTransformResult {
+  const isQueueFull =
+    error instanceof FetchError && error.details.reason === 'queue_full';
+
+  if (isQueueFull) {
+    logWarn('Transform worker queue full; falling back to in-process', {
+      url: redactUrl(url),
+    });
+
+    return transformHtmlToMarkdownInProcess(
+      decodeUtf8Input(htmlOrBuffer),
+      url,
+      options
+    );
+  }
+
   if (error instanceof FetchError) throw error;
   abortPolicy.throwIfAborted(options.signal, url, 'transform:worker-fallback');
 
-  return transformHtmlToMarkdownInProcess(
-    decodeUtf8Input(htmlOrBuffer),
-    url,
-    options
-  );
+  const message = getErrorMessage(error);
+  logWarn('Transform worker failed; refusing in-process fallback', {
+    url: redactUrl(url),
+    error: message,
+  });
+
+  throw new FetchError('Transform worker failed', url, 503, {
+    reason: 'worker_failed',
+    stage: 'transform:worker',
+    error: message,
+  });
 }
 
 async function transformInputToMarkdown(
