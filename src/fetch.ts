@@ -348,8 +348,12 @@ class RawUrlTransformer {
     let parsed: URL | null = null;
     if (preParsed?.href.startsWith(base)) {
       parsed = preParsed;
-    } else if (URL.canParse(base)) {
-      parsed = new URL(base);
+    } else {
+      try {
+        parsed = new URL(base);
+      } catch {
+        parsed = null;
+      }
     }
     if (!parsed) return null;
 
