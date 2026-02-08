@@ -336,54 +336,82 @@ function scoreNavFooter(
   return score;
 }
 
-function isNoiseElement(element: Element, context: NoiseContext): boolean {
+interface ElementMetadata {
+  readonly tagName: string;
+  readonly className: string;
+  readonly id: string;
+  readonly role: string | null;
+  readonly style: string | null;
+  readonly isInteractive: boolean;
+  readonly isHidden: boolean;
+}
+
+function extractElementMetadata(element: Element): ElementMetadata {
   const tagName = element.tagName.toLowerCase();
   const className = element.getAttribute('class') ?? '';
   const id = element.getAttribute('id') ?? '';
   const role = element.getAttribute('role');
-
-  const _isInteractive = isInteractive(element, role);
-
   const style = element.getAttribute('style');
+  const _isInteractive = isInteractive(element, role);
   const isHidden =
     element.hasAttribute('hidden') ||
     element.getAttribute('aria-hidden') === 'true' ||
     (style !== null &&
       /\b(?:display\s*:\s*none|visibility\s*:\s*hidden)\b/i.test(style));
 
+  return {
+    tagName,
+    className,
+    id,
+    role,
+    style,
+    isInteractive: _isInteractive,
+    isHidden,
+  };
+}
+
+function isNoiseElement(element: Element, context: NoiseContext): boolean {
+  const meta = extractElementMetadata(element);
+
   let score = 0;
   const { weights } = context;
 
   // Structural
-  if (context.structuralTags.has(tagName) && !_isInteractive) {
+  if (context.structuralTags.has(meta.tagName) && !meta.isInteractive) {
     score += weights.structural;
   }
 
   // Nav/Footer Scoring
   if (context.flags.navFooter) {
-    score += scoreNavFooter(tagName, role, className, id, weights);
+    score += scoreNavFooter(
+      meta.tagName,
+      meta.role,
+      meta.className,
+      meta.id,
+      weights
+    );
   }
 
   // Hidden
-  if (isHidden && !_isInteractive) {
+  if (meta.isHidden && !meta.isInteractive) {
     score += weights.hidden;
   }
 
   // Sticky/Fixed
-  if (FIXED_OR_HIGH_Z_PATTERN.test(className)) {
+  if (FIXED_OR_HIGH_Z_PATTERN.test(meta.className)) {
     score += weights.stickyFixed;
   }
 
   // Promo
   if (context.promoEnabled) {
     const aggTest =
-      context.promoMatchers.aggressive.test(className) ||
-      context.promoMatchers.aggressive.test(id);
+      context.promoMatchers.aggressive.test(meta.className) ||
+      context.promoMatchers.aggressive.test(meta.id);
     const isAggressiveMatch = aggTest && !isWithinPrimaryContent(element);
     const isBaseMatch =
       !aggTest &&
-      (context.promoMatchers.base.test(className) ||
-        context.promoMatchers.base.test(id));
+      (context.promoMatchers.base.test(meta.className) ||
+        context.promoMatchers.base.test(meta.id));
 
     if (isAggressiveMatch || isBaseMatch) {
       score += weights.promo;

@@ -2069,6 +2069,37 @@ interface TransformWorkerPool {
   getCapacity(): number;
 }
 
+/**
+ * Worker Pool Sizing Configuration
+ *
+ * Default: min(4, floor(availableParallelism() / 2)), constrained to [2, N]
+ *
+ * Tuning Guidance:
+ * - **Default behavior**: Appropriate for most deployments. Uses half of available
+ *   CPU threads (capped at 4) to balance throughput with system resource availability.
+ *
+ * - **CPU-limited containers**: If running in a container with strict CPU limits
+ *   (e.g., Docker with --cpus=2), the default may over-subscribe. Consider setting
+ *   maxWorkerScale to match the container's CPU limit.
+ *
+ * - **High-concurrency workloads**: For dedicated servers handling many concurrent
+ *   fetch requests, increasing maxWorkerScale to (availableParallelism() + 2) may
+ *   improve throughput by overlapping I/O wait with computation.
+ *
+ * - **Memory-constrained environments**: Each worker allocates ~50-100MB for DOM
+ *   parsing. If memory is limited, reduce maxWorkerScale to (availableParallelism() / 2)
+ *   or lower to prevent OOM errors.
+ *
+ * - **Shared hosting**: On shared systems where CPU is contested, reducing the pool
+ *   size prevents starving other processes. Consider maxWorkerScale = 2 or using
+ *   process-based workers (TRANSFORM_WORKER_MODE=process) for better isolation.
+ *
+ * Configuration:
+ * - TRANSFORM_MAX_WORKER_SCALE env var (default: availableParallelism())
+ * - TRANSFORM_WORKER_MODE env var: 'threads' (default) or 'process'
+ *
+ * See config.ts for full worker configuration options.
+ */
 const POOL_MIN_WORKERS = Math.max(
   2,
   Math.min(4, Math.floor(availableParallelism() / 2))
