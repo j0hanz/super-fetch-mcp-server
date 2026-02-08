@@ -188,6 +188,22 @@ const BuildTasks = {
     await System.copy(CONFIG.paths.instructions, CONFIG.paths.distInstructions);
 
     if (await System.isDirectory(CONFIG.paths.assets)) {
+      // Check logo size
+      try {
+        const logoPath = join(CONFIG.paths.assets, 'logo.svg');
+        if (await System.exists(logoPath)) {
+          const stats = await stat(logoPath);
+          const sizeMB = stats.size / (1024 * 1024);
+          if (sizeMB >= 2) {
+            console.warn(
+              `Warning: Logo size (${sizeMB.toFixed(2)}MB) exceeds 2MB limit.`
+            );
+          }
+        }
+      } catch {
+        /* ignore check errors */
+      }
+
       await System.copy(CONFIG.paths.assets, CONFIG.paths.distAssets, {
         recursive: true,
       });

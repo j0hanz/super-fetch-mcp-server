@@ -43,10 +43,10 @@ import { isObject } from './type-guards.js';
 async function getLocalIcons(
   signal?: AbortSignal
 ): Promise<McpIcon[] | undefined> {
-  const MAX_ICON_BYTES = 10 * 1024;
+  const MAX_ICON_BYTES = 2 * 1024 * 1024;
 
   try {
-    const iconPath = new URL('../assets/logo.svg', import.meta.url);
+    const iconPath = new URL('./assets/logo.svg', import.meta.url);
 
     if (signal?.aborted) return undefined;
     const { size } = await stat(iconPath);
