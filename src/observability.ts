@@ -99,6 +99,18 @@ function formatLogEntry(
   message: string,
   meta?: LogMetadata
 ): string {
+  if (config.logging.format === 'json') {
+    const merged = mergeMetadata(meta);
+    const entry: Record<string, unknown> = {
+      timestamp: createTimestamp(),
+      level: level.toUpperCase(),
+      message,
+    };
+    if (merged) {
+      Object.assign(entry, merged);
+    }
+    return JSON.stringify(entry);
+  }
   return `[${createTimestamp()}] ${level.toUpperCase()}: ${message}${formatMetadata(meta)}`;
 }
 

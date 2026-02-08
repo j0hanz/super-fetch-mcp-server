@@ -83,7 +83,7 @@ function createServerCapabilities(): {
   };
 } {
   return {
-    tools: { listChanged: false },
+    tools: { listChanged: true },
     resources: { listChanged: true, subscribe: true },
     logging: {},
     tasks: {

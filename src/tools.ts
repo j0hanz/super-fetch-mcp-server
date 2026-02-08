@@ -1013,6 +1013,15 @@ function buildResponse(
     inlineResult
   );
 
+  // Runtime validation guard: verify output matches schema
+  const validation = fetchUrlOutputSchema.safeParse(structuredContent);
+  if (!validation.success) {
+    logWarn('Tool output schema validation failed', {
+      url: inputUrl,
+      issues: validation.error.issues,
+    });
+  }
+
   return {
     content,
     structuredContent,

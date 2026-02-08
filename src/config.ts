@@ -534,6 +534,7 @@ export const config = {
   },
   logging: {
     level: parseLogLevel(env.LOG_LEVEL),
+    format: env.LOG_FORMAT?.toLowerCase() === 'json' ? 'json' : 'text',
   },
   constants: {
     maxHtmlSize: MAX_HTML_BYTES,
