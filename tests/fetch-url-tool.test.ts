@@ -295,10 +295,13 @@ describe('fetchUrlToolHandler', () => {
       assert.equal(typeof structured.markdown, 'string');
       assert.ok(String(structured.markdown).includes('[truncated]'));
       assertTextBlockMatchesStructured(response);
-      const nonTextBlock = response.content.find(
-        (block) => block.type !== 'text'
+      const embeddedResource = response.content.find(
+        (block) => block.type === 'resource'
       );
-      assert.equal(nonTextBlock, undefined);
+      assert.ok(
+        embeddedResource,
+        'Embedded resource should be emitted for markdown preview'
+      );
     } finally {
       config.runtime.httpMode = originalHttpMode;
       config.cache.enabled = originalCacheEnabled;

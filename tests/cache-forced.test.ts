@@ -36,10 +36,22 @@ describe('Forced Cache on Truncation', () => {
 
       const response = await fetchUrlToolHandler({ url });
 
-      const resourceBlock = response.content.find(
-        (b) => b.type === 'resource' || b.type === 'resource_link'
+      const resourceLinkBlock = response.content.find(
+        (b) => b.type === 'resource_link'
       );
-      assert.equal(resourceBlock, undefined);
+      assert.equal(
+        resourceLinkBlock,
+        undefined,
+        'Resource link should not be emitted when cache is disabled'
+      );
+
+      const embeddedResource = response.content.find(
+        (b) => b.type === 'resource'
+      );
+      assert.ok(
+        embeddedResource,
+        'Embedded resource should still be emitted for markdown preview'
+      );
 
       const cachedEntry = cache.get(cacheKey, { force: true });
       assert.equal(

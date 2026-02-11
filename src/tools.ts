@@ -9,6 +9,7 @@ import type {
 import type {
   CallToolResult,
   ContentBlock,
+  TextResourceContents,
   ToolAnnotations,
 } from '@modelcontextprotocol/sdk/types.js';
 
@@ -594,7 +595,7 @@ function applyInlineContentLimit(
 }
 
 /* -------------------------------------------------------------------------------------------------
- * Tool response blocks (text only)
+ * Tool response blocks (text + optional embedded resource)
  * ------------------------------------------------------------------------------------------------- */
 
 function buildTextBlock(
@@ -606,10 +607,39 @@ function buildTextBlock(
   };
 }
 
+function buildEmbeddedResource(
+  content: string,
+  url: string,
+  title?: string
+): ToolContentBlockUnion | null {
+  if (!content) return null;
+
+  const filename = cache.generateSafeFilename(url, title, undefined, '.md');
+  const uri = new URL(filename, 'file:///').href;
+
+  const resource: TextResourceContents = {
+    uri,
+    mimeType: 'text/markdown',
+    text: content,
+  };
+
+  return {
+    type: 'resource',
+    resource,
+  };
+}
+
 function buildToolContentBlocks(
-  structuredContent: Record<string, unknown>
+  structuredContent: Record<string, unknown>,
+  embeddedResource?: ToolContentBlockUnion | null
 ): ToolContentBlockUnion[] {
-  return [buildTextBlock(structuredContent)];
+  const blocks: ToolContentBlockUnion[] = [buildTextBlock(structuredContent)];
+
+  if (embeddedResource) {
+    blocks.push(embeddedResource);
+  }
+
+  return blocks;
 }
 
 /* -------------------------------------------------------------------------------------------------
@@ -1064,9 +1094,20 @@ function buildStructuredContent(
 }
 
 function buildFetchUrlContentBlocks(
-  structuredContent: Record<string, unknown>
+  structuredContent: Record<string, unknown>,
+  pipeline: PipelineResult<MarkdownPipelineResult>,
+  inlineResult: InlineResult
 ): ToolContentBlockUnion[] {
-  return buildToolContentBlocks(structuredContent);
+  const contentToEmbed = config.runtime.httpMode
+    ? inlineResult.content
+    : pipeline.data.content;
+
+  const embedded =
+    contentToEmbed && pipeline.url
+      ? buildEmbeddedResource(contentToEmbed, pipeline.url, pipeline.data.title)
+      : null;
+
+  return buildToolContentBlocks(structuredContent, embedded);
 }
 
 function buildResponse(
@@ -1079,7 +1120,11 @@ function buildResponse(
     inlineResult,
     inputUrl
   );
-  const content = buildFetchUrlContentBlocks(structuredContent);
+  const content = buildFetchUrlContentBlocks(
+    structuredContent,
+    pipeline,
+    inlineResult
+  );
 
   // Runtime validation guard: verify output matches schema
   const validation = fetchUrlOutputSchema.safeParse(structuredContent);
