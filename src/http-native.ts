@@ -45,7 +45,7 @@ import {
   isMcpRequestBody,
   type JsonRpcId,
 } from './mcp-validator.js';
-import { cancelTasksForOwner, createMcpServerForHttpSession } from './mcp.js';
+import { cancelTasksForOwner } from './mcp.js';
 import {
   logError,
   logInfo,
@@ -60,6 +60,7 @@ import {
   applyHttpServerTuning,
   drainConnectionsOnShutdown,
 } from './server-tuning.js';
+import { createMcpServerForHttpSession } from './server.js';
 import {
   composeCloseHandlers,
   createSessionStore,

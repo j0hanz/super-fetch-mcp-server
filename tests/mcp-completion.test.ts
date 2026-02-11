@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { createMcpServer } from '../dist/mcp.js';
+import { createMcpServer } from '../dist/server.js';
 
 interface CompletionRequest {
   method: 'completion/complete';

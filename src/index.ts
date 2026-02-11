@@ -4,8 +4,8 @@ import { parseArgs } from 'node:util';
 
 import { serverVersion } from './config.js';
 import { startHttpServer } from './http-native.js';
-import { startStdioServer } from './mcp.js';
 import { logError } from './observability.js';
+import { startStdioServer } from './server.js';
 
 function printUsage(): void {
   process.stdout.write(
