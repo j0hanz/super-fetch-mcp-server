@@ -783,13 +783,85 @@ function handleTaskToolCall(
   });
 }
 
+function formatDisplayUrl(rawUrl: string, maxLength = 40): string {
+  try {
+    const { host: rawHost, pathname, search } = new URL(rawUrl);
+    const host = rawHost.replace(/^www\./, '');
+    const path = pathname.replace(/\/$/, '');
+    const withoutProtocol = `${host}${path}${search}`;
+
+    if (withoutProtocol.length <= maxLength) {
+      return withoutProtocol;
+    }
+
+    const segments = path.split('/').filter(Boolean);
+    if (segments.length <= 2) {
+      return withoutProtocol.length > maxLength
+        ? `${withoutProtocol.substring(0, maxLength - 1)}\u2026`
+        : withoutProtocol;
+    }
+
+    // Try compact form with last two path segments
+    const lastTwo = segments.slice(-2).join('/');
+    const compact = `${host}/\u2026/${lastTwo}${search}`;
+    if (compact.length <= maxLength) {
+      return compact;
+    }
+
+    // Fall back to last segment only
+    const lastSegment = segments.at(-1) ?? '';
+    const compactShort = `${host}/\u2026/${lastSegment}${search}`;
+    if (compactShort.length <= maxLength) {
+      return compactShort;
+    }
+
+    return `${compactShort.substring(0, maxLength - 1)}\u2026`;
+  } catch {
+    if (rawUrl.length <= maxLength) return rawUrl;
+    return `${rawUrl.substring(0, maxLength - 1)}\u2026`;
+  }
+}
+
+async function sendToolProgressNotification(
+  extra: {
+    _meta?: { progressToken?: string | number | undefined };
+    sendNotification?: (notification: ProgressNotification) => Promise<void>;
+  },
+  url: string,
+  progress: number,
+  messagePrefix: string
+): Promise<void> {
+  if (
+    extra._meta?.progressToken === undefined ||
+    extra.sendNotification === undefined
+  ) {
+    return;
+  }
+
+  const token = extra._meta.progressToken;
+  const message = `${messagePrefix} ${formatDisplayUrl(url)}`;
+  try {
+    await extra.sendNotification({
+      method: 'notifications/progress',
+      params: {
+        progressToken: token,
+        progress,
+        total: 1,
+        message,
+      },
+    });
+  } catch {
+    // Silent fail on progress notification errors
+  }
+}
+
 async function handleDirectToolCall(
   params: ExtendedCallToolRequest['params'],
   context: ToolCallContext
 ): Promise<ServerResult> {
   const args = requireFetchUrlArgs(params.arguments);
 
-  return fetchUrlToolHandler(args, {
+  const extra = {
     ...(context.signal ? { signal: context.signal } : {}),
     ...(context.requestId !== undefined
       ? { requestId: context.requestId }
@@ -798,7 +870,23 @@ async function handleDirectToolCall(
       ? { sendNotification: context.sendNotification }
       : {}),
     ...(params._meta ? { _meta: params._meta } : {}),
-  });
+  };
+
+  await sendToolProgressNotification(extra, args.url, 0, '🌐︎ Fetching');
+
+  try {
+    const result = await fetchUrlToolHandler(args, extra);
+    await sendToolProgressNotification(extra, args.url, 1, '🌐︎ Fetched');
+    return result;
+  } catch (error) {
+    await sendToolProgressNotification(
+      extra,
+      args.url,
+      1,
+      '🌐︎ Failed to fetch'
+    );
+    throw error;
+  }
 }
 
 async function handleToolCallRequest(

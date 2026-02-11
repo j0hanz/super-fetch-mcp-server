@@ -27,7 +27,6 @@ import {
   logWarn,
   runWithRequestContext,
 } from './observability.js';
-import { wrapToolHandler } from './tool-wrapper.js';
 import type { MarkdownTransformResult } from './transform-types.js';
 import { transformBufferToMarkdown } from './transform.js';
 import { isObject } from './type-guards.js';
@@ -1262,10 +1261,6 @@ export function registerTools(server: McpServer): void {
       // Use specific tool icon here
       icons: [TOOL_ICON],
     } as { inputSchema: typeof fetchUrlInputSchema } & Record<string, unknown>,
-    withRequestContextIfMissing(
-      wrapToolHandler(TOOL_DEFINITION.handler, {
-        progressMessage: (args) => `🌐︎ Fetching ${args.url}`,
-      })
-    )
+    withRequestContextIfMissing(TOOL_DEFINITION.handler)
   );
 }
