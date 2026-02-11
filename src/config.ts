@@ -245,6 +245,12 @@ function parseAllowedHosts(envValue: string | undefined): Set<string> {
   return hosts;
 }
 
+function readOptionalFilePath(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
 const MAX_HTML_BYTES = 10 * 1024 * 1024; // 10 MB
 const MAX_INLINE_CONTENT_CHARS = parseInteger(
   env.MAX_INLINE_CONTENT_CHARS,
@@ -330,6 +336,13 @@ interface AuthConfig {
   staticTokens: string[];
 }
 
+interface HttpsConfig {
+  enabled: boolean;
+  keyFile: string | undefined;
+  certFile: string | undefined;
+  caFile: string | undefined;
+}
+
 interface OAuthUrls {
   issuerUrl: URL | undefined;
   authorizationUrl: URL | undefined;
@@ -397,6 +410,25 @@ function buildAuthConfig(baseUrl: URL): AuthConfig {
   };
 }
 
+function buildHttpsConfig(): HttpsConfig {
+  const keyFile = readOptionalFilePath(env.SERVER_TLS_KEY_FILE);
+  const certFile = readOptionalFilePath(env.SERVER_TLS_CERT_FILE);
+  const caFile = readOptionalFilePath(env.SERVER_TLS_CA_FILE);
+
+  if ((keyFile && !certFile) || (!keyFile && certFile)) {
+    throw new ConfigError(
+      'Both SERVER_TLS_KEY_FILE and SERVER_TLS_CERT_FILE must be set together'
+    );
+  }
+
+  return {
+    enabled: Boolean(keyFile && certFile),
+    keyFile,
+    certFile,
+    caFile,
+  };
+}
+
 const LOOPBACK_V4 = buildIpv4([127, 0, 0, 1]);
 const ANY_V4 = buildIpv4([0, 0, 0, 0]);
 const METADATA_V4_AWS = buildIpv4([169, 254, 169, 254]);
@@ -439,14 +471,28 @@ const BLOCKED_IPV4_MAPPED_PATTERN =
 
 const host = (env.HOST ?? LOOPBACK_V4).trim();
 const port = parsePort(env.PORT);
+const httpsConfig = buildHttpsConfig();
 const maxConnections = parseInteger(env.SERVER_MAX_CONNECTIONS, 0, 0);
+const headersTimeoutMs = parseOptionalInteger(env.SERVER_HEADERS_TIMEOUT_MS, 1);
+const requestTimeoutMs = parseOptionalInteger(env.SERVER_REQUEST_TIMEOUT_MS, 0);
+const keepAliveTimeoutMs = parseOptionalInteger(
+  env.SERVER_KEEP_ALIVE_TIMEOUT_MS,
+  1
+);
+const keepAliveTimeoutBufferMs = parseOptionalInteger(
+  env.SERVER_KEEP_ALIVE_TIMEOUT_BUFFER_MS,
+  0
+);
+const maxHeadersCount = parseOptionalInteger(env.SERVER_MAX_HEADERS_COUNT, 1);
 const blockPrivateConnections = parseBoolean(
   env.SERVER_BLOCK_PRIVATE_CONNECTIONS,
   false
 );
 const allowRemote = parseBoolean(env.ALLOW_REMOTE, false);
 
-const baseUrl = new URL(`http://${formatHostForUrl(host)}:${port}`);
+const baseUrl = new URL(
+  `${httpsConfig.enabled ? 'https' : 'http'}://${formatHostForUrl(host)}:${port}`
+);
 
 interface RuntimeState {
   httpMode: boolean;
@@ -462,13 +508,16 @@ export const config = {
     version: serverVersion,
     port,
     host,
+    https: httpsConfig,
     sessionTtlMs: DEFAULT_SESSION_TTL_MS,
     sessionInitTimeoutMs: DEFAULT_SESSION_INIT_TIMEOUT_MS,
     maxSessions: DEFAULT_MAX_SESSIONS,
     http: {
-      headersTimeoutMs: undefined,
-      requestTimeoutMs: undefined,
-      keepAliveTimeoutMs: undefined,
+      headersTimeoutMs,
+      requestTimeoutMs,
+      keepAliveTimeoutMs,
+      keepAliveTimeoutBufferMs,
+      maxHeadersCount,
       maxConnections,
       blockPrivateConnections,
       shutdownCloseIdleConnections: true,

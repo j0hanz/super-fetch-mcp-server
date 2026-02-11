@@ -1,8 +1,12 @@
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import { describe, it } from 'node:test';
 
-import { sha256Hex, timingSafeEqualUtf8 } from '../dist/crypto.js';
+import {
+  hmacSha256Hex,
+  sha256Hex,
+  timingSafeEqualUtf8,
+} from '../dist/crypto.js';
 
 describe('timingSafeEqualUtf8', () => {
   it('returns true for identical strings', () => {
@@ -27,5 +31,14 @@ describe('sha256Hex', () => {
     const input = 'a'.repeat(fiveMb + 1);
     const expected = createHash('sha256').update(input).digest('hex');
     assert.equal(sha256Hex(input), expected);
+  });
+});
+
+describe('hmacSha256Hex', () => {
+  it('matches createHmac output', () => {
+    const key = 'secret-key';
+    const input = 'hello';
+    const expected = createHmac('sha256', key).update(input).digest('hex');
+    assert.equal(hmacSha256Hex(key, input), expected);
   });
 });

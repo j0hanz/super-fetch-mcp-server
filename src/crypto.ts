@@ -1,5 +1,10 @@
 import { Buffer } from 'node:buffer';
-import { createHash, hash as oneShotHash, timingSafeEqual } from 'node:crypto';
+import {
+  createHash,
+  createHmac,
+  hash as oneShotHash,
+  timingSafeEqual,
+} from 'node:crypto';
 
 const MAX_HASH_INPUT_BYTES = 5 * 1024 * 1024;
 
@@ -62,4 +67,11 @@ function hashHex(
 
 export function sha256Hex(input: string | Uint8Array): string {
   return hashHex('sha256', input);
+}
+
+export function hmacSha256Hex(
+  key: string | Uint8Array,
+  input: string | Uint8Array
+): string {
+  return createHmac('sha256', key).update(input).digest('hex');
 }

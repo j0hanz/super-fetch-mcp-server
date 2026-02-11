@@ -5,6 +5,8 @@ export interface HttpServerTuningTarget {
   headersTimeout?: number;
   requestTimeout?: number;
   keepAliveTimeout?: number;
+  keepAliveTimeoutBuffer?: number;
+  maxHeadersCount?: number | null;
   maxConnections?: number;
   on?: (event: string, listener: (...args: unknown[]) => void) => void;
   closeIdleConnections?: () => void;
@@ -14,7 +16,34 @@ export interface HttpServerTuningTarget {
 const DROP_LOG_INTERVAL_MS = 10_000;
 
 export function applyHttpServerTuning(server: HttpServerTuningTarget): void {
-  const { maxConnections } = config.server.http;
+  const {
+    headersTimeoutMs,
+    requestTimeoutMs,
+    keepAliveTimeoutMs,
+    keepAliveTimeoutBufferMs,
+    maxHeadersCount,
+    maxConnections,
+  } = config.server.http;
+
+  if (headersTimeoutMs !== undefined) {
+    server.headersTimeout = headersTimeoutMs;
+  }
+
+  if (requestTimeoutMs !== undefined) {
+    server.requestTimeout = requestTimeoutMs;
+  }
+
+  if (keepAliveTimeoutMs !== undefined) {
+    server.keepAliveTimeout = keepAliveTimeoutMs;
+  }
+
+  if (keepAliveTimeoutBufferMs !== undefined) {
+    server.keepAliveTimeoutBuffer = keepAliveTimeoutBufferMs;
+  }
+
+  if (maxHeadersCount !== undefined) {
+    server.maxHeadersCount = maxHeadersCount;
+  }
 
   if (typeof maxConnections === 'number' && maxConnections > 0) {
     server.maxConnections = maxConnections;

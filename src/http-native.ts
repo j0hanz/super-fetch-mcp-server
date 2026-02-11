@@ -1,11 +1,18 @@
 import { Buffer } from 'node:buffer';
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import {
   createServer,
   type IncomingMessage,
   type Server,
   type ServerResponse,
 } from 'node:http';
+import {
+  createServer as createHttpsServer,
+  type Server as HttpsServer,
+  type ServerOptions as HttpsServerOptions,
+} from 'node:https';
+import type { Socket } from 'node:net';
 import { freemem, hostname, totalmem } from 'node:os';
 import { monitorEventLoopDelay, performance } from 'node:perf_hooks';
 import process from 'node:process';
@@ -25,7 +32,7 @@ import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 
 import { keys as cacheKeys, handleDownload } from './cache.js';
 import { config, enableHttpMode, serverVersion } from './config.js';
-import { sha256Hex, timingSafeEqualUtf8 } from './crypto.js';
+import { hmacSha256Hex, timingSafeEqualUtf8 } from './crypto.js';
 import { normalizeHost } from './host-normalization.js';
 import {
   createDefaultBlockList,
@@ -64,6 +71,8 @@ import {
 } from './session.js';
 import { getTransformPoolStats } from './transform.js';
 import { isObject } from './type-guards.js';
+
+type NetworkServer = Server | HttpsServer;
 
 function createTransportAdapter(
   transportImpl: StreamableHTTPServerTransport
@@ -218,12 +227,12 @@ function normalizeRemoteAddress(address: string | undefined): string | null {
   return trimmed;
 }
 
-function registerInboundBlockList(server: Server): void {
+function registerInboundBlockList(server: NetworkServer): void {
   if (!config.server.http.blockPrivateConnections) return;
 
   const blockList = createDefaultBlockList();
 
-  server.on('connection', (socket) => {
+  server.on('connection', (socket: Socket) => {
     const remoteAddress = normalizeRemoteAddress(socket.remoteAddress);
     if (!remoteAddress) return;
 
@@ -245,6 +254,28 @@ function getHeaderValue(req: IncomingMessage, name: string): string | null {
   if (!val) return null;
   if (Array.isArray(val)) return val[0] ?? null;
   return val;
+}
+
+const SINGLE_VALUE_HEADER_NAMES: readonly string[] = [
+  'authorization',
+  'x-api-key',
+  'host',
+  'origin',
+  'content-length',
+  'mcp-session-id',
+  'x-mcp-session-id',
+];
+
+function hasDuplicateHeader(req: IncomingMessage, name: string): boolean {
+  const values = req.headersDistinct[name];
+  return Array.isArray(values) && values.length > 1;
+}
+
+function findDuplicateSingleValueHeader(req: IncomingMessage): string | null {
+  for (const name of SINGLE_VALUE_HEADER_NAMES) {
+    if (hasDuplicateHeader(req, name)) return name;
+  }
+  return null;
 }
 
 function getMcpSessionId(req: IncomingMessage): string | null {
@@ -713,10 +744,12 @@ function createRateLimitManagerImpl(
 }
 
 const STATIC_TOKEN_TTL_SECONDS = 60 * 60 * 24;
+const STATIC_TOKEN_HMAC_KEY = randomBytes(32);
+const SESSION_AUTH_FINGERPRINT_KEY = randomBytes(32);
 
 class AuthService {
   private readonly staticTokenDigests = config.auth.staticTokens.map((token) =>
-    sha256Hex(token)
+    hmacSha256Hex(STATIC_TOKEN_HMAC_KEY, token)
   );
 
   async authenticate(
@@ -780,7 +813,7 @@ class AuthService {
       throw new InvalidTokenError('No static tokens configured');
     }
 
-    const tokenDigest = sha256Hex(token);
+    const tokenDigest = hmacSha256Hex(STATIC_TOKEN_HMAC_KEY, token);
     const matched = hasConstantTimeMatch(this.staticTokenDigests, tokenDigest);
 
     if (!matched) throw new InvalidTokenError('Invalid token');
@@ -1163,7 +1196,10 @@ function buildAuthFingerprint(auth: AuthInfo | undefined): string | null {
   const safeToken = typeof auth.token === 'string' ? auth.token : '';
 
   if (!safeClientId && !safeToken) return null;
-  return sha256Hex(`${safeClientId}:${safeToken}`);
+  return hmacSha256Hex(
+    SESSION_AUTH_FINGERPRINT_KEY,
+    `${safeClientId}:${safeToken}`
+  );
 }
 
 class McpSessionGateway {
@@ -1536,6 +1572,15 @@ class HttpRequestPipeline {
           ...(sessionId ? { sessionId } : {}),
         },
         async () => {
+          const duplicateHeader = findDuplicateSingleValueHeader(rawReq);
+          if (duplicateHeader) {
+            sendJson(rawRes, 400, {
+              error: `Duplicate ${duplicateHeader} header is not allowed`,
+            });
+            drainRequest(rawReq);
+            return;
+          }
+
           const ctx = buildRequestContext(rawReq, rawRes, signal);
           if (!ctx) {
             drainRequest(rawReq);
@@ -1599,8 +1644,35 @@ function handlePipelineError(error: unknown, res: ServerResponse): void {
   res.end();
 }
 
+function createNetworkServer(
+  listener: (req: IncomingMessage, res: ServerResponse) => void
+): NetworkServer {
+  const { https } = config.server;
+  if (!https.enabled) {
+    return createServer(listener);
+  }
+
+  const { keyFile, certFile, caFile } = https;
+  if (!keyFile || !certFile) {
+    throw new Error(
+      'HTTPS enabled but SERVER_TLS_KEY_FILE / SERVER_TLS_CERT_FILE are missing'
+    );
+  }
+
+  const tlsOptions: HttpsServerOptions = {
+    key: readFileSync(keyFile),
+    cert: readFileSync(certFile),
+  };
+
+  if (caFile) {
+    tlsOptions.ca = readFileSync(caFile);
+  }
+
+  return createHttpsServer(tlsOptions, listener);
+}
+
 async function listen(
-  server: Server,
+  server: NetworkServer,
   host: string,
   port: number
 ): Promise<void> {
@@ -1618,14 +1690,14 @@ async function listen(
   });
 }
 
-function resolveListeningPort(server: Server, fallback: number): number {
+function resolveListeningPort(server: NetworkServer, fallback: number): number {
   const addr = server.address();
   if (addr && typeof addr === 'object') return addr.port;
   return fallback;
 }
 
 function createShutdownHandler(options: {
-  server: Server;
+  server: NetworkServer;
   rateLimiter: RateLimitManagerImpl;
   sessionCleanup: AbortController;
   sessionStore: SessionStore;
@@ -1698,7 +1770,7 @@ export async function startHttpServer(): Promise<{
   const dispatcher = new HttpDispatcher(sessionStore, mcpGateway);
   const pipeline = new HttpRequestPipeline(rateLimiter, dispatcher);
 
-  const server = createServer((req, res) => {
+  const server = createNetworkServer((req, res) => {
     void pipeline.handle(req, res).catch((error: unknown) => {
       handlePipelineError(error, res);
     });
@@ -1709,7 +1781,8 @@ export async function startHttpServer(): Promise<{
   await listen(server, config.server.host, config.server.port);
 
   const port = resolveListeningPort(server, config.server.port);
-  logInfo(`HTTP server listening on port ${port}`, {
+  const protocol = config.server.https.enabled ? 'https' : 'http';
+  logInfo(`${protocol.toUpperCase()} server listening on port ${port}`, {
     platform: process.platform,
     arch: process.arch,
     hostname: hostname(),
