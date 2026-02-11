@@ -335,6 +335,12 @@ The `fetch-url` tool supports optional async task execution. Include a `task` fi
 
 Then poll `tasks/get` until the task status is `completed` or `failed`, and retrieve the result via `tasks/result`.
 
+### Prompts
+
+| Name       | Description                                      |
+| ---------- | ------------------------------------------------ |
+| `get-help` | Returns server usage guidance and workflow hints |
+
 ### Resources
 
 | URI Pattern                                | MIME Type          | Description                                      |
@@ -358,13 +364,16 @@ The server declares full MCP task support:
 
 ## HTTP Mode Endpoints
 
-| Method   | Path                                | Auth | Description                              |
-| -------- | ----------------------------------- | ---- | ---------------------------------------- |
-| `GET`    | `/health`                           | No   | Health check with server stats           |
-| `POST`   | `/mcp`                              | Yes  | MCP JSON-RPC (Streamable HTTP)           |
-| `GET`    | `/mcp`                              | Yes  | SSE stream for server-initiated messages |
-| `DELETE` | `/mcp`                              | Yes  | Terminate MCP session                    |
-| `GET`    | `/mcp/downloads/{namespace}/{hash}` | Yes  | Download cached content                  |
+| Method   | Path                                | Auth  | Description                              |
+| -------- | ----------------------------------- | ----- | ---------------------------------------- |
+| `GET`    | `/health`                           | No    | Health check (minimal payload)           |
+| `GET`    | `/health?verbose=true`              | Yes\* | Detailed diagnostics and runtime metrics |
+| `POST`   | `/mcp`                              | Yes   | MCP JSON-RPC (Streamable HTTP)           |
+| `GET`    | `/mcp`                              | Yes   | SSE stream for server-initiated messages |
+| `DELETE` | `/mcp`                              | Yes   | Terminate MCP session                    |
+| `GET`    | `/mcp/downloads/{namespace}/{hash}` | Yes   | Download cached content                  |
+
+\* `verbose=true` can be read without auth only for local-only deployments (`ALLOW_REMOTE=false`).
 
 ### Session Behavior
 

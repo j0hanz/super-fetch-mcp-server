@@ -18,6 +18,7 @@ const requestContext = new AsyncLocalStorage<RequestContext>({
   name: 'requestContext',
 });
 let mcpServer: McpServer | undefined;
+const sessionServers = new Map<string, McpServer>();
 let stderrAvailable = true;
 
 process.stderr.on('error', () => {
@@ -26,6 +27,26 @@ process.stderr.on('error', () => {
 
 export function setMcpServer(server: McpServer): void {
   mcpServer = server;
+}
+
+export function registerMcpSessionServer(
+  sessionId: string,
+  server: McpServer
+): void {
+  if (!sessionId) return;
+  sessionServers.set(sessionId, server);
+}
+
+export function unregisterMcpSessionServer(sessionId: string): void {
+  if (!sessionId) return;
+  sessionServers.delete(sessionId);
+}
+
+export function unregisterMcpSessionServerByServer(server: McpServer): void {
+  for (const [sessionId, mappedServer] of sessionServers.entries()) {
+    if (mappedServer !== server) continue;
+    sessionServers.delete(sessionId);
+  }
 }
 
 export function runWithRequestContext<T>(
@@ -157,10 +178,11 @@ function writeLog(level: LogLevel, message: string, meta?: LogMetadata): void {
   const line = formatLogEntry(level, message, meta);
   safeWriteStderr(`${stripVTControlCharacters(line)}\n`);
 
-  const server = mcpServer;
-  if (!server) return;
-
   const sessionId = getSessionId();
+  const server = sessionId
+    ? (sessionServers.get(sessionId) ?? mcpServer)
+    : mcpServer;
+  if (!server) return;
 
   try {
     server.server

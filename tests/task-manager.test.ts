@@ -71,3 +71,22 @@ describe('TaskManager.listTasks cursor', () => {
     );
   });
 });
+
+describe('TaskManager.createTask ttl normalization', () => {
+  it('enforces minimum and maximum ttl bounds', () => {
+    const ownerKey = `ttl-bounds-${Date.now()}`;
+    const belowMin = taskManager.createTask(
+      { ttl: 1 },
+      'Task started',
+      ownerKey
+    );
+    const aboveMax = taskManager.createTask(
+      { ttl: 999_999_999 },
+      'Task started',
+      ownerKey
+    );
+
+    assert.equal(belowMin.ttl, 1_000);
+    assert.equal(aboveMax.ttl, 86_400_000);
+  });
+});

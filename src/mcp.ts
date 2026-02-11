@@ -21,11 +21,12 @@ import { config } from './config.js';
 import {
   logError,
   logInfo,
+  logWarn,
   runWithRequestContext,
   setMcpServer,
 } from './observability.js';
 import { registerConfigResource } from './resources.js';
-import { type CreateTaskResult, taskManager } from './tasks.js';
+import { type CreateTaskResult, taskManager, type TaskState } from './tasks.js';
 import {
   FETCH_URL_TOOL_NAME,
   fetchUrlInputSchema,
@@ -69,6 +70,7 @@ async function getLocalIcons(
 }
 
 function createServerCapabilities(): {
+  prompts: { listChanged: boolean };
   tools: { listChanged: boolean };
   resources: { listChanged: boolean; subscribe: boolean };
   logging: Record<string, never>;
@@ -83,6 +85,7 @@ function createServerCapabilities(): {
   };
 } {
   return {
+    prompts: { listChanged: true },
     tools: { listChanged: true },
     resources: { listChanged: true, subscribe: true },
     logging: {},
@@ -149,6 +152,28 @@ function registerInstructionsResource(
   );
 }
 
+function registerHelpPrompt(server: McpServer, instructions: string): void {
+  server.registerPrompt(
+    'get-help',
+    {
+      title: 'Get Help',
+      description: 'Returns usage guidance for the superFetch MCP server.',
+    },
+    () => ({
+      description: 'superFetch MCP usage guidance',
+      messages: [
+        {
+          role: 'assistant',
+          content: {
+            type: 'text',
+            text: instructions,
+          },
+        },
+      ],
+    })
+  );
+}
+
 /* -------------------------------------------------------------------------------------------------
  * Tasks API schemas
  * ------------------------------------------------------------------------------------------------- */
@@ -205,6 +230,9 @@ interface ExtendedCallToolRequest {
   [key: string]: unknown;
 }
 
+const MIN_TASK_TTL_MS = 1_000;
+const MAX_TASK_TTL_MS = 86_400_000;
+
 const ExtendedCallToolRequestSchema: z.ZodType<ExtendedCallToolRequest> =
   z.looseObject({
     method: z.literal('tools/call'),
@@ -213,7 +241,12 @@ const ExtendedCallToolRequestSchema: z.ZodType<ExtendedCallToolRequest> =
       arguments: z.record(z.string(), z.unknown()).optional(),
       task: z
         .object({
-          ttl: z.number().optional(),
+          ttl: z
+            .number()
+            .int()
+            .min(MIN_TASK_TTL_MS)
+            .max(MAX_TASK_TTL_MS)
+            .optional(),
         })
         .optional(),
       _meta: z
@@ -359,13 +392,53 @@ function clearTaskExecution(taskId: string): void {
   taskAbortControllers.delete(taskId);
 }
 
+interface TaskStatusNotificationParams extends Record<string, unknown> {
+  taskId: string;
+  status: TaskState['status'];
+  statusMessage?: string;
+  createdAt: string;
+  lastUpdatedAt: string;
+  ttl: number;
+  pollInterval: number;
+}
+
+function buildTaskStatusParams(task: TaskState): TaskStatusNotificationParams {
+  return {
+    taskId: task.taskId,
+    status: task.status,
+    ...(task.statusMessage ? { statusMessage: task.statusMessage } : {}),
+    createdAt: task.createdAt,
+    lastUpdatedAt: task.lastUpdatedAt,
+    ttl: task.ttl,
+    pollInterval: task.pollInterval,
+  };
+}
+
+function emitTaskStatusNotification(server: McpServer, task: TaskState): void {
+  if (!server.isConnected()) return;
+
+  void server.server
+    .notification({
+      method: 'notifications/tasks/status',
+      params: buildTaskStatusParams(task),
+    } as { method: string; params: TaskStatusNotificationParams })
+    .catch((error: unknown) => {
+      logWarn('Failed to send task status notification', {
+        taskId: task.taskId,
+        status: task.status,
+        error,
+      });
+    });
+}
+
 async function runFetchTaskExecution(params: {
+  server: McpServer;
   taskId: string;
   args: { url: string };
   meta?: ExtendedCallToolRequest['params']['_meta'];
   sendNotification?: (notification: ProgressNotification) => Promise<void>;
 }): Promise<void> {
-  const { taskId, args, meta, sendNotification } = params;
+  const { server, taskId, args, meta, sendNotification } = params;
 
   return runWithRequestContext(
     { requestId: taskId, operationId: taskId },
@@ -398,6 +471,9 @@ async function runFetchTaskExecution(params: {
             : {}),
           result,
         });
+
+        const task = taskManager.getTask(taskId);
+        if (task) emitTaskStatusNotification(server, task);
       } catch (error: unknown) {
         const errorMessage =
           error instanceof Error ? error.message : String(error);
@@ -418,6 +494,9 @@ async function runFetchTaskExecution(params: {
           statusMessage: errorMessage,
           error: errorPayload,
         });
+
+        const task = taskManager.getTask(taskId);
+        if (task) emitTaskStatusNotification(server, task);
       } finally {
         clearTaskExecution(taskId);
       }
@@ -426,6 +505,7 @@ async function runFetchTaskExecution(params: {
 }
 
 function handleTaskToolCall(
+  server: McpServer,
   params: ExtendedCallToolRequest['params'],
   context: ToolCallContext
 ): CreateTaskResult {
@@ -439,6 +519,7 @@ function handleTaskToolCall(
   );
 
   void runFetchTaskExecution({
+    server,
     taskId: task.taskId,
     args: validArgs,
     ...(params._meta ? { meta: params._meta } : {}),
@@ -477,13 +558,14 @@ async function handleDirectToolCall(
 }
 
 async function handleToolCallRequest(
+  server: McpServer,
   request: ExtendedCallToolRequest,
   context: ToolCallContext
 ): Promise<ServerResult> {
   const { params } = request;
 
   if (params.task) {
-    return handleTaskToolCall(params, context);
+    return handleTaskToolCall(server, params, context);
   }
 
   if (params.name === FETCH_URL_TOOL_NAME) {
@@ -517,7 +599,7 @@ function registerTaskHandlers(server: McpServer): void {
         },
         () => {
           const parsed = parseExtendedCallToolRequest(request);
-          return handleToolCallRequest(parsed, context);
+          return handleToolCallRequest(server, parsed, context);
         }
       );
     }
@@ -628,6 +710,8 @@ function registerTaskHandlers(server: McpServer): void {
     // Make cancellation actionable: abort any in-flight execution.
     abortTaskExecution(taskId);
 
+    emitTaskStatusNotification(server, task);
+
     return Promise.resolve({
       taskId: task.taskId,
       status: task.status,
@@ -645,6 +729,16 @@ function registerTaskHandlers(server: McpServer): void {
  * ------------------------------------------------------------------------------------------------- */
 
 export async function createMcpServer(): Promise<McpServer> {
+  return createMcpServerWithOptions({ registerObservabilityServer: true });
+}
+
+interface CreateMcpServerOptions {
+  registerObservabilityServer?: boolean;
+}
+
+async function createMcpServerWithOptions(
+  options?: CreateMcpServerOptions
+): Promise<McpServer> {
   const startupSignal = AbortSignal.timeout(5000);
   const [instructions, localIcons] = await Promise.all([
     createServerInstructions(config.server.version, startupSignal),
@@ -657,15 +751,22 @@ export async function createMcpServer(): Promise<McpServer> {
     instructions,
   });
 
-  setMcpServer(server);
+  if (options?.registerObservabilityServer ?? true) {
+    setMcpServer(server);
+  }
 
   registerTools(server);
+  registerHelpPrompt(server, instructions);
   registerCachedContentResource(server, localIcons);
   registerInstructionsResource(server, instructions);
   registerConfigResource(server);
   registerTaskHandlers(server);
 
   return server;
+}
+
+export async function createMcpServerForHttpSession(): Promise<McpServer> {
+  return createMcpServerWithOptions({ registerObservabilityServer: false });
 }
 
 function attachServerErrorHandler(server: McpServer): void {

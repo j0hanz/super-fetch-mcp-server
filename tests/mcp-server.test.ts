@@ -141,4 +141,16 @@ describe('MCP Server', () => {
       }
     });
   });
+
+  describe('Prompts', () => {
+    it('registers get-help prompt', async () => {
+      const server = await createMcpServer();
+      // @ts-ignore Access private prompt registry for validation
+      const prompts = server._registeredPrompts;
+      const prompt = prompts?.['get-help'];
+
+      assert.ok(prompt, 'get-help prompt should be registered');
+      assert.equal(typeof prompt.callback, 'function');
+    });
+  });
 });

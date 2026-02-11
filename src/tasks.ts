@@ -55,6 +55,8 @@ export interface CreateTaskResult {
 }
 
 const DEFAULT_TTL_MS = 60_000;
+const MIN_TTL_MS = 1_000;
+const MAX_TTL_MS = 86_400_000;
 const DEFAULT_POLL_INTERVAL_MS = 1_000;
 const DEFAULT_OWNER_KEY = 'default';
 const DEFAULT_PAGE_SIZE = 50;
@@ -66,6 +68,14 @@ function isTerminalStatus(status: TaskStatus): boolean {
   return (
     status === 'completed' || status === 'failed' || status === 'cancelled'
   );
+}
+
+function normalizeTaskTtl(ttl: number | undefined): number {
+  if (!Number.isFinite(ttl)) return DEFAULT_TTL_MS;
+  const rounded = Math.trunc(ttl ?? DEFAULT_TTL_MS);
+  if (rounded < MIN_TTL_MS) return MIN_TTL_MS;
+  if (rounded > MAX_TTL_MS) return MAX_TTL_MS;
+  return rounded;
 }
 
 type RunInContext = (fn: () => void) => void;
@@ -119,7 +129,7 @@ class TaskManager {
       statusMessage,
       createdAt,
       lastUpdatedAt: createdAt,
-      ttl: options?.ttl ?? DEFAULT_TTL_MS,
+      ttl: normalizeTaskTtl(options?.ttl),
       pollInterval: DEFAULT_POLL_INTERVAL_MS,
       _createdAtMs: now.getTime(),
     };

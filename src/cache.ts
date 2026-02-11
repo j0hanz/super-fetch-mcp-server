@@ -408,24 +408,76 @@ export function registerCachedContentResource(
     }
   );
 
-  // Subscriptions
-  const subscriptions = new Set<string>();
+  // Subscriptions (session scoped)
+  const subscriptionsByScope = new Map<string, Set<string>>();
+  const DEFAULT_SCOPE = '__default__';
 
-  server.server.setRequestHandler(SubscribeRequestSchema, (req) => {
-    if (isValidCacheUri(req.params.uri)) {
-      subscriptions.add(req.params.uri);
-    } else {
+  interface SubscriptionExtra {
+    sessionId?: string;
+    requestInfo?: { headers?: Record<string, string | string[] | undefined> };
+  }
+
+  function resolveScope(extra?: SubscriptionExtra): string {
+    if (extra?.sessionId) return extra.sessionId;
+
+    const headerValue = extra?.requestInfo?.headers?.['mcp-session-id'];
+    if (typeof headerValue === 'string' && headerValue.trim().length > 0) {
+      return headerValue.trim();
+    }
+    if (Array.isArray(headerValue)) {
+      const first = headerValue[0];
+      if (typeof first === 'string' && first.trim().length > 0) {
+        return first.trim();
+      }
+    }
+
+    return DEFAULT_SCOPE;
+  }
+
+  function addSubscription(scope: string, uri: string): void {
+    const set = subscriptionsByScope.get(scope);
+    if (set) {
+      set.add(uri);
+      return;
+    }
+    subscriptionsByScope.set(scope, new Set([uri]));
+  }
+
+  function removeSubscription(scope: string, uri: string): void {
+    const set = subscriptionsByScope.get(scope);
+    if (!set) return;
+    set.delete(uri);
+    if (set.size === 0) subscriptionsByScope.delete(scope);
+  }
+
+  function hasSubscription(uri: string): boolean {
+    for (const uris of subscriptionsByScope.values()) {
+      if (uris.has(uri)) return true;
+    }
+    return false;
+  }
+
+  server.server.setRequestHandler(SubscribeRequestSchema, (req, extra) => {
+    if (!isValidCacheUri(req.params.uri)) {
       throw new McpError(ErrorCode.InvalidParams, 'Invalid resource URI');
     }
+
+    addSubscription(
+      resolveScope(extra as SubscriptionExtra | undefined),
+      req.params.uri
+    );
     return {};
   });
 
-  server.server.setRequestHandler(UnsubscribeRequestSchema, (req) => {
-    if (isValidCacheUri(req.params.uri)) {
-      subscriptions.delete(req.params.uri);
-    } else {
+  server.server.setRequestHandler(UnsubscribeRequestSchema, (req, extra) => {
+    if (!isValidCacheUri(req.params.uri)) {
       throw new McpError(ErrorCode.InvalidParams, 'Invalid resource URI');
     }
+
+    removeSubscription(
+      resolveScope(extra as SubscriptionExtra | undefined),
+      req.params.uri
+    );
     return {};
   });
 
@@ -447,7 +499,7 @@ export function registerCachedContentResource(
 
     const uri = toResourceUri(cacheKey);
 
-    if (capabilities?.resources?.subscribe && uri && subscriptions.has(uri)) {
+    if (capabilities?.resources?.subscribe && uri && hasSubscription(uri)) {
       void server.server
         .sendResourceUpdated({ uri })
         .catch((error: unknown) => {

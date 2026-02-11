@@ -38,12 +38,15 @@ import {
   isMcpRequestBody,
   type JsonRpcId,
 } from './mcp-validator.js';
-import { createMcpServer } from './mcp.js';
+import { createMcpServerForHttpSession } from './mcp.js';
 import {
   logError,
   logInfo,
   logWarn,
+  registerMcpSessionServer,
   runWithRequestContext,
+  unregisterMcpSessionServer,
+  unregisterMcpSessionServerByServer,
 } from './observability.js';
 import {
   applyHttpServerTuning,
@@ -181,6 +184,8 @@ function createRequestAbortSignal(req: IncomingMessage): {
     abortRequest();
   };
   const onClose = (): void => {
+    // A normal close after a complete body should not be treated as cancellation.
+    if (req.complete) return;
     abortRequest();
   };
   const onError = (): void => {
@@ -292,6 +297,17 @@ async function closeTransportBestEffort(
   }
 }
 
+async function closeMcpServerBestEffort(
+  server: McpServer,
+  context: string
+): Promise<void> {
+  try {
+    await server.close();
+  } catch (error) {
+    logWarn('MCP server close failed', { context, error });
+  }
+}
+
 type JsonBodyErrorKind = 'payload-too-large' | 'invalid-json' | 'read-failed';
 
 class JsonBodyError extends Error {
@@ -305,6 +321,10 @@ class JsonBodyError extends Error {
 }
 
 const DEFAULT_BODY_LIMIT_BYTES = 1024 * 1024;
+
+function isRequestReadAborted(req: IncomingMessage): boolean {
+  return req.destroyed && !req.complete;
+}
 
 class JsonBodyReader {
   async read(
@@ -328,7 +348,7 @@ class JsonBodyReader {
       }
     }
 
-    if (signal?.aborted || req.destroyed) {
+    if (signal?.aborted || isRequestReadAborted(req)) {
       throw new JsonBodyError('read-failed', 'Request aborted');
     }
 
@@ -407,7 +427,7 @@ class JsonBodyReader {
     const sink = new Writable({
       write: (chunk, _encoding, callback): void => {
         try {
-          if (signal?.aborted || req.destroyed) {
+          if (signal?.aborted || isRequestReadAborted(req)) {
             callback(new JsonBodyError('read-failed', 'Request aborted'));
             return;
           }
@@ -434,7 +454,7 @@ class JsonBodyReader {
     });
 
     try {
-      if (signal?.aborted || req.destroyed) {
+      if (signal?.aborted || isRequestReadAborted(req)) {
         throw new JsonBodyError('read-failed', 'Request aborted');
       }
 
@@ -442,7 +462,7 @@ class JsonBodyReader {
       return { chunks, size };
     } catch (err: unknown) {
       if (err instanceof JsonBodyError) throw err;
-      if (signal?.aborted || req.destroyed) {
+      if (signal?.aborted || isRequestReadAborted(req)) {
         throw new JsonBodyError('read-failed', 'Request aborted');
       }
       throw new JsonBodyError(
@@ -970,21 +990,177 @@ function sendError(
   });
 }
 
-const MCP_PROTOCOL_VERSION = '2025-11-25';
+const DEFAULT_MCP_PROTOCOL_VERSION = '2025-11-25';
+const LEGACY_MCP_PROTOCOL_VERSION = '2025-03-26';
+const SUPPORTED_MCP_PROTOCOL_VERSIONS = new Set<string>([
+  DEFAULT_MCP_PROTOCOL_VERSION,
+  LEGACY_MCP_PROTOCOL_VERSION,
+]);
 
 function ensureMcpProtocolVersion(
   req: IncomingMessage,
   res: ServerResponse
 ): boolean {
-  const version = getHeaderValue(req, 'mcp-protocol-version');
-  if (!version) {
-    sendError(res, -32600, 'Missing MCP-Protocol-Version header');
-    return false;
+  const versionHeader = getHeaderValue(req, 'mcp-protocol-version');
+  if (!versionHeader) {
+    // Backwards-compatible fallback when header is missing.
+    return true;
   }
-  if (version !== MCP_PROTOCOL_VERSION) {
-    sendError(res, -32600, `Unsupported MCP-Protocol-Version: ${version}`);
-    return false;
-  }
+
+  const version = versionHeader.trim();
+  if (SUPPORTED_MCP_PROTOCOL_VERSIONS.has(version)) return true;
+
+  sendError(res, -32600, `Unsupported MCP-Protocol-Version: ${version}`);
+  return false;
+}
+
+function isVerboseHealthRequest(ctx: RequestContext): boolean {
+  const value = ctx.url.searchParams.get('verbose');
+  if (!value) return false;
+  const normalized = value.trim().toLowerCase();
+  return normalized === '1' || normalized === 'true';
+}
+
+interface HealthResponse {
+  status: 'ok';
+  version: string;
+  uptime: number;
+  timestamp: string;
+  os?: {
+    hostname: string;
+    platform: NodeJS.Platform;
+    arch: string;
+    memoryFree: number;
+    memoryTotal: number;
+  };
+  process?: {
+    pid: number;
+    ppid: number;
+    memory: NodeJS.MemoryUsage;
+    cpu: NodeJS.CpuUsage;
+    resource: NodeJS.ResourceUsage;
+  };
+  perf?: ReturnType<typeof getEventLoopStats>;
+  stats?: {
+    activeSessions: number;
+    cacheKeys: number;
+    workerPool: {
+      queueDepth: number;
+      activeWorkers: number;
+      capacity: number;
+    };
+  };
+}
+
+function buildHealthResponse(
+  store: SessionStore,
+  includeDiagnostics: boolean
+): HealthResponse {
+  const base: HealthResponse = {
+    status: 'ok',
+    version: serverVersion,
+    uptime: Math.floor(process.uptime()),
+    timestamp: new Date().toISOString(),
+  };
+
+  if (!includeDiagnostics) return base;
+
+  const poolStats = getTransformPoolStats();
+  return {
+    ...base,
+    os: {
+      hostname: hostname(),
+      platform: process.platform,
+      arch: process.arch,
+      memoryFree: freemem(),
+      memoryTotal: totalmem(),
+    },
+    process: {
+      pid: process.pid,
+      ppid: process.ppid,
+      memory: process.memoryUsage(),
+      cpu: process.cpuUsage(),
+      resource: process.resourceUsage(),
+    },
+    perf: getEventLoopStats(),
+    stats: {
+      activeSessions: store.size(),
+      cacheKeys: cacheKeys().length,
+      workerPool: poolStats ?? {
+        queueDepth: 0,
+        activeWorkers: 0,
+        capacity: 0,
+      },
+    },
+  };
+}
+
+function sendHealth(
+  store: SessionStore,
+  res: ServerResponse,
+  includeDiagnostics: boolean
+): void {
+  res.setHeader('Cache-Control', 'no-store');
+  sendJson(res, 200, buildHealthResponse(store, includeDiagnostics));
+}
+
+function shouldAllowHealthWithoutAuth(ctx: RequestContext): boolean {
+  if (ctx.method !== 'GET' || ctx.url.pathname !== '/health') return false;
+  if (isVerboseHealthRequest(ctx)) return false;
+  return true;
+}
+
+function shouldAllowVerboseHealthWithoutAuth(ctx: RequestContext): boolean {
+  if (ctx.method !== 'GET' || ctx.url.pathname !== '/health') return false;
+  if (!isVerboseHealthRequest(ctx)) return false;
+  // Local-only deployments can expose verbose diagnostics without auth.
+  return !config.security.allowRemote;
+}
+
+function isHealthRoute(ctx: RequestContext): boolean {
+  return ctx.method === 'GET' && ctx.url.pathname === '/health';
+}
+
+function ensureHealthAuthIfNeeded(
+  ctx: RequestContext,
+  authPresent: boolean
+): boolean {
+  if (!isHealthRoute(ctx)) return true;
+  if (shouldAllowHealthWithoutAuth(ctx)) return true;
+  if (shouldAllowVerboseHealthWithoutAuth(ctx)) return true;
+  if (authPresent) return true;
+  if (!isVerboseHealthRequest(ctx)) return true;
+
+  sendJson(ctx.res, 401, {
+    error: 'Authentication required for verbose health metrics',
+  });
+  return false;
+}
+
+function resolveHealthDiagnosticsMode(
+  ctx: RequestContext,
+  authPresent: boolean
+): boolean {
+  if (!isHealthRoute(ctx)) return false;
+  if (!isVerboseHealthRequest(ctx)) return false;
+  if (authPresent) return true;
+  return !config.security.allowRemote;
+}
+
+function shouldHandleHealthRoute(ctx: RequestContext): boolean {
+  return ctx.method === 'GET' && ctx.url.pathname === '/health';
+}
+
+function sendHealthRouteResponse(
+  store: SessionStore,
+  ctx: RequestContext,
+  authPresent: boolean
+): boolean {
+  if (!shouldHandleHealthRoute(ctx)) return false;
+  if (!ensureHealthAuthIfNeeded(ctx, authPresent)) return true;
+
+  const includeDiagnostics = resolveHealthDiagnosticsMode(ctx, authPresent);
+  sendHealth(store, ctx.res, includeDiagnostics);
   return true;
 }
 
@@ -1001,7 +1177,7 @@ function buildAuthFingerprint(auth: AuthInfo | undefined): string | null {
 class McpSessionGateway {
   constructor(
     private readonly store: SessionStore,
-    private readonly mcpServer: McpServer
+    private readonly createSessionServer: () => Promise<McpServer>
   ) {}
 
   async handlePost(ctx: AuthenticatedContext): Promise<void> {
@@ -1067,7 +1243,7 @@ class McpSessionGateway {
     const session = this.store.get(sessionId);
     if (session) {
       await session.transport.close();
-      this.store.remove(sessionId);
+      this.cleanupSessionRecord(sessionId, 'session-delete');
     }
 
     sendText(ctx.res, 200, 'Session closed');
@@ -1131,14 +1307,23 @@ class McpSessionGateway {
     if (!this.reserveCapacity(ctx.res, requestId)) return null;
 
     const tracker = createSlotTracker(this.store);
+    const newSessionId = randomUUID();
+    let sessionServer: McpServer;
+    try {
+      sessionServer = await this.createSessionServer();
+    } catch (error) {
+      tracker.releaseSlot();
+      throw error;
+    }
     const transportImpl = new StreamableHTTPServerTransport({
-      sessionIdGenerator: () => randomUUID(),
+      sessionIdGenerator: () => newSessionId,
     });
 
     const initTimeout = setTimeout(() => {
       if (!tracker.isInitialized()) {
         tracker.releaseSlot();
         void closeTransportBestEffort(transportImpl, 'session-init-timeout');
+        void closeMcpServerBestEffort(sessionServer, 'session-init-timeout');
       }
     }, config.server.sessionInitTimeoutMs);
     initTimeout.unref();
@@ -1150,35 +1335,40 @@ class McpSessionGateway {
 
     try {
       const transport = createTransportAdapter(transportImpl);
-      await this.mcpServer.connect(transport);
+      await sessionServer.connect(transport);
     } catch (err) {
       clearTimeout(initTimeout);
       tracker.releaseSlot();
       void closeTransportBestEffort(transportImpl, 'session-connect-failed');
+      void closeMcpServerBestEffort(sessionServer, 'session-connect-failed');
       throw err;
-    }
-
-    const newSessionId = transportImpl.sessionId;
-    if (!newSessionId) {
-      throw new ServerError('Failed to generate session ID');
     }
 
     tracker.markInitialized();
     tracker.releaseSlot();
 
     this.store.set(newSessionId, {
+      server: sessionServer,
       transport: transportImpl,
       createdAt: Date.now(),
       lastSeen: Date.now(),
       protocolInitialized: false,
       authFingerprint,
     });
+    registerMcpSessionServer(newSessionId, sessionServer);
 
     transportImpl.onclose = composeCloseHandlers(transportImpl.onclose, () => {
-      this.store.remove(newSessionId);
+      this.cleanupSessionRecord(newSessionId, 'session-close');
     });
 
     return transportImpl;
+  }
+
+  private cleanupSessionRecord(sessionId: string, context: string): void {
+    const session = this.store.remove(sessionId);
+    if (!session) return;
+    unregisterMcpSessionServer(sessionId);
+    void closeMcpServerBestEffort(session.server, `${context}-server`);
   }
 
   private reserveCapacity(res: ServerResponse, requestId: JsonRpcId): boolean {
@@ -1188,7 +1378,9 @@ class McpSessionGateway {
       evictOldest: (store) => {
         const evicted = store.evictOldest();
         if (evicted) {
+          unregisterMcpSessionServerByServer(evicted.server);
           void closeTransportBestEffort(evicted.transport, 'session-eviction');
+          void closeMcpServerBestEffort(evicted.server, 'session-eviction');
           return true;
         }
         return false;
@@ -1228,25 +1420,43 @@ class HttpDispatcher {
     private readonly mcpGateway: McpSessionGateway
   ) {}
 
+  private async tryHandleHealthRoute(ctx: RequestContext): Promise<boolean> {
+    if (!shouldHandleHealthRoute(ctx)) return false;
+
+    const requiresAuthForVerbose =
+      isVerboseHealthRequest(ctx) && config.security.allowRemote;
+    if (!requiresAuthForVerbose) {
+      sendHealthRouteResponse(this.store, ctx, false);
+      return true;
+    }
+
+    const healthAuth = await this.authenticateRequest(ctx);
+    if (!healthAuth) return true;
+
+    sendHealthRouteResponse(this.store, ctx, true);
+    return true;
+  }
+
+  private tryHandleDownloadRoute(ctx: RequestContext): boolean {
+    if (ctx.method !== 'GET') return false;
+
+    const download = checkDownloadRoute(ctx.url.pathname);
+    if (!download) return false;
+
+    handleDownload(ctx.res, download.namespace, download.hash);
+    return true;
+  }
+
   async dispatch(ctx: RequestContext): Promise<void> {
     try {
-      if (ctx.method === 'GET' && ctx.url.pathname === '/health') {
-        this.handleHealthCheck(ctx.res);
-        return;
-      }
+      if (await this.tryHandleHealthRoute(ctx)) return;
 
       const auth = await this.authenticateRequest(ctx);
       if (!auth) return;
 
       const authCtx: AuthenticatedContext = { ...ctx, auth };
 
-      if (ctx.method === 'GET') {
-        const download = checkDownloadRoute(ctx.url.pathname);
-        if (download) {
-          handleDownload(ctx.res, download.namespace, download.hash);
-          return;
-        }
-      }
+      if (this.tryHandleDownloadRoute(ctx)) return;
 
       if (ctx.url.pathname === '/mcp') {
         const handled = await this.handleMcpRoutes(authCtx);
@@ -1261,41 +1471,6 @@ class HttpDispatcher {
         sendJson(ctx.res, 500, { error: 'Internal Server Error' });
       }
     }
-  }
-
-  private handleHealthCheck(res: ServerResponse): void {
-    const poolStats = getTransformPoolStats();
-    res.setHeader('Cache-Control', 'no-store');
-    sendJson(res, 200, {
-      status: 'ok',
-      version: serverVersion,
-      uptime: Math.floor(process.uptime()),
-      timestamp: new Date().toISOString(),
-      os: {
-        hostname: hostname(),
-        platform: process.platform,
-        arch: process.arch,
-        memoryFree: freemem(),
-        memoryTotal: totalmem(),
-      },
-      process: {
-        pid: process.pid,
-        ppid: process.ppid,
-        memory: process.memoryUsage(),
-        cpu: process.cpuUsage(),
-        resource: process.resourceUsage(),
-      },
-      perf: getEventLoopStats(),
-      stats: {
-        activeSessions: this.store.size(),
-        cacheKeys: cacheKeys().length,
-        workerPool: poolStats ?? {
-          queueDepth: 0,
-          activeWorkers: 0,
-          capacity: 0,
-        },
-      },
-    });
   }
 
   private async handleMcpRoutes(ctx: AuthenticatedContext): Promise<boolean> {
@@ -1440,7 +1615,6 @@ function createShutdownHandler(options: {
   rateLimiter: RateLimitManagerImpl;
   sessionCleanup: AbortController;
   sessionStore: SessionStore;
-  mcpServer: McpServer;
 }): (signal: string) => Promise<void> {
   return async (signal: string): Promise<void> => {
     logInfo(`Stopping HTTP server (${signal})...`);
@@ -1452,9 +1626,17 @@ function createShutdownHandler(options: {
 
     const sessions = options.sessionStore.clear();
     await Promise.all(
-      sessions.map((session) =>
-        closeTransportBestEffort(session.transport, 'shutdown-session-close')
-      )
+      sessions.map(async (session) => {
+        unregisterMcpSessionServerByServer(session.server);
+        await closeTransportBestEffort(
+          session.transport,
+          'shutdown-session-close'
+        );
+        await closeMcpServerBestEffort(
+          session.server,
+          'shutdown-session-close'
+        );
+      })
     );
 
     await new Promise<void>((resolve, reject): void => {
@@ -1463,8 +1645,6 @@ function createShutdownHandler(options: {
         else resolve();
       });
     });
-
-    await options.mcpServer.close();
   };
 }
 
@@ -1480,7 +1660,6 @@ export async function startHttpServer(): Promise<{
   eventLoopDelay.reset();
   eventLoopDelay.enable();
 
-  const mcpServer = await createMcpServer();
   const rateLimiter = createRateLimitManagerImpl(config.rateLimit);
 
   const sessionStore = createSessionStore(config.server.sessionTtlMs);
@@ -1489,7 +1668,10 @@ export async function startHttpServer(): Promise<{
     config.server.sessionTtlMs
   );
 
-  const mcpGateway = new McpSessionGateway(sessionStore, mcpServer);
+  const mcpGateway = new McpSessionGateway(
+    sessionStore,
+    createMcpServerForHttpSession
+  );
   const dispatcher = new HttpDispatcher(sessionStore, mcpGateway);
   const pipeline = new HttpRequestPipeline(rateLimiter, dispatcher);
 
@@ -1519,7 +1701,6 @@ export async function startHttpServer(): Promise<{
       rateLimiter,
       sessionCleanup,
       sessionStore,
-      mcpServer,
     }),
   };
 }

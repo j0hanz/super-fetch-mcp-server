@@ -1,10 +1,16 @@
 import { setInterval as setIntervalPromise } from 'node:timers/promises';
 
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 
-import { logInfo, logWarn } from './observability.js';
+import {
+  logInfo,
+  logWarn,
+  unregisterMcpSessionServerByServer,
+} from './observability.js';
 
 export interface SessionEntry {
+  readonly server: McpServer;
   readonly transport: StreamableHTTPServerTransport;
   createdAt: number;
   lastSeen: number;
@@ -107,10 +113,22 @@ class SessionCleanupLoop {
       const evicted = this.store.evictExpired();
 
       for (const session of evicted) {
-        void session.transport.close().catch((err: unknown) => {
-          logWarn('Failed to close expired session', {
-            error: formatError(err),
-          });
+        unregisterMcpSessionServerByServer(session.server);
+        void Promise.allSettled([
+          session.transport.close(),
+          session.server.close(),
+        ]).then((results) => {
+          const [transportResult, serverResult] = results;
+          if (transportResult.status === 'rejected') {
+            logWarn('Failed to close expired session transport', {
+              error: formatError(transportResult.reason),
+            });
+          }
+          if (serverResult.status === 'rejected') {
+            logWarn('Failed to close expired session server', {
+              error: formatError(serverResult.reason),
+            });
+          }
         });
       }
 
