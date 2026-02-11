@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { afterEach, describe, it } from 'node:test';
 
+import { getRequestId, runWithRequestContext } from '../dist/observability.js';
 import {
   getTransformPoolStats,
   shutdownTransformWorkerPool,
@@ -49,5 +50,22 @@ describe('worker pool scaling', () => {
       stats.capacity >= 2 && stats.capacity <= 4,
       `capacity ${stats.capacity} should be between 2 and 4`
     );
+  });
+
+  it('preserves async request context when worker tasks complete', async () => {
+    const requestId = await runWithRequestContext(
+      { requestId: 'pool-context-request', operationId: 'pool-context-op' },
+      async () => {
+        await transformHtmlToMarkdown(
+          '<html><body><p>Context</p></body></html>',
+          'https://example.com/context',
+          { includeMetadata: false, signal: AbortSignal.timeout(5000) }
+        );
+
+        return getRequestId();
+      }
+    );
+
+    assert.equal(requestId, 'pool-context-request');
   });
 });

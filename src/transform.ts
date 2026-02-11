@@ -5,6 +5,7 @@ import diagnosticsChannel from 'node:diagnostics_channel';
 import { availableParallelism } from 'node:os';
 import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
+import { isSharedArrayBuffer } from 'node:util/types';
 import {
   type Transferable as NodeTransferable,
   Worker,
@@ -54,7 +55,9 @@ import type {
   TransformStageContext,
   TransformStageEvent,
   TransformWorkerCancelMessage,
+  TransformWorkerErrorMessage,
   TransformWorkerOutgoingMessage,
+  TransformWorkerResultMessage,
   TransformWorkerTransformMessage,
 } from './transform-types.js';
 import { isObject } from './type-guards.js';
@@ -1461,6 +1464,7 @@ function tryTransformRawContent(params: {
   html: string;
   url: string;
   includeMetadata: boolean;
+  inputTruncated?: boolean;
 }): MarkdownTransformResult | null {
   if (!shouldPreserveRawContent(params.url, params.html)) return null;
 
@@ -1474,7 +1478,11 @@ function tryTransformRawContent(params: {
     includeMetadata: params.includeMetadata,
   });
 
-  return { markdown: content, title, truncated: false };
+  return {
+    markdown: content,
+    title,
+    truncated: params.inputTruncated ?? false,
+  };
 }
 
 const MIN_CONTENT_RATIO = 0.15;
@@ -1852,6 +1860,7 @@ function resolveContentSource(params: {
   includeMetadata: boolean;
   signal?: AbortSignal;
   skipNoiseRemoval?: boolean;
+  inputTruncated?: boolean;
 }): ContentSource {
   const {
     article,
@@ -1861,6 +1870,7 @@ function resolveContentSource(params: {
   } = extractContentContext(params.html, params.url, {
     extractArticle: true,
     ...(params.signal ? { signal: params.signal } : {}),
+    ...(params.inputTruncated ? { inputTruncated: true } : {}),
   });
 
   const useArticleContent = article
@@ -1959,6 +1969,7 @@ export function transformHtmlToMarkdownInProcess(
         html,
         url,
         includeMetadata: options.includeMetadata,
+        ...(options.inputTruncated ? { inputTruncated: true } : {}),
       })
     );
     if (raw) {
@@ -1973,6 +1984,7 @@ export function transformHtmlToMarkdownInProcess(
         includeMetadata: options.includeMetadata,
         ...(signal ? { signal } : {}),
         ...(options.skipNoiseRemoval ? { skipNoiseRemoval: true } : {}),
+        ...(options.inputTruncated ? { inputTruncated: true } : {}),
       })
     );
 
@@ -1985,29 +1997,67 @@ export function transformHtmlToMarkdownInProcess(
   }
 }
 
+function isWorkerResultPayload(
+  value: unknown
+): value is TransformWorkerResultMessage['result'] {
+  if (!isObject(value)) return false;
+  const { markdown, title, truncated } = value;
+  return (
+    typeof markdown === 'string' &&
+    typeof truncated === 'boolean' &&
+    (title === undefined || typeof title === 'string')
+  );
+}
+
+function isWorkerErrorPayload(
+  value: unknown
+): value is TransformWorkerErrorMessage['error'] {
+  if (!isObject(value)) return false;
+  const { details, message, name, statusCode, url } = value;
+  return (
+    typeof name === 'string' &&
+    typeof message === 'string' &&
+    typeof url === 'string' &&
+    (statusCode === undefined || typeof statusCode === 'number') &&
+    (details === undefined || isObject(details))
+  );
+}
+
 function isWorkerResponse(raw: unknown): raw is TransformWorkerOutgoingMessage {
-  if (!raw || typeof raw !== 'object') return false;
-  const t = (raw as Record<string, unknown>).type;
-  return t === 'result' || t === 'error';
+  if (!isObject(raw)) return false;
+  if (typeof raw.id !== 'string') return false;
+
+  if (raw.type === 'result') {
+    return isWorkerResultPayload(raw.result);
+  }
+
+  if (raw.type === 'error') {
+    return isWorkerErrorPayload(raw.error);
+  }
+
+  return false;
 }
 
 interface TaskContext {
   run: (fn: () => void) => void;
-  destroy: () => void;
+  dispose: () => void;
 }
 
 function createTaskContext(): TaskContext {
   const runWithStore = AsyncLocalStorage.snapshot();
-  const resource = new AsyncResource('TransformWorkerTask', {
-    requireManualDestroy: true,
-  });
+  const asyncResource = new AsyncResource('superfetch.transform.task');
+  let disposed = false;
 
   return {
     run: (fn) => {
-      resource.runInAsyncScope(runWithStore, null, fn);
+      runWithStore(() => {
+        asyncResource.runInAsyncScope(fn);
+      });
     },
-    destroy: () => {
-      resource.emitDestroy();
+    dispose: () => {
+      if (disposed) return;
+      disposed = true;
+      asyncResource.emitDestroy();
     },
   };
 }
@@ -2028,6 +2078,45 @@ interface PendingTask {
   reject: (error: unknown) => void;
 }
 
+interface WorkerDispatchPayload {
+  message: TransformWorkerTransformMessage;
+  transferList?: NodeTransferable[];
+}
+
+function buildWorkerDispatchPayload(
+  task: PendingTask,
+  supportsTransferList: boolean
+): WorkerDispatchPayload {
+  const message: TransformWorkerTransformMessage = {
+    type: 'transform',
+    id: task.id,
+    url: task.url,
+    includeMetadata: task.includeMetadata,
+    ...(task.skipNoiseRemoval ? { skipNoiseRemoval: true } : {}),
+    ...(task.inputTruncated ? { inputTruncated: true } : {}),
+  };
+
+  if (!task.htmlBuffer) {
+    message.html = task.html;
+    return { message };
+  }
+
+  const htmlBuffer = ensureTightBuffer(task.htmlBuffer);
+  if (!supportsTransferList) {
+    message.htmlBuffer = htmlBuffer;
+    if (task.encoding) message.encoding = task.encoding;
+    return { message };
+  }
+
+  const transferableHtmlBuffer = Uint8Array.from(htmlBuffer);
+  message.htmlBuffer = transferableHtmlBuffer;
+  if (task.encoding) message.encoding = task.encoding;
+
+  const backingBuffer = transferableHtmlBuffer.buffer;
+  if (isSharedArrayBuffer(backingBuffer)) return { message };
+  return { message, transferList: [backingBuffer] };
+}
+
 interface InflightTask {
   resolve: PendingTask['resolve'];
   reject: PendingTask['reject'];
@@ -2044,6 +2133,7 @@ type TransformWorkerMessage =
 
 interface WorkerHost {
   kind: 'thread' | 'process';
+  supportsTransferList: boolean;
   threadId?: number;
   pid?: number;
   postMessage: (
@@ -2076,6 +2166,7 @@ interface TransformWorkerPool {
       includeMetadata: boolean;
       signal?: AbortSignal;
       skipNoiseRemoval?: boolean;
+      inputTruncated?: boolean;
     }
   ): Promise<MarkdownTransformResult>;
   close(): Promise<void>;
@@ -2154,6 +2245,7 @@ function createThreadWorkerHost(
 
   return {
     kind: 'thread',
+    supportsTransferList: true,
     threadId: worker.threadId,
     postMessage: (message, transferList) => {
       worker.postMessage(message, transferList);
@@ -2199,6 +2291,7 @@ function createProcessWorkerHost(
 
   return {
     kind: 'process',
+    supportsTransferList: false,
     pid: child.pid,
     postMessage: (message) => {
       if (!child.connected) {
@@ -2747,30 +2840,10 @@ class WorkerPool implements TransformWorkerPool {
     });
 
     try {
-      const message: TransformWorkerTransformMessage = {
-        type: 'transform',
-        id: task.id,
-        url: task.url,
-        includeMetadata: task.includeMetadata,
-        ...(task.skipNoiseRemoval ? { skipNoiseRemoval: true } : {}),
-        ...(task.inputTruncated ? { inputTruncated: true } : {}),
-      };
-
-      const transferList: NodeTransferable[] = [];
-
-      if (task.htmlBuffer) {
-        const htmlBuffer = ensureTightBuffer(task.htmlBuffer);
-        message.htmlBuffer = htmlBuffer;
-        message.encoding = task.encoding;
-        // Data cloning is safer for fallback scenarios if the worker crashes.
-        // const transferBuffer = htmlBuffer.buffer;
-        // if (!utilTypes.isSharedArrayBuffer(transferBuffer)) {
-        //   transferList.push(transferBuffer);
-        // }
-      } else {
-        message.html = task.html;
-      }
-
+      const { message, transferList } = buildWorkerDispatchPayload(
+        task,
+        slot.host.supportsTransferList
+      );
       slot.host.postMessage(message, transferList);
     } catch (error: unknown) {
       timeout.cancel();
@@ -2793,7 +2866,7 @@ class WorkerPool implements TransformWorkerPool {
     try {
       context.run(fn);
     } finally {
-      context.destroy();
+      context.dispose();
     }
   }
 
@@ -2873,11 +2946,13 @@ function buildWorkerTransformOptions(options: TransformOptions): {
   includeMetadata: boolean;
   signal?: AbortSignal;
   skipNoiseRemoval?: boolean;
+  inputTruncated?: boolean;
 } {
   return {
     includeMetadata: options.includeMetadata,
     ...(options.signal ? { signal: options.signal } : {}),
     ...(options.skipNoiseRemoval ? { skipNoiseRemoval: true } : {}),
+    ...(options.inputTruncated ? { inputTruncated: true } : {}),
   };
 }
 

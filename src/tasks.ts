@@ -78,21 +78,6 @@ function normalizeTaskTtl(ttl: number | undefined): number {
   return rounded;
 }
 
-type RunInContext = (fn: () => void) => void;
-
-const asyncLocalStorageSnapshot = (
-  AsyncLocalStorage as unknown as {
-    snapshot?: () => RunInContext;
-  }
-).snapshot;
-
-const snapshotRunInContext: () => RunInContext =
-  typeof asyncLocalStorageSnapshot === 'function'
-    ? asyncLocalStorageSnapshot
-    : () => (fn) => {
-        fn();
-      };
-
 class TaskManager {
   private tasks = new Map<string, InternalTaskState>();
   private waiters = new Map<string, Set<(task: TaskState) => void>>();
@@ -294,19 +279,14 @@ class TaskManager {
     }
 
     return new Promise((resolve, reject) => {
-      const runInContext = snapshotRunInContext();
-
-      const resolveInContext = (value: TaskState | undefined): void => {
-        runInContext(() => {
+      const resolveInContext = AsyncLocalStorage.bind(
+        (value: TaskState | undefined): void => {
           resolve(value);
-        });
-      };
-
-      const rejectInContext = (error: unknown): void => {
-        runInContext(() => {
-          reject(error instanceof Error ? error : new Error(String(error)));
-        });
-      };
+        }
+      );
+      const rejectInContext = AsyncLocalStorage.bind((error: unknown): void => {
+        reject(error instanceof Error ? error : new Error(String(error)));
+      });
 
       let settled = false;
       let waiter: ((updated: TaskState) => void) | null = null;

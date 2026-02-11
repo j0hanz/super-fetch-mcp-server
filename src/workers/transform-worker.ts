@@ -44,6 +44,7 @@ function isValidMessage(msg: Record<string, unknown>): msg is {
   encoding?: string;
   includeMetadata: boolean;
   skipNoiseRemoval?: boolean;
+  inputTruncated?: boolean;
 } {
   const {
     id,
@@ -53,6 +54,7 @@ function isValidMessage(msg: Record<string, unknown>): msg is {
     encoding,
     includeMetadata,
     skipNoiseRemoval,
+    inputTruncated,
   } = msg;
   return (
     typeof id === 'string' &&
@@ -61,7 +63,8 @@ function isValidMessage(msg: Record<string, unknown>): msg is {
     (html === undefined || typeof html === 'string') &&
     (htmlBuffer === undefined || htmlBuffer instanceof Uint8Array) &&
     (encoding === undefined || typeof encoding === 'string') &&
-    (skipNoiseRemoval === undefined || typeof skipNoiseRemoval === 'boolean')
+    (skipNoiseRemoval === undefined || typeof skipNoiseRemoval === 'boolean') &&
+    (inputTruncated === undefined || typeof inputTruncated === 'boolean')
   );
 }
 
@@ -91,6 +94,7 @@ function handleTransform(msg: Record<string, unknown>): void {
     encoding,
     includeMetadata,
     skipNoiseRemoval,
+    inputTruncated,
   } = msg;
 
   if (!id.trim()) {
@@ -115,6 +119,7 @@ function handleTransform(msg: Record<string, unknown>): void {
       includeMetadata,
       signal: controller.signal,
       ...(skipNoiseRemoval ? { skipNoiseRemoval: true } : {}),
+      ...(inputTruncated ? { inputTruncated: true } : {}),
     });
 
     const { markdown, title, truncated } = result;

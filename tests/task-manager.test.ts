@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { cancelTasksForOwner } from '../dist/mcp.js';
+import { getRequestId, runWithRequestContext } from '../dist/observability.js';
 import { taskManager } from '../dist/tasks.js';
 
 describe('TaskManager.waitForTerminalTask', () => {
@@ -18,6 +19,37 @@ describe('TaskManager.waitForTerminalTask', () => {
     );
 
     assert.equal(result, undefined);
+  });
+
+  it('preserves async request context when resolving', async () => {
+    const ownerKey = `context-resolve-${Date.now()}`;
+    const task = taskManager.createTask(
+      { ttl: 2_000 },
+      'Task started',
+      ownerKey
+    );
+
+    const contextRequestId = await runWithRequestContext(
+      { requestId: 'ctx-task-request', operationId: 'ctx-task-operation' },
+      async () => {
+        const waitPromise = taskManager.waitForTerminalTask(
+          task.taskId,
+          ownerKey
+        );
+
+        setImmediate(() => {
+          taskManager.updateTask(task.taskId, {
+            status: 'completed',
+            result: { ok: true },
+          });
+        });
+
+        await waitPromise;
+        return getRequestId();
+      }
+    );
+
+    assert.equal(contextRequestId, 'ctx-task-request');
   });
 });
 
