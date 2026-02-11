@@ -27,9 +27,9 @@ FROM node:24-alpine
 ENV NODE_ENV=production
 
 # Labels for Docker / MCP Catalog
-LABEL org.opencontainers.image.title="SuperFetch MCP Server" \
+LABEL org.opencontainers.image.title="Fetch URL MCP Server" \
       org.opencontainers.image.description="Intelligent web content fetcher MCP server that converts HTML to clean, AI-readable Markdown" \
-      org.opencontainers.image.source="https://github.com/j0hanz/super-fetch-mcp-server" \
+      org.opencontainers.image.source="https://github.com/j0hanz/fetch-url-mcp" \
       org.opencontainers.image.licenses="MIT" \
       io.modelcontextprotocol.server.name="io.github.j0hanz/fetch-url-mcp"
 
