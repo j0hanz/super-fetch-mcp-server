@@ -1,38 +1,30 @@
-<!-- markdownlint-disable MD033 -->
-
 # Fetch URL MCP Server
 
-<img src="assets/logo.svg" alt="Fetch URL MCP Logo" width="300">
-
-[![npm version](https://img.shields.io/npm/v/%40j0hanz%2Ffetch-url-mcp)](https://www.npmjs.com/package/@j0hanz/fetch-url-mcp) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT) [![Node.js](https://img.shields.io/badge/node-%3E%3D24-brightgreen)](https://nodejs.org) [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue)](https://www.typescriptlang.org) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-1.26-purple)](https://modelcontextprotocol.io)
+[![npm version](https://img.shields.io/npm/v/%40j0hanz%2Ffetch-url-mcp)](https://www.npmjs.com/package/@j0hanz/fetch-url-mcp) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) [![Node.js](https://img.shields.io/badge/node-%3E%3D24-3c873a)](https://nodejs.org) [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-1.26-7c3aed)](https://modelcontextprotocol.io)
 
 [![Install in VS Code](https://img.shields.io/badge/VS_Code-Install-0078d7?logo=visual-studio-code&logoColor=white)](https://insiders.vscode.dev/redirect?url=vscode%3Amcp%2Finstall%3F%7B%22name%22%3A%22fetch-url-mcp%22%2C%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22%40j0hanz%2Ffetch-url-mcp%40latest%22%2C%22--stdio%22%5D%7D) [![Install in VS Code Insiders](https://img.shields.io/badge/VS_Code_Insiders-Install-24bfa5?logo=visual-studio-code&logoColor=white)](https://insiders.vscode.dev/redirect?url=vscode-insiders%3Amcp%2Finstall%3F%7B%22name%22%3A%22fetch-url-mcp%22%2C%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22%40j0hanz%2Ffetch-url-mcp%40latest%22%2C%22--stdio%22%5D%7D) [![Install in Cursor](https://img.shields.io/badge/Cursor-Install-f97316?logo=cursor&logoColor=white)](https://cursor.com/install-mcp?name=fetch-url-mcp&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIkBqMGhhbnovZmV0Y2gtdXJsLW1jcEBsYXRlc3QiLCItLXN0ZGlvIl19)
 
-Fetch and convert public web content to clean Markdown both readable by humans and optimized for LLM context.
+Fetch public web pages and convert them into clean, AI-readable Markdown.
 
 ## Overview
 
-Fetch URL is a [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that fetches public web pages, extracts meaningful content using Mozilla's Readability algorithm, and converts the result into clean Markdown optimized for LLM context windows. It handles noise removal, caching, SSRF protection, async task execution, and supports both stdio and Streamable HTTP transports.
+Fetch URL is a [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that fetches public web pages, extracts meaningful content using Mozilla's Readability algorithm, and converts the result into clean Markdown optimized for LLM context windows. It handles noise removal, caching, SSRF protection, async task execution, and supports both **stdio** and **Streamable HTTP** transports.
+
+> [!NOTE]
+> Content extraction quality varies depending on the HTML structure and complexity of the source page. Fetch URL works best with standard article and documentation layouts. Pages relying on client-side JavaScript rendering may yield incomplete results.
 
 ## Key Features
 
-- HTML to Markdown using Mozilla Readability + node-html-markdown.
-- Raw content URL rewriting for GitHub, GitLab, Bitbucket, and Gist.
-- In-memory LRU cache for faster repeat fetches.
-- Stdio or Streamable HTTP transport with session management.
-- SSRF protections: blocked private IP ranges and internal hostnames.
-
-> **Note:** Content extraction quality varies depending on the HTML structure and
-> complexity of the source page. Fetch URL works best with standard article and
-> documentation layouts. Always verify the fetched content to ensure it meets
-> your expectations, as some pages may require manual adjustment or alternative
-> approaches.
+- **HTML to Markdown** — Content extraction via Mozilla Readability + node-html-markdown
+- **Noise removal** — Strips navigation, ads, cookie banners, and other non-content elements
+- **In-memory LRU cache** — Faster repeat fetches with configurable TTL (24 h default)
+- **Raw URL rewriting** — Auto-converts GitHub, GitLab, Bitbucket, and Gist URLs to raw content endpoints
 
 ## Tech Stack
 
 | Component           | Technology                          |
 | ------------------- | ----------------------------------- |
-| Runtime             | Node.js ≥ 24                        |
+| Runtime             | Node.js >= 24                       |
 | Language            | TypeScript 5.9                      |
 | MCP SDK             | `@modelcontextprotocol/sdk` ^1.26.0 |
 | Content Extraction  | `@mozilla/readability` ^0.6.0       |
@@ -50,51 +42,31 @@ URL → Validate → DNS Preflight → HTTP Fetch → Decompress
 ```
 
 1. **URL Validation** — Normalize, block private hosts, transform raw-content URLs (GitHub, GitLab, Bitbucket)
-2. **Fetch** — HTTP request via `undici` with redirect following, DNS preflight SSRF checks, and size limits
+2. **Fetch** — HTTP request with redirect following, DNS preflight SSRF checks, and size limits (10 MB)
 3. **Transform** — Offloaded to worker threads: parse HTML with `linkedom`, extract with Readability, remove DOM noise, convert to Markdown
-4. **Cleanup** — Multi-pass Markdown normalization (heading promotion, spacing, skip-link removal, TypeDoc comment stripping)
-5. **Cache + Respond** — Store result, apply inline content limits, return structured content
+4. **Cleanup** — Multi-pass Markdown normalization (heading promotion, spacing, skip-link removal)
+5. **Cache + Respond** — Store result in LRU cache, apply inline content limits, return structured content
 
 ## Repository Structure
 
 ```text
 fetch-url-mcp/
-├── assets/
-│   └── logo.svg
-├── scripts/
-│   ├── tasks.mjs
-│   └── validate-fetch.mjs
+├── assets/              # Server icon (logo.svg)
+├── scripts/             # Build & test orchestration
 ├── src/
-│   ├── workers/
-│   │   ├── transform-child.ts
-│   │   └── transform-worker.ts
-│   ├── cache.ts
-│   ├── config.ts
-│   ├── crypto.ts
-│   ├── dom-noise-removal.ts
-│   ├── errors.ts
-│   ├── fetch.ts
-│   ├── host-normalization.ts
-│   ├── http-native.ts
-│   ├── index.ts
-│   ├── instructions.md
-│   ├── ip-blocklist.ts
-│   ├── json.ts
-│   ├── language-detection.ts
-│   ├── markdown-cleanup.ts
-│   ├── mcp-validator.ts
-│   ├── mcp.ts
-│   ├── observability.ts
-│   ├── server-tuning.ts
-│   ├── session.ts
-│   ├── tasks.ts
-│   ├── timer-utils.ts
-│   ├── tools.ts
-│   ├── transform-types.ts
-│   ├── transform.ts
-│   └── type-guards.ts
-├── tests/
-│   └── *.test.ts
+│   ├── workers/         # Worker-thread child for HTML transforms
+│   ├── index.ts         # CLI entrypoint, transport wiring, shutdown
+│   ├── server.ts        # McpServer lifecycle and registration
+│   ├── tools.ts         # fetch-url tool definition and pipeline
+│   ├── fetch.ts         # URL normalization, SSRF, HTTP fetch
+│   ├── transform.ts     # HTML-to-Markdown pipeline, worker pool
+│   ├── config.ts        # Env-driven configuration
+│   ├── resources.ts     # MCP resource/template registration
+│   ├── prompts.ts       # MCP prompt registration (get-help)
+│   ├── mcp.ts           # Task execution management
+│   ├── http-native.ts   # Streamable HTTP server, auth, sessions
+│   └── instructions.md  # Server instructions embedded at runtime
+├── tests/               # Unit/integration tests (Node.js test runner)
 ├── package.json
 ├── tsconfig.json
 └── AGENTS.md
@@ -102,7 +74,7 @@ fetch-url-mcp/
 
 ## Requirements
 
-- **Node.js** ≥ 24
+- **Node.js** >= 24
 
 ## Quickstart
 
@@ -150,6 +122,12 @@ npm run build
 node dist/index.js --stdio
 ```
 
+### Docker
+
+```bash
+docker compose up --build
+```
+
 ## Configuration
 
 ### Runtime Modes
@@ -166,18 +144,23 @@ When no `--stdio` flag is passed, the server starts in **HTTP mode** (Streamable
 
 #### Core Settings
 
-| Variable              | Default                   | Description                                            |
-| --------------------- | ------------------------- | ------------------------------------------------------ |
-| `HOST`                | `127.0.0.1`               | HTTP server bind address                               |
-| `PORT`                | `3000`                    | HTTP server port (1024–65535)                          |
-| `LOG_LEVEL`           | `info`                    | Log level: `debug`, `info`, `warn`, `error`            |
-| `FETCH_TIMEOUT_MS`    | `15000`                   | HTTP fetch timeout in ms (1000–60000)                  |
-| `CACHE_ENABLED`       | `true`                    | Enable/disable in-memory content cache                 |
-| `USER_AGENT`          | `fetch-url-mcp/{version}` | Custom User-Agent header                               |
-| `ALLOW_REMOTE`        | `false`                   | Allow remote connections in HTTP mode                  |
-| `ALLOWED_HOSTS`       | _(empty)_                 | Comma-separated host/origin allowlist for HTTP mode    |
-| `TASKS_MAX_TOTAL`     | `5000`                    | Maximum retained task records across all owners        |
-| `TASKS_MAX_PER_OWNER` | `1000`                    | Maximum retained task records per session/client/token |
+| Variable           | Default                   | Description                                         |
+| ------------------ | ------------------------- | --------------------------------------------------- |
+| `HOST`             | `127.0.0.1`               | HTTP server bind address                            |
+| `PORT`             | `3000`                    | HTTP server port (1024–65535)                       |
+| `LOG_LEVEL`        | `info`                    | Log level: `debug`, `info`, `warn`, `error`         |
+| `FETCH_TIMEOUT_MS` | `15000`                   | HTTP fetch timeout in ms (1000–60000)               |
+| `CACHE_ENABLED`    | `true`                    | Enable/disable in-memory content cache              |
+| `USER_AGENT`       | `fetch-url-mcp/{version}` | Custom User-Agent header                            |
+| `ALLOW_REMOTE`     | `false`                   | Allow remote connections in HTTP mode               |
+| `ALLOWED_HOSTS`    | _(empty)_                 | Comma-separated host/origin allowlist for HTTP mode |
+
+#### Task Management
+
+| Variable              | Default | Description                                      |
+| --------------------- | ------- | ------------------------------------------------ |
+| `TASKS_MAX_TOTAL`     | `5000`  | Maximum retained task records across all owners  |
+| `TASKS_MAX_PER_OWNER` | `1000`  | Maximum retained task records per session/client |
 
 #### Authentication (HTTP Mode)
 
@@ -282,6 +265,7 @@ Fetches a webpage and converts it to clean Markdown format optimized for LLM con
 **Limitations:**
 
 - Does not execute complex client-side JavaScript interactions
+- Inline output may be truncated when `MAX_INLINE_CONTENT_CHARS` is set
 
 ##### Parameters
 
@@ -297,31 +281,43 @@ Fetches a webpage and converts it to clean Markdown format optimized for LLM con
 ```json
 {
   "url": "https://example.com",
+  "inputUrl": "https://example.com",
   "resolvedUrl": "https://example.com",
   "finalUrl": "https://example.com",
-  "inputUrl": "https://example.com",
   "title": "Example Domain",
+  "metadata": {
+    "title": "Example Domain",
+    "description": "...",
+    "author": "...",
+    "image": "...",
+    "favicon": "...",
+    "publishedAt": "...",
+    "modifiedAt": "..."
+  },
   "markdown": "# Example Domain\n\nThis domain is for use in illustrative examples...",
+  "fromCache": false,
+  "fetchedAt": "2026-02-11T12:00:00.000Z",
+  "contentSize": 1234,
   "truncated": false
 }
 ```
 
-| Field         | Type       | Description                                        |
-| ------------- | ---------- | -------------------------------------------------- |
-| `url`         | `string`   | The canonical URL (pre-raw-transform)              |
-| `inputUrl`    | `string`   | The original URL provided by the caller            |
-| `resolvedUrl` | `string`   | The normalized/transformed URL that was fetched    |
-| `finalUrl`    | `string?`  | Final response URL after redirects                 |
-| `title`       | `string?`  | Extracted page title                               |
-| `metadata`    | `object?`  | Extracted metadata (title, description, author...) |
-| `markdown`    | `string?`  | Extracted content in Markdown format               |
-| `fromCache`   | `boolean?` | Whether the response was served from cache         |
-| `fetchedAt`   | `string?`  | ISO timestamp for fetch/cache retrieval            |
-| `contentSize` | `number?`  | Full markdown size before inline truncation        |
-| `truncated`   | `boolean?` | Whether inline markdown was truncated              |
-| `error`       | `string?`  | Error message if the request failed                |
-| `statusCode`  | `number?`  | HTTP status code for failed requests               |
-| `details`     | `object?`  | Additional error details                           |
+| Field         | Type       | Description                                                                              |
+| ------------- | ---------- | ---------------------------------------------------------------------------------------- |
+| `url`         | `string`   | The canonical URL (pre-raw-transform)                                                    |
+| `inputUrl`    | `string?`  | The original URL provided by the caller                                                  |
+| `resolvedUrl` | `string?`  | The normalized/transformed URL that was fetched                                          |
+| `finalUrl`    | `string?`  | Final response URL after redirects                                                       |
+| `title`       | `string?`  | Extracted page title                                                                     |
+| `metadata`    | `object?`  | Extracted metadata (title, description, author, image, favicon, publishedAt, modifiedAt) |
+| `markdown`    | `string?`  | Extracted content in Markdown format                                                     |
+| `fromCache`   | `boolean?` | Whether the response was served from cache                                               |
+| `fetchedAt`   | `string?`  | ISO timestamp for fetch/cache retrieval                                                  |
+| `contentSize` | `number?`  | Full markdown size before inline truncation                                              |
+| `truncated`   | `boolean?` | Whether inline markdown was truncated                                                    |
+| `error`       | `string?`  | Error message if the request failed                                                      |
+| `statusCode`  | `number?`  | HTTP status code for failed requests                                                     |
+| `details`     | `object?`  | Additional error details                                                                 |
 
 ##### Annotations
 
@@ -334,7 +330,7 @@ Fetches a webpage and converts it to clean Markdown format optimized for LLM con
 
 ##### Async Task Execution
 
-The `fetch-url` tool supports optional async task execution. Include a `task` field in the tool call to run the fetch in the background:
+The `fetch-url` tool supports optional async task execution (`execution.taskSupport: "optional"`). Include a `task` field in the tool call to run the fetch in the background:
 
 ```json
 {
@@ -351,9 +347,9 @@ Then poll `tasks/get` until the task status is `completed` or `failed`, and retr
 
 ### Prompts
 
-| Name       | Description                                      |
-| ---------- | ------------------------------------------------ |
-| `get-help` | Returns server usage guidance and workflow hints |
+| Name       | Description                       |
+| ---------- | --------------------------------- |
+| `get-help` | Returns server usage instructions |
 
 ### Resources
 
@@ -361,12 +357,6 @@ Then poll `tasks/get` until the task status is `completed` or `failed`, and retr
 | ------------------------------------- | --------------- | ---------------------------------------------------- |
 | `internal://instructions`             | `text/markdown` | Server instructions and usage guidance               |
 | `internal://cache/{namespace}/{hash}` | `text/markdown` | Cached markdown entries from prior `fetch-url` calls |
-
-### Completions
-
-- `completion/complete` supports `internal://cache/{namespace}/{hash}` template variables:
-  - `namespace`
-  - `hash` (optionally filtered by `context.arguments.namespace`)
 
 ### Tasks
 
@@ -479,6 +469,37 @@ Add to your Windsurf MCP configuration:
 
 </details>
 
+<details>
+<summary>Docker</summary>
+
+Use the published image from GitHub Container Registry:
+
+```json
+{
+  "mcpServers": {
+    "fetch-url-mcp": {
+      "command": "docker",
+      "args": [
+        "run",
+        "-i",
+        "--rm",
+        "ghcr.io/j0hanz/fetch-url-mcp:latest",
+        "--stdio"
+      ]
+    }
+  }
+}
+```
+
+Or build and run locally:
+
+```bash
+docker build -t fetch-url-mcp .
+docker run -i --rm fetch-url-mcp --stdio
+```
+
+</details>
+
 ## Security
 
 ### SSRF Protection
@@ -486,7 +507,7 @@ Add to your Windsurf MCP configuration:
 Fetch URL blocks requests to private and internal network addresses:
 
 - **Blocked hosts**: `localhost`, `127.0.0.0/8`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `169.254.0.0/16`, `100.64.0.0/10`
-- **Blocked IPv6**: `::1`, `fc00::/7`, `fe80::/10`, IPv4-mapped private addresses (`::ffff:10.*`, etc.)
+- **Blocked IPv6**: `::1`, `fc00::/7`, `fe80::/10`, IPv4-mapped private addresses
 - **Cloud metadata**: `169.254.169.254` (AWS), `metadata.google.internal`, `metadata.azure.com`, `100.100.100.200` (Azure IMDS)
 
 DNS preflight checks run on every redirect hop to prevent DNS rebinding attacks.
@@ -532,12 +553,12 @@ npm install
 ## Build and Release
 
 ```bash
-npm run build        # Clean → Compile → Copy Assets → chmod
+npm run build           # Clean → Compile → Copy Assets → chmod
 npm run prepublishOnly  # Lint → Type-Check → Build
-npm publish          # Publish to npm
+npm publish             # Publish to npm
 ```
 
-The `prepare` script runs `npm run build` automatically on `npm install` from source.
+CI/CD is handled via a GitHub Actions workflow (`release.yml`) that runs lint, type-check, test, build, and publishes to npm with version bumping.
 
 ## Troubleshooting
 
@@ -549,17 +570,15 @@ Use the built-in inspector to test the server interactively:
 npm run inspector
 ```
 
-This builds the project and launches `@modelcontextprotocol/inspector` pointing to the compiled server.
-
 ### Common Issues
 
-| Issue                     | Solution                                                                                                    |
-| ------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `VALIDATION_ERROR` on URL | URL is blocked (private IP/localhost) or malformed. Do not retry.                                           |
-| `queue_full` error        | Usually auto-handled by worker fallback to in-process transform; if surfaced, retry or use async task mode. |
-| Garbled output            | Binary content (images, PDFs) cannot be converted. Ensure the URL serves HTML.                              |
-| No output in stdio mode   | Ensure `--stdio` flag is passed. Without it, the server starts in HTTP mode.                                |
-| Auth errors in HTTP mode  | Set `ACCESS_TOKENS` or `API_KEY` env var and pass as `Authorization: Bearer <token>`.                       |
+| Issue                     | Solution                                                                              |
+| ------------------------- | ------------------------------------------------------------------------------------- |
+| `VALIDATION_ERROR` on URL | URL is blocked (private IP/localhost) or malformed. Do not retry.                     |
+| `queue_full` error        | Worker pool busy. Wait briefly, then retry or use async task mode.                    |
+| Garbled output            | Binary content (images, PDFs) cannot be converted. Ensure the URL serves HTML.        |
+| No output in stdio mode   | Ensure `--stdio` flag is passed. Without it, the server starts in HTTP mode.          |
+| Auth errors in HTTP mode  | Set `ACCESS_TOKENS` or `API_KEY` env var and pass as `Authorization: Bearer <token>`. |
 
 ### Stdout / Stderr Guidance
 
