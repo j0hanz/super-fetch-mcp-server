@@ -48,7 +48,7 @@ async function getLocalIconInfo(): Promise<IconInfo | undefined> {
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 let serverInstructions = `
-SuperFetch MCP Instructions
+Fetch URL MCP Instructions
 (Detailed instructions failed to load - check logs)
 `;
 try {
@@ -96,11 +96,11 @@ function createServerInfo(icons?: IconInfo[]): {
 } {
   return {
     name: config.server.name,
-    title: 'superFetch MCP',
+    title: 'Fetch URL',
     description:
       'Fetch web pages and convert them into clean, AI-readable Markdown.',
     version: config.server.version,
-    websiteUrl: 'https://github.com/j0hanz/super-fetch-mcp-server',
+    websiteUrl: 'https://github.com/j0hanz/fetch-url-mcp',
     ...(icons ? { icons } : {}),
   };
 }
@@ -174,7 +174,7 @@ async function shutdownServer(
   signal: string
 ): Promise<void> {
   process.stderr.write(
-    `\n${signal} received, shutting down superFetch MCP server...\n`
+    `\n${signal} received, shutting down Fetch URL MCP server...\n`
   );
 
   // Ensure any in-flight tool executions are aborted promptly.
@@ -228,7 +228,7 @@ async function connectStdioServer(
 ): Promise<void> {
   try {
     await server.connect(transport);
-    logInfo('superFetch MCP server running on stdio');
+    logInfo('Fetch URL MCP server running on stdio');
   } catch (error: unknown) {
     const err = error instanceof Error ? error : new Error(String(error));
     throw new Error(`Failed to start stdio server: ${err.message}`, {

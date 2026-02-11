@@ -10,7 +10,7 @@ import {
 import { runWithRequestContext } from '../dist/observability.js';
 
 function createCapture() {
-  const channel = diagnosticsChannel.channel('superfetch.fetch');
+  const channel = diagnosticsChannel.channel('fetch-url-mcp.fetch');
   const events = [];
   const listener = (event) => {
     events.push(event);

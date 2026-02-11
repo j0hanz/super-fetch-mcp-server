@@ -11,7 +11,7 @@ export function registerGetHelpPrompt(
   instructions: string,
   iconInfo?: IconInfo
 ): void {
-  const description = 'Return the super-fetch usage instructions.';
+  const description = 'Return the Fetch URL usage instructions.';
 
   server.registerPrompt(
     'get-help',

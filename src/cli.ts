@@ -19,10 +19,10 @@ interface CliParseFailure {
 export type CliParseResult = CliParseSuccess | CliParseFailure;
 
 const usageLines = [
-  'superfetch MCP server',
+  'Fetch URL MCP server',
   '',
   'Usage:',
-  '  superfetch [--stdio|-s] [--help|-h] [--version|-v]',
+  '  fetch-url-mcp [--stdio|-s] [--help|-h] [--version|-v]',
   '',
   'Options:',
   '  --stdio, -s   Run in stdio mode (no HTTP server).',

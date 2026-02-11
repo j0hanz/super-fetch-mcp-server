@@ -875,7 +875,7 @@ type FetchChannelEvent =
       operationId?: string;
     };
 
-const fetchChannel = diagnosticsChannel.channel('superfetch.fetch');
+const fetchChannel = diagnosticsChannel.channel('fetch-url-mcp.fetch');
 
 export interface FetchTelemetryContext {
   requestId: string;

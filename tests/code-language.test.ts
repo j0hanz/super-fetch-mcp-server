@@ -58,12 +58,12 @@ describe('detectLanguageFromCode', () => {
   });
 
   it('detects JSON snippets', () => {
-    assert.equal(detectLanguageFromCode('{"name":"superfetch"}'), 'json');
+    assert.equal(detectLanguageFromCode('{"name":"fetch-url-mcp"}'), 'json');
   });
 
   it('detects YAML snippets', () => {
     assert.equal(
-      detectLanguageFromCode('name: superfetch\nversion: 1'),
+      detectLanguageFromCode('name: fetch-url-mcp\nversion: 1'),
       'yaml'
     );
   });

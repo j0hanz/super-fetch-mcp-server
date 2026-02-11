@@ -1,4 +1,4 @@
-# SUPERFETCH INSTRUCTIONS
+# FETCH URL MCP INSTRUCTIONS
 
 Available as resource (internal://instructions) or prompt (get-help). Load when unsure about tool usage.
 

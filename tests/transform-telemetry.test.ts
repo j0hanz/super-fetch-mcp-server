@@ -11,7 +11,7 @@ import {
 
 describe('transform telemetry', () => {
   it('redacts query and fragment from the URL', () => {
-    const channel = diagnosticsChannel.channel('superfetch.transform');
+    const channel = diagnosticsChannel.channel('fetch-url-mcp.transform');
     const events: TransformStageEvent[] = [];
     const subscriber = (event: unknown) => {
       events.push(event as TransformStageEvent);
@@ -30,7 +30,7 @@ describe('transform telemetry', () => {
   });
 
   it('startTransformStage accepts budget and tracks remaining budget', () => {
-    const channel = diagnosticsChannel.channel('superfetch.transform');
+    const channel = diagnosticsChannel.channel('fetch-url-mcp.transform');
     const events: TransformStageEvent[] = [];
     const subscriber = (event: unknown) => {
       events.push(event as TransformStageEvent);
@@ -53,7 +53,7 @@ describe('transform telemetry', () => {
   });
 
   it('endTransformStage returns duration in milliseconds', () => {
-    const channel = diagnosticsChannel.channel('superfetch.transform');
+    const channel = diagnosticsChannel.channel('fetch-url-mcp.transform');
     const subscriber = () => {};
 
     channel.subscribe(subscriber);

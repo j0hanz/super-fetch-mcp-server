@@ -61,7 +61,7 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| **Package** | [\`@j0hanz/superfetch\`](https://www.npmjs.com/package/@j0hanz/superfetch) |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Package** | [\`@j0hanz/fetch-url-mcp\`](https://www.npmjs.com/package/@j0hanz/fetch-url-mcp) |" >> $GITHUB_STEP_SUMMARY
           echo "| **Version** | \`${{ steps.version.outputs.version }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| **Registry** | npmjs.com |" >> $GITHUB_STEP_SUMMARY
           echo "| **Auth** | 🔐 Trusted Publishing (OIDC) |" >> $GITHUB_STEP_SUMMARY
@@ -76,7 +76,7 @@ jobs:
           echo "  \"mcpServers\": {" >> $GITHUB_STEP_SUMMARY
           echo "    \"filesystem\": {" >> $GITHUB_STEP_SUMMARY
           echo "      \"command\": \"npx\"," >> $GITHUB_STEP_SUMMARY
-          echo "      \"args\": [\"-y\", \"@j0hanz/superfetch@${{ steps.version.outputs.version }}\", \"/path/to/dir\"]" >> $GITHUB_STEP_SUMMARY
+          echo "      \"args\": [\"-y\", \"@j0hanz/fetch-url-mcp@${{ steps.version.outputs.version }}\", \"/path/to/dir\"]" >> $GITHUB_STEP_SUMMARY
           echo "    }" >> $GITHUB_STEP_SUMMARY
           echo "  }" >> $GITHUB_STEP_SUMMARY
           echo "}" >> $GITHUB_STEP_SUMMARY
@@ -84,5 +84,5 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Direct installation:**" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
-          echo "npm install -g @j0hanz/superfetch" >> $GITHUB_STEP_SUMMARY
+          echo "npm install -g @j0hanz/fetch-url-mcp" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY

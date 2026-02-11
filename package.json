@@ -1,13 +1,13 @@
 {
-  "name": "@j0hanz/superfetch",
+  "name": "@j0hanz/fetch-url-mcp",
   "version": "2.7.1",
-  "mcpName": "io.github.j0hanz/superfetch",
+  "mcpName": "io.github.j0hanz/fetch-url-mcp",
   "description": "Intelligent web content fetcher MCP server that converts HTML to clean, AI-readable Markdown",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "superfetch": "dist/index.js"
+    "fetch-url-mcp": "dist/index.js"
   },
   "exports": {
     ".": {
@@ -22,11 +22,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/j0hanz/super-fetch-mcp-server.git"
+    "url": "https://github.com/j0hanz/fetch-url-mcp.git"
   },
-  "homepage": "https://github.com/j0hanz/super-fetch-mcp-server#readme",
+  "homepage": "https://github.com/j0hanz/fetch-url-mcp#readme",
   "bugs": {
-    "url": "https://github.com/j0hanz/super-fetch-mcp-server/issues"
+    "url": "https://github.com/j0hanz/fetch-url-mcp/issues"
   },
   "author": "j0hanz",
   "license": "MIT",
@@ -39,7 +39,7 @@
     "markdown",
     "ai-tools",
     "model-context-protocol",
-    "superfetch"
+    "fetch-url-mcp"
   ],
   "scripts": {
     "clean": "node scripts/tasks.mjs clean",

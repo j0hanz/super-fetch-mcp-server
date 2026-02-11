@@ -261,7 +261,7 @@ const MAX_INLINE_CONTENT_CHARS = parseInteger(
 const DEFAULT_SESSION_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_SESSION_INIT_TIMEOUT_MS = 10000;
 const DEFAULT_MAX_SESSIONS = 200;
-const DEFAULT_USER_AGENT = `superFetch-MCP/${serverVersion}`;
+const DEFAULT_USER_AGENT = `fetch-url-mcp/${serverVersion}`;
 const DEFAULT_TOOL_TIMEOUT_PADDING_MS = 5000;
 const DEFAULT_TRANSFORM_TIMEOUT_MS = 30000;
 
@@ -514,7 +514,7 @@ const runtimeState: RuntimeState = {
 
 export const config = {
   server: {
-    name: 'superFetch',
+    name: 'fetch-url-mcp',
     version: serverVersion,
     port,
     host,
@@ -567,8 +567,8 @@ export const config = {
     minParagraphLength: 10,
   },
   noiseRemoval: {
-    extraTokens: parseList(env.SUPERFETCH_EXTRA_NOISE_TOKENS),
-    extraSelectors: parseList(env.SUPERFETCH_EXTRA_NOISE_SELECTORS),
+    extraTokens: parseList(env.FETCH_URL_MCP_EXTRA_NOISE_TOKENS),
+    extraSelectors: parseList(env.FETCH_URL_MCP_EXTRA_NOISE_SELECTORS),
     enabledCategories: [
       'cookie-banners',
       'newsletters',
@@ -597,7 +597,7 @@ export const config = {
     ),
   },
   i18n: {
-    locale: normalizeLocale(env.SUPERFETCH_LOCALE),
+    locale: normalizeLocale(env.FETCH_URL_MCP_LOCALE),
   },
   logging: {
     level: parseLogLevel(env.LOG_LEVEL),

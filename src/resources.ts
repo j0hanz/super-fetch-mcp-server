@@ -238,11 +238,11 @@ export function registerInstructionResource(
   iconInfo?: IconInfo
 ): void {
   server.registerResource(
-    'superfetch-instructions',
+    'fetch-url-mcp-instructions',
     'internal://instructions',
     {
       title: 'Server Instructions',
-      description: 'Guidance for using the superFetch MCP server.',
+      description: 'Guidance for using the Fetch URL MCP server.',
       mimeType: 'text/markdown',
       annotations: {
         audience: ['assistant'],
@@ -284,7 +284,7 @@ export function registerCacheResourceTemplate(
   });
 
   server.registerResource(
-    'superfetch-cache-entry',
+    'fetch-url-mcp-cache-entry',
     template,
     {
       title: 'Cached Fetch Output',

@@ -147,7 +147,9 @@ function buildTransformSignal(signal?: AbortSignal): AbortSignal | undefined {
 }
 
 class StageTracker {
-  private readonly channel = diagnosticsChannel.channel('superfetch.transform');
+  private readonly channel = diagnosticsChannel.channel(
+    'fetch-url-mcp.transform'
+  );
 
   start(
     url: string,
@@ -2149,7 +2151,7 @@ interface TaskContext {
 
 function createTaskContext(): TaskContext {
   const runWithStore = AsyncLocalStorage.snapshot();
-  const asyncResource = new AsyncResource('superfetch.transform.task');
+  const asyncResource = new AsyncResource('fetch-url-mcp.transform.task');
   let disposed = false;
 
   return {
@@ -2316,7 +2318,7 @@ const POOL_MIN_WORKERS = Math.max(
 );
 const POOL_MAX_WORKERS = config.transform.maxWorkerScale;
 const POOL_SCALE_THRESHOLD = 0.5;
-const WORKER_NAME_PREFIX = 'superfetch-transform';
+const WORKER_NAME_PREFIX = 'fetch-url-mcp-transform';
 
 const DEFAULT_TIMEOUT_MS = config.transform.timeoutMs;
 const TRANSFORM_CHILD_PATH = fileURLToPath(
@@ -2384,8 +2386,8 @@ function createProcessWorkerHost(
     serialization: 'advanced',
     env: {
       ...process.env,
-      SUPERFETCH_WORKER_INDEX: String(workerIndex),
-      SUPERFETCH_WORKER_NAME: name,
+      FETCH_URL_MCP_WORKER_INDEX: String(workerIndex),
+      FETCH_URL_MCP_WORKER_NAME: name,
     },
   });
 

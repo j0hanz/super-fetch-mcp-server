@@ -1,18 +1,18 @@
 <!-- markdownlint-disable MD033 -->
 
-# SuperFetch MCP Server
+# Fetch URL MCP Server
 
-<img src="assets/logo.svg" alt="SuperFetch MCP Logo" width="300">
+<img src="assets/logo.svg" alt="Fetch URL MCP Logo" width="300">
 
-[![npm version](https://img.shields.io/npm/v/%40j0hanz%2Fsuperfetch)](https://www.npmjs.com/package/@j0hanz/superfetch) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT) [![Node.js](https://img.shields.io/badge/node-%3E%3D24-brightgreen)](https://nodejs.org) [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue)](https://www.typescriptlang.org) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-1.26-purple)](https://modelcontextprotocol.io)
+[![npm version](https://img.shields.io/npm/v/%40j0hanz%2Ffetch-url-mcp)](https://www.npmjs.com/package/@j0hanz/fetch-url-mcp) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT) [![Node.js](https://img.shields.io/badge/node-%3E%3D24-brightgreen)](https://nodejs.org) [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue)](https://www.typescriptlang.org) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-1.26-purple)](https://modelcontextprotocol.io)
 
-[![Install in VS Code](https://img.shields.io/badge/VS_Code-Install-0078d7?logo=visual-studio-code&logoColor=white)](https://insiders.vscode.dev/redirect?url=vscode%3Amcp%2Finstall%3F%7B%22name%22%3A%22superfetch%22%2C%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22%40j0hanz%2Fsuperfetch%40latest%22%2C%22--stdio%22%5D%7D) [![Install in VS Code Insiders](https://img.shields.io/badge/VS_Code_Insiders-Install-24bfa5?logo=visual-studio-code&logoColor=white)](https://insiders.vscode.dev/redirect?url=vscode-insiders%3Amcp%2Finstall%3F%7B%22name%22%3A%22superfetch%22%2C%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22%40j0hanz%2Fsuperfetch%40latest%22%2C%22--stdio%22%5D%7D) [![Install in Cursor](https://img.shields.io/badge/Cursor-Install-f97316?logo=cursor&logoColor=white)](https://cursor.com/install-mcp?name=superfetch&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIkBqMGhhbnovc3VwZXJmZXRjaEBsYXRlc3QiLCItLXN0ZGlvIl19)
+[![Install in VS Code](https://img.shields.io/badge/VS_Code-Install-0078d7?logo=visual-studio-code&logoColor=white)](https://insiders.vscode.dev/redirect?url=vscode%3Amcp%2Finstall%3F%7B%22name%22%3A%22fetch-url-mcp%22%2C%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22%40j0hanz%2Ffetch-url-mcp%40latest%22%2C%22--stdio%22%5D%7D) [![Install in VS Code Insiders](https://img.shields.io/badge/VS_Code_Insiders-Install-24bfa5?logo=visual-studio-code&logoColor=white)](https://insiders.vscode.dev/redirect?url=vscode-insiders%3Amcp%2Finstall%3F%7B%22name%22%3A%22fetch-url-mcp%22%2C%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22%40j0hanz%2Ffetch-url-mcp%40latest%22%2C%22--stdio%22%5D%7D) [![Install in Cursor](https://img.shields.io/badge/Cursor-Install-f97316?logo=cursor&logoColor=white)](https://cursor.com/install-mcp?name=fetch-url-mcp&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIkBqMGhhbnovZmV0Y2gtdXJsLW1jcEBsYXRlc3QiLCItLXN0ZGlvIl19)
 
 Fetch and convert public web content to clean Markdown both readable by humans and optimized for LLM context.
 
 ## Overview
 
-superFetch is a [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that fetches public web pages, extracts meaningful content using Mozilla's Readability algorithm, and converts the result into clean Markdown optimized for LLM context windows. It handles noise removal, caching, SSRF protection, async task execution, and supports both stdio and Streamable HTTP transports.
+Fetch URL is a [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that fetches public web pages, extracts meaningful content using Mozilla's Readability algorithm, and converts the result into clean Markdown optimized for LLM context windows. It handles noise removal, caching, SSRF protection, async task execution, and supports both stdio and Streamable HTTP transports.
 
 ## Key Features
 
@@ -23,7 +23,7 @@ superFetch is a [Model Context Protocol](https://modelcontextprotocol.io) (MCP) 
 - SSRF protections: blocked private IP ranges and internal hostnames.
 
 > **Note:** Content extraction quality varies depending on the HTML structure and
-> complexity of the source page. SuperFetch works best with standard article and
+> complexity of the source page. Fetch URL works best with standard article and
 > documentation layouts. Always verify the fetched content to ensure it meets
 > your expectations, as some pages may require manual adjustment or alternative
 > approaches.
@@ -58,7 +58,7 @@ URL → Validate → DNS Preflight → HTTP Fetch → Decompress
 ## Repository Structure
 
 ```text
-superFetch/
+fetch-url-mcp/
 ├── assets/
 │   └── logo.svg
 ├── scripts/
@@ -107,7 +107,7 @@ superFetch/
 ## Quickstart
 
 ```bash
-npx -y @j0hanz/superfetch@latest --stdio
+npx -y @j0hanz/fetch-url-mcp@latest --stdio
 ```
 
 Add to your MCP client configuration:
@@ -115,9 +115,9 @@ Add to your MCP client configuration:
 ```json
 {
   "mcpServers": {
-    "superfetch": {
+    "fetch-url-mcp": {
       "command": "npx",
-      "args": ["-y", "@j0hanz/superfetch@latest", "--stdio"]
+      "args": ["-y", "@j0hanz/fetch-url-mcp@latest", "--stdio"]
     }
   }
 }
@@ -130,21 +130,21 @@ Add to your MCP client configuration:
 No installation required — runs directly:
 
 ```bash
-npx -y @j0hanz/superfetch@latest --stdio
+npx -y @j0hanz/fetch-url-mcp@latest --stdio
 ```
 
 ### Global Install
 
 ```bash
-npm install -g @j0hanz/superfetch
-superfetch --stdio
+npm install -g @j0hanz/fetch-url-mcp
+fetch-url-mcp --stdio
 ```
 
 ### From Source
 
 ```bash
-git clone https://github.com/j0hanz/super-fetch-mcp-server.git
-cd super-fetch-mcp-server
+git clone https://github.com/j0hanz/fetch-url-mcp.git
+cd fetch-url-mcp
 npm install
 npm run build
 node dist/index.js --stdio
@@ -166,18 +166,18 @@ When no `--stdio` flag is passed, the server starts in **HTTP mode** (Streamable
 
 #### Core Settings
 
-| Variable              | Default                    | Description                                            |
-| --------------------- | -------------------------- | ------------------------------------------------------ |
-| `HOST`                | `127.0.0.1`                | HTTP server bind address                               |
-| `PORT`                | `3000`                     | HTTP server port (1024–65535)                          |
-| `LOG_LEVEL`           | `info`                     | Log level: `debug`, `info`, `warn`, `error`            |
-| `FETCH_TIMEOUT_MS`    | `15000`                    | HTTP fetch timeout in ms (1000–60000)                  |
-| `CACHE_ENABLED`       | `true`                     | Enable/disable in-memory content cache                 |
-| `USER_AGENT`          | `superFetch-MCP/{version}` | Custom User-Agent header                               |
-| `ALLOW_REMOTE`        | `false`                    | Allow remote connections in HTTP mode                  |
-| `ALLOWED_HOSTS`       | _(empty)_                  | Comma-separated host/origin allowlist for HTTP mode    |
-| `TASKS_MAX_TOTAL`     | `5000`                     | Maximum retained task records across all owners        |
-| `TASKS_MAX_PER_OWNER` | `1000`                     | Maximum retained task records per session/client/token |
+| Variable              | Default                   | Description                                            |
+| --------------------- | ------------------------- | ------------------------------------------------------ |
+| `HOST`                | `127.0.0.1`               | HTTP server bind address                               |
+| `PORT`                | `3000`                    | HTTP server port (1024–65535)                          |
+| `LOG_LEVEL`           | `info`                    | Log level: `debug`, `info`, `warn`, `error`            |
+| `FETCH_TIMEOUT_MS`    | `15000`                   | HTTP fetch timeout in ms (1000–60000)                  |
+| `CACHE_ENABLED`       | `true`                    | Enable/disable in-memory content cache                 |
+| `USER_AGENT`          | `fetch-url-mcp/{version}` | Custom User-Agent header                               |
+| `ALLOW_REMOTE`        | `false`                   | Allow remote connections in HTTP mode                  |
+| `ALLOWED_HOSTS`       | _(empty)_                 | Comma-separated host/origin allowlist for HTTP mode    |
+| `TASKS_MAX_TOTAL`     | `5000`                    | Maximum retained task records across all owners        |
+| `TASKS_MAX_PER_OWNER` | `1000`                    | Maximum retained task records per session/client/token |
 
 #### Authentication (HTTP Mode)
 
@@ -207,13 +207,13 @@ When no `--stdio` flag is passed, the server starts in **HTTP mode** (Streamable
 
 #### Content Tuning
 
-| Variable                           | Default           | Description                                      |
-| ---------------------------------- | ----------------- | ------------------------------------------------ |
-| `MAX_INLINE_CONTENT_CHARS`         | `0`               | Global inline markdown limit (`0` = unlimited)   |
-| `SUPERFETCH_EXTRA_NOISE_TOKENS`    | _(empty)_         | Additional CSS class/id tokens for noise removal |
-| `SUPERFETCH_EXTRA_NOISE_SELECTORS` | _(empty)_         | Additional CSS selectors for noise removal       |
-| `MARKDOWN_HEADING_KEYWORDS`        | _(built-in list)_ | Keywords triggering heading promotion            |
-| `SUPERFETCH_LOCALE`                | _(system)_        | Locale for content processing                    |
+| Variable                              | Default           | Description                                      |
+| ------------------------------------- | ----------------- | ------------------------------------------------ |
+| `MAX_INLINE_CONTENT_CHARS`            | `0`               | Global inline markdown limit (`0` = unlimited)   |
+| `FETCH_URL_MCP_EXTRA_NOISE_TOKENS`    | _(empty)_         | Additional CSS class/id tokens for noise removal |
+| `FETCH_URL_MCP_EXTRA_NOISE_SELECTORS` | _(empty)_         | Additional CSS selectors for noise removal       |
+| `MARKDOWN_HEADING_KEYWORDS`           | _(built-in list)_ | Keywords triggering heading promotion            |
+| `FETCH_URL_MCP_LOCALE`                | _(system)_        | Locale for content processing                    |
 
 #### Server Tuning
 
@@ -245,7 +245,7 @@ When no `--stdio` flag is passed, the server starts in **HTTP mode** (Streamable
 ### Stdio Mode
 
 ```bash
-superfetch --stdio
+fetch-url-mcp --stdio
 ```
 
 The server communicates via JSON-RPC over stdin/stdout. All MCP clients that support stdio transport can connect directly.
@@ -253,9 +253,9 @@ The server communicates via JSON-RPC over stdin/stdout. All MCP clients that sup
 ### HTTP Mode
 
 ```bash
-superfetch
+fetch-url-mcp
 # or
-PORT=8080 HOST=0.0.0.0 ALLOW_REMOTE=true superfetch
+PORT=8080 HOST=0.0.0.0 ALLOW_REMOTE=true fetch-url-mcp
 ```
 
 The server starts a Streamable HTTP endpoint at `/mcp`. Authenticate with bearer tokens via the `ACCESS_TOKENS` or `API_KEY` environment variables.
@@ -413,9 +413,9 @@ Add to your VS Code settings (`.vscode/mcp.json` or User Settings):
 ```json
 {
   "servers": {
-    "superfetch": {
+    "fetch-url-mcp": {
       "command": "npx",
-      "args": ["-y", "@j0hanz/superfetch@latest", "--stdio"]
+      "args": ["-y", "@j0hanz/fetch-url-mcp@latest", "--stdio"]
     }
   }
 }
@@ -431,9 +431,9 @@ Add to `claude_desktop_config.json`:
 ```json
 {
   "mcpServers": {
-    "superfetch": {
+    "fetch-url-mcp": {
       "command": "npx",
-      "args": ["-y", "@j0hanz/superfetch@latest", "--stdio"]
+      "args": ["-y", "@j0hanz/fetch-url-mcp@latest", "--stdio"]
     }
   }
 }
@@ -444,16 +444,16 @@ Add to `claude_desktop_config.json`:
 <details>
 <summary>Cursor</summary>
 
-[![Install in Cursor](https://img.shields.io/badge/Cursor-Install-f97316?logo=cursor&logoColor=white)](https://cursor.com/install-mcp?name=superfetch&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIkBqMGhhbnovc3VwZXJmZXRjaEBsYXRlc3QiLCItLXN0ZGlvIl19)
+[![Install in Cursor](https://img.shields.io/badge/Cursor-Install-f97316?logo=cursor&logoColor=white)](https://cursor.com/install-mcp?name=fetch-url-mcp&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIkBqMGhhbnovZmV0Y2gtdXJsLW1jcEBsYXRlc3QiLCItLXN0ZGlvIl19)
 
 Or manually add to Cursor MCP settings:
 
 ```json
 {
   "mcpServers": {
-    "superfetch": {
+    "fetch-url-mcp": {
       "command": "npx",
-      "args": ["-y", "@j0hanz/superfetch@latest", "--stdio"]
+      "args": ["-y", "@j0hanz/fetch-url-mcp@latest", "--stdio"]
     }
   }
 }
@@ -469,9 +469,9 @@ Add to your Windsurf MCP configuration:
 ```json
 {
   "mcpServers": {
-    "superfetch": {
+    "fetch-url-mcp": {
       "command": "npx",
-      "args": ["-y", "@j0hanz/superfetch@latest", "--stdio"]
+      "args": ["-y", "@j0hanz/fetch-url-mcp@latest", "--stdio"]
     }
   }
 }
@@ -483,7 +483,7 @@ Add to your Windsurf MCP configuration:
 
 ### SSRF Protection
 
-superFetch blocks requests to private and internal network addresses:
+Fetch URL blocks requests to private and internal network addresses:
 
 - **Blocked hosts**: `localhost`, `127.0.0.0/8`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `169.254.0.0/16`, `100.64.0.0/10`
 - **Blocked IPv6**: `::1`, `fc00::/7`, `fe80::/10`, IPv4-mapped private addresses (`::ffff:10.*`, etc.)

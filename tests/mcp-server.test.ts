@@ -56,14 +56,14 @@ describe('MCP Server', () => {
       )._serverInfo;
 
       assert.ok(serverInfo, 'Server info should be available');
-      assert.equal(serverInfo?.title, 'superFetch MCP');
+      assert.equal(serverInfo?.title, 'Fetch URL');
       assert.equal(
         serverInfo?.description,
         'Fetch web pages and convert them into clean, AI-readable Markdown.'
       );
       assert.equal(
         serverInfo?.websiteUrl,
-        'https://github.com/j0hanz/super-fetch-mcp-server'
+        'https://github.com/j0hanz/fetch-url-mcp'
       );
     });
   });
