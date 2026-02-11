@@ -64,8 +64,23 @@ import { isObject } from './type-guards.js';
 
 const utf8Decoder = new TextDecoder('utf-8');
 
-function decodeUtf8Input(input: string | Uint8Array): string {
-  return typeof input === 'string' ? input : utf8Decoder.decode(input);
+function decodeInput(input: string | Uint8Array, encoding?: string): string {
+  if (typeof input === 'string') return input;
+
+  const normalizedEncoding = encoding?.trim().toLowerCase();
+  if (
+    !normalizedEncoding ||
+    normalizedEncoding === 'utf-8' ||
+    normalizedEncoding === 'utf8'
+  ) {
+    return utf8Decoder.decode(input);
+  }
+
+  try {
+    return new TextDecoder(normalizedEncoding).decode(input);
+  } catch {
+    return utf8Decoder.decode(input);
+  }
 }
 
 function getTagName(node: unknown): string {
@@ -1992,8 +2007,7 @@ export function transformHtmlToMarkdownInProcess(
     completed = result;
     return result;
   } finally {
-    if (completed)
-      stageTracker.end(totalStage, { truncated: completed.truncated });
+    endTotalTransformStage(totalStage, completed);
   }
 }
 
@@ -2942,6 +2956,32 @@ export async function shutdownTransformWorkerPool(): Promise<void> {
   await shutdownWorkerPool();
 }
 
+type TransformExecutionOptions = TransformOptions & { encoding?: string };
+
+function transformInputInProcess(
+  htmlOrBuffer: string | Uint8Array,
+  url: string,
+  options: TransformExecutionOptions
+): MarkdownTransformResult {
+  return transformHtmlToMarkdownInProcess(
+    decodeInput(htmlOrBuffer, options.encoding),
+    url,
+    options
+  );
+}
+
+function endTotalTransformStage(
+  context: TransformStageContext | null,
+  result: MarkdownTransformResult | null
+): void {
+  if (!result) {
+    stageTracker.end(context);
+    return;
+  }
+
+  stageTracker.end(context, { truncated: result.truncated });
+}
+
 function buildWorkerTransformOptions(options: TransformOptions): {
   includeMetadata: boolean;
   signal?: AbortSignal;
@@ -2959,15 +2999,11 @@ function buildWorkerTransformOptions(options: TransformOptions): {
 async function transformWithWorkerPool(
   htmlOrBuffer: string | Uint8Array,
   url: string,
-  options: TransformOptions & { encoding?: string }
+  options: TransformExecutionOptions
 ): Promise<MarkdownTransformResult> {
   const pool = getOrCreateWorkerPool();
   if (pool.getCapacity() === 0) {
-    return transformHtmlToMarkdownInProcess(
-      decodeUtf8Input(htmlOrBuffer),
-      url,
-      options
-    );
+    return transformInputInProcess(htmlOrBuffer, url, options);
   }
 
   if (typeof htmlOrBuffer === 'string') {
@@ -2987,7 +3023,7 @@ function resolveWorkerFallback(
   error: unknown,
   htmlOrBuffer: string | Uint8Array,
   url: string,
-  options: TransformOptions & { encoding?: string }
+  options: TransformExecutionOptions
 ): MarkdownTransformResult {
   const isQueueFull =
     error instanceof FetchError && error.details.reason === 'queue_full';
@@ -2997,11 +3033,7 @@ function resolveWorkerFallback(
       url: redactUrl(url),
     });
 
-    return transformHtmlToMarkdownInProcess(
-      decodeUtf8Input(htmlOrBuffer),
-      url,
-      options
-    );
+    return transformInputInProcess(htmlOrBuffer, url, options);
   }
 
   if (error instanceof FetchError) throw error;
@@ -3020,33 +3052,40 @@ function resolveWorkerFallback(
   });
 }
 
+async function runWorkerTransformWithFallback(
+  htmlOrBuffer: string | Uint8Array,
+  url: string,
+  options: TransformExecutionOptions
+): Promise<MarkdownTransformResult> {
+  const workerStage = stageTracker.start(url, 'transform:worker');
+  try {
+    return await transformWithWorkerPool(htmlOrBuffer, url, options);
+  } catch (error: unknown) {
+    return resolveWorkerFallback(error, htmlOrBuffer, url, options);
+  } finally {
+    stageTracker.end(workerStage);
+  }
+}
+
 async function transformInputToMarkdown(
   htmlOrBuffer: string | Uint8Array,
   url: string,
-  options: TransformOptions & { encoding?: string }
+  options: TransformExecutionOptions
 ): Promise<MarkdownTransformResult> {
   const totalStage = stageTracker.start(url, 'transform:total');
   let completed: MarkdownTransformResult | null = null;
 
   try {
     abortPolicy.throwIfAborted(options.signal, url, 'transform:begin');
-
-    const workerStage = stageTracker.start(url, 'transform:worker');
-    try {
-      const result = await transformWithWorkerPool(htmlOrBuffer, url, options);
-      completed = result;
-      return result;
-    } catch (error: unknown) {
-      const fallback = resolveWorkerFallback(error, htmlOrBuffer, url, options);
-      completed = fallback;
-      return fallback;
-    } finally {
-      stageTracker.end(workerStage);
-    }
+    const result = await runWorkerTransformWithFallback(
+      htmlOrBuffer,
+      url,
+      options
+    );
+    completed = result;
+    return result;
   } finally {
-    if (completed) {
-      stageTracker.end(totalStage, { truncated: completed.truncated });
-    }
+    endTotalTransformStage(totalStage, completed);
   }
 }
 
@@ -3061,7 +3100,7 @@ export async function transformHtmlToMarkdown(
 export async function transformBufferToMarkdown(
   htmlBuffer: Uint8Array,
   url: string,
-  options: TransformOptions & { encoding?: string }
+  options: TransformExecutionOptions
 ): Promise<MarkdownTransformResult> {
   return transformInputToMarkdown(htmlBuffer, url, options);
 }
