@@ -17,7 +17,6 @@ import {
   type ServerResult,
 } from '@modelcontextprotocol/sdk/types.js';
 
-import { type McpIcon } from './cache.js';
 import { config } from './config.js';
 import {
   logError,
@@ -26,7 +25,7 @@ import {
   runWithRequestContext,
   setMcpServer,
 } from './observability.js';
-import { registerPrompts } from './prompts.js';
+import { registerGetHelpPrompt } from './prompts.js';
 import { type CreateTaskResult, taskManager, type TaskState } from './tasks.js';
 import {
   FETCH_URL_TOOL_NAME,
@@ -45,7 +44,7 @@ import { isObject } from './type-guards.js';
 
 async function getLocalIcons(
   signal?: AbortSignal
-): Promise<McpIcon[] | undefined> {
+): Promise<{ src: string; mimeType: string }[] | undefined> {
   const MAX_ICON_BYTES = 2 * 1024 * 1024;
 
   try {
@@ -63,7 +62,6 @@ async function getLocalIcons(
       {
         src: `data:image/svg+xml;base64,${base64}`,
         mimeType: 'image/svg+xml',
-        sizes: ['any'],
       },
     ];
   } catch {
@@ -143,13 +141,13 @@ async function createServerInstructions(
   }
 }
 
-function createServerInfo(icons?: McpIcon[]): {
+function createServerInfo(icons?: { src: string; mimeType: string }[]): {
   name: string;
   title: string;
   description: string;
   version: string;
   websiteUrl: string;
-  icons?: McpIcon[];
+  icons?: { src: string; mimeType: string }[];
 } {
   return {
     name: config.server.name,
@@ -796,7 +794,7 @@ async function createMcpServerWithOptions(
   }
 
   registerTools(server);
-  registerPrompts(server, instructions, localIcons);
+  registerGetHelpPrompt(server, instructions, localIcons?.[0]);
   server.server.registerCapabilities({
     tools: { listChanged: false },
     prompts: { listChanged: false },

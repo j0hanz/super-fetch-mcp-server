@@ -1,27 +1,36 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { GetPromptResult } from '@modelcontextprotocol/sdk/types.js';
 
-import type { McpIcon } from './cache.js';
+interface IconInfo {
+  src: string;
+  mimeType: string;
+}
 
-export const GET_HELP_PROMPT_NAME = 'get-help';
-
-const PROMPT_DESCRIPTION =
-  'Returns usage guidance for the superFetch MCP server.';
-
-export function registerPrompts(
+export function registerGetHelpPrompt(
   server: McpServer,
   instructions: string,
-  icons?: McpIcon[]
+  iconInfo?: IconInfo
 ): void {
+  const description = 'Return the super-fetch usage instructions.';
+
   server.registerPrompt(
-    GET_HELP_PROMPT_NAME,
+    'get-help',
     {
       title: 'Get Help',
-      description: PROMPT_DESCRIPTION,
-      ...(icons ? { icons } : {}),
+      description,
+      ...(iconInfo
+        ? {
+            icons: [
+              {
+                src: iconInfo.src,
+                mimeType: iconInfo.mimeType,
+              },
+            ],
+          }
+        : {}),
     },
     (): GetPromptResult => ({
-      description: PROMPT_DESCRIPTION,
+      description,
       messages: [
         {
           role: 'user',

@@ -37,12 +37,6 @@ export interface CacheEntry {
   expiresAt: string;
 }
 
-export interface McpIcon {
-  src: string;
-  mimeType: string;
-  sizes?: string[];
-}
-
 export interface CacheKeyParts {
   namespace: string;
   urlHash: string;
