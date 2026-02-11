@@ -127,14 +127,23 @@ function handleTransform(msg: Record<string, unknown>): void {
       ...(inputTruncated ? { inputTruncated: true } : {}),
     });
 
-    const { markdown, title, truncated } = result;
+    const { markdown, metadata, title, truncated } = result;
     port.postMessage({
       type: 'result',
       id,
       result:
         title === undefined
-          ? { markdown, truncated }
-          : { markdown, title, truncated },
+          ? {
+              markdown,
+              ...(metadata ? { metadata } : {}),
+              truncated,
+            }
+          : {
+              markdown,
+              ...(metadata ? { metadata } : {}),
+              title,
+              truncated,
+            },
     });
   } catch (error: unknown) {
     postError(id, url, error);

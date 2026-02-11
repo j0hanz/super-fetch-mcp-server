@@ -331,9 +331,11 @@ const CacheResourceParamsSchema = z.strictObject({
 function listCachedResources(): {
   resources: {
     name: string;
+    title?: string;
     uri: string;
     description: string;
     mimeType: string;
+    size?: number;
     annotations: {
       audience: ('user' | 'assistant')[];
       priority: number;
@@ -351,11 +353,25 @@ function listCachedResources(): {
     .map(({ namespace, urlHash }) => {
       const cacheKey = `${namespace}:${urlHash}`;
       const entry = store.get(cacheKey, { force: true });
+      const payload = entry ? parseCachedPayload(entry.content) : null;
+      const resolvedContent = payload
+        ? resolveCachedPayloadContent(payload)
+        : null;
+      const size = resolvedContent
+        ? Buffer.byteLength(resolvedContent, 'utf8')
+        : undefined;
+      const title = entry?.title ?? payload?.title;
+      const description = entry?.url
+        ? `Cached markdown from ${entry.url}`
+        : `Cached content entry for ${namespace}`;
+
       return {
         name: `${namespace}:${urlHash}`,
+        ...(title ? { title } : {}),
         uri: `superfetch://cache/${namespace}/${urlHash}`,
-        description: `Cached content entry for ${namespace}`,
+        description,
         mimeType: 'text/markdown',
+        ...(size !== undefined ? { size } : {}),
         annotations: {
           audience: ['user', 'assistant'] as ('user' | 'assistant')[],
           priority: 0.6,
@@ -435,10 +451,11 @@ export function registerCachedContentResource(
     requestInfo?: { headers?: Record<string, string | string[] | undefined> };
   }
 
-  function resolveScope(extra?: SubscriptionExtra): string {
-    if (extra?.sessionId) return extra.sessionId;
-
-    const headerValue = extra?.requestInfo?.headers?.['mcp-session-id'];
+  function readSessionHeader(
+    headers: Record<string, string | string[] | undefined> | undefined,
+    key: string
+  ): string | undefined {
+    const headerValue = headers?.[key];
     if (typeof headerValue === 'string' && headerValue.trim().length > 0) {
       return headerValue.trim();
     }
@@ -448,6 +465,16 @@ export function registerCachedContentResource(
         return first.trim();
       }
     }
+    return undefined;
+  }
+
+  function resolveScope(extra?: SubscriptionExtra): string {
+    if (extra?.sessionId) return extra.sessionId;
+
+    const headerSessionId =
+      readSessionHeader(extra?.requestInfo?.headers, 'mcp-session-id') ??
+      readSessionHeader(extra?.requestInfo?.headers, 'x-mcp-session-id');
+    if (headerSessionId) return headerSessionId;
 
     return DEFAULT_SCOPE;
   }

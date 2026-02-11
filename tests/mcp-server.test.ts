@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
+import { createCacheKey, parseCacheKey, set } from '../dist/cache.js';
 import { createMcpServer } from '../dist/mcp.js';
 
 describe('MCP Server', () => {
@@ -39,6 +40,31 @@ describe('MCP Server', () => {
         errorCaught,
         testError,
         'Error handler should receive errors'
+      );
+    });
+
+    it('publishes extended server info metadata', async () => {
+      const server = await createMcpServer();
+
+      const serverInfo = (
+        server.server as unknown as {
+          _serverInfo?: {
+            title?: string;
+            description?: string;
+            websiteUrl?: string;
+          };
+        }
+      )._serverInfo;
+
+      assert.ok(serverInfo, 'Server info should be available');
+      assert.equal(serverInfo?.title, 'superFetch MCP');
+      assert.equal(
+        serverInfo?.description,
+        'Fetch web pages and convert them into clean, AI-readable Markdown.'
+      );
+      assert.equal(
+        serverInfo?.websiteUrl,
+        'https://github.com/j0hanz/super-fetch-mcp-server'
       );
     });
   });
@@ -140,6 +166,64 @@ describe('MCP Server', () => {
         );
       }
     });
+
+    it('lists cached resources with title, URL-aware description, and size', async () => {
+      const url = `https://example.com/listed-${Date.now()}`;
+      const cacheKey = createCacheKey('markdown', url);
+      assert.ok(cacheKey);
+      set(
+        cacheKey,
+        JSON.stringify({
+          markdown: '# Cached resource content',
+          title: 'Listed',
+        }),
+        { title: 'Listed', url }
+      );
+
+      const urlHash = parseCacheKey(cacheKey)?.urlHash;
+      assert.ok(urlHash, 'url hash should be generated');
+
+      const server = await createMcpServer();
+      const templates = (
+        server as unknown as {
+          _registeredResourceTemplates: Record<
+            string,
+            {
+              resourceTemplate: {
+                listCallback?: () => Promise<{
+                  resources: Array<{
+                    uri: string;
+                    title?: string;
+                    description: string;
+                    size?: number;
+                  }>;
+                }>;
+              };
+            }
+          >;
+        }
+      )._registeredResourceTemplates;
+
+      const cachedContentTemplate = templates['cached-content'];
+      assert.ok(cachedContentTemplate, 'cached-content template should exist');
+
+      const listed =
+        await cachedContentTemplate.resourceTemplate.listCallback?.();
+      assert.ok(listed, 'list callback should return resources');
+
+      const match = listed?.resources.find((resource) =>
+        resource.uri.endsWith(`/markdown/${urlHash}`)
+      );
+
+      assert.ok(match, 'cached entry should be discoverable');
+      assert.equal(match?.title, 'Listed');
+      assert.match(
+        String(match?.description),
+        /https:\/\/example\.com\/listed-/
+      );
+      assert.equal(typeof match?.size, 'number');
+      assert.ok((match?.size ?? 0) > 0);
+    });
   });
 
   describe('Prompts', () => {
@@ -151,6 +235,67 @@ describe('MCP Server', () => {
 
       assert.ok(prompt, 'get-help prompt should be registered');
       assert.equal(typeof prompt.callback, 'function');
+    });
+
+    it('registers bounded URL/instruction prompt schemas', async () => {
+      const server = await createMcpServer();
+      const prompts = (
+        server as unknown as {
+          _registeredPrompts?: Record<
+            string,
+            {
+              argsSchema?: {
+                def?: {
+                  shape?: Record<
+                    string,
+                    { maxLength?: number; minLength?: number }
+                  >;
+                };
+              };
+            }
+          >;
+        }
+      )._registeredPrompts;
+
+      const summarizeArgs = prompts?.['summarize-page']?.argsSchema;
+      const extractArgs = prompts?.['extract-data']?.argsSchema;
+
+      assert.ok(summarizeArgs, 'summarize-page args schema should exist');
+      assert.ok(extractArgs, 'extract-data args schema should exist');
+      assert.equal(summarizeArgs?.def?.shape?.url?.maxLength, 2048);
+      assert.equal(extractArgs?.def?.shape?.url?.maxLength, 2048);
+      assert.equal(extractArgs?.def?.shape?.instruction?.minLength, 3);
+      assert.equal(extractArgs?.def?.shape?.instruction?.maxLength, 1000);
+    });
+  });
+
+  describe('Protocol handlers', () => {
+    it('registers logging/setLevel request handling', async () => {
+      const server = await createMcpServer();
+      const requestHandlers = (
+        server.server as unknown as {
+          _requestHandlers: Map<string, unknown>;
+        }
+      )._requestHandlers;
+
+      assert.ok(
+        requestHandlers.has('logging/setLevel'),
+        'logging/setLevel handler should be registered'
+      );
+    });
+
+    it('registers notifications/cancelled handling', async () => {
+      const server = await createMcpServer();
+      const notificationHandlers = (
+        server.server as unknown as {
+          _notificationHandlers: Map<string, unknown>;
+        }
+      )._notificationHandlers;
+
+      assert.ok(
+        notificationHandlers.has('notifications/cancelled'),
+        'notifications/cancelled handler should be registered'
+      );
     });
   });
 });

@@ -3,11 +3,26 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 import type { McpIcon } from './cache.js';
+import { config } from './config.js';
 import { FETCH_URL_TOOL_NAME } from './tools.js';
 
 export const GET_HELP_PROMPT_NAME = 'get-help';
 export const SUMMARIZE_PAGE_PROMPT_NAME = 'summarize-page';
 export const EXTRACT_DATA_PROMPT_NAME = 'extract-data';
+
+const promptUrlSchema = z
+  .url({ protocol: /^https?$/i })
+  .min(1)
+  .max(config.constants.maxUrlLength)
+  .describe('The URL of the webpage to fetch');
+
+const promptInstructionSchema = z
+  .string()
+  .min(3)
+  .max(1000)
+  .describe(
+    'Description of the data to extract (for example, "all pricing tiers")'
+  );
 
 export function registerPrompts(
   server: McpServer,
@@ -44,7 +59,7 @@ export function registerPrompts(
       description: 'Creates a prompt to fetch and summarize a webpage.',
       ...(icons ? { icons } : {}),
       argsSchema: {
-        url: z.url().describe('The URL of the webpage to summarize'),
+        url: promptUrlSchema.describe('The URL of the webpage to summarize'),
       },
     },
     (args) => {
@@ -73,12 +88,10 @@ export function registerPrompts(
         'Creates a prompt to fetch a webpage and extract specific data.',
       ...(icons ? { icons } : {}),
       argsSchema: {
-        url: z.url().describe('The URL of the webpage to extract data from'),
-        instruction: z
-          .string()
-          .describe(
-            'Description of the data to extract (e.g., "all pricing tiers")'
-          ),
+        url: promptUrlSchema.describe(
+          'The URL of the webpage to extract data from'
+        ),
+        instruction: promptInstructionSchema,
       },
     },
     (args) => {

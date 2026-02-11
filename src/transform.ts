@@ -1715,6 +1715,7 @@ interface ContentSource {
   readonly title: string | undefined;
   readonly favicon: string | undefined;
   readonly metadata: ReturnType<typeof createContentMetadataBlock>;
+  readonly extractedMetadata: ExtractedMetadata;
   readonly document?: Document;
   readonly skipNoiseRemoval?: boolean;
   readonly truncated: boolean;
@@ -1826,6 +1827,7 @@ function buildContentSource(params: {
       title: article.title,
       favicon: extractedMeta.favicon,
       metadata,
+      extractedMetadata: extractedMeta,
       skipNoiseRemoval: true,
       truncated,
     };
@@ -1843,6 +1845,7 @@ function buildContentSource(params: {
         title: extractedMeta.title,
         favicon: extractedMeta.favicon,
         metadata,
+        extractedMetadata: extractedMeta,
         skipNoiseRemoval: true,
         document,
         truncated,
@@ -1854,6 +1857,7 @@ function buildContentSource(params: {
       title: extractedMeta.title,
       favicon: extractedMeta.favicon,
       metadata,
+      extractedMetadata: extractedMeta,
       skipNoiseRemoval: true,
       document,
       truncated,
@@ -1865,6 +1869,7 @@ function buildContentSource(params: {
     title: extractedMeta.title,
     favicon: extractedMeta.favicon,
     metadata,
+    extractedMetadata: extractedMeta,
     truncated,
   };
 }
@@ -1937,6 +1942,7 @@ function buildMarkdownFromContext(
     markdown: content,
     title: context.title,
     truncated: context.truncated,
+    metadata: context.extractedMetadata,
   };
 }
 
@@ -2015,11 +2021,43 @@ function isWorkerResultPayload(
   value: unknown
 ): value is TransformWorkerResultMessage['result'] {
   if (!isObject(value)) return false;
-  const { markdown, title, truncated } = value;
+  const { markdown, metadata, title, truncated } = value;
+  const isMetadataObject = metadata === undefined || isObject(metadata);
+
+  if (!isMetadataObject) return false;
+
+  if (metadata && !isExtractedMetadataPayload(metadata)) {
+    return false;
+  }
+
   return (
     typeof markdown === 'string' &&
     typeof truncated === 'boolean' &&
     (title === undefined || typeof title === 'string')
+  );
+}
+
+function isExtractedMetadataPayload(value: unknown): boolean {
+  if (!isObject(value)) return false;
+
+  const {
+    author,
+    description,
+    favicon,
+    image,
+    modifiedAt,
+    publishedAt,
+    title,
+  } = value;
+
+  return (
+    (title === undefined || typeof title === 'string') &&
+    (description === undefined || typeof description === 'string') &&
+    (author === undefined || typeof author === 'string') &&
+    (image === undefined || typeof image === 'string') &&
+    (favicon === undefined || typeof favicon === 'string') &&
+    (publishedAt === undefined || typeof publishedAt === 'string') &&
+    (modifiedAt === undefined || typeof modifiedAt === 'string')
   );
 }
 
@@ -2687,6 +2725,9 @@ class WorkerPool implements TransformWorkerPool {
           markdown: message.result.markdown,
           truncated: message.result.truncated,
           title: message.result.title,
+          ...(message.result.metadata
+            ? { metadata: message.result.metadata }
+            : {}),
         });
       });
     } else {

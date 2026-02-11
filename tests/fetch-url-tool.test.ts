@@ -89,8 +89,55 @@ describe('fetchUrlToolHandler', () => {
     assert.ok(structured);
     assert.equal(structured.url, 'https://example.com/test');
     assert.equal(typeof structured.markdown, 'string');
+    assert.equal(structured.fromCache, false);
+    assert.equal(typeof structured.fetchedAt, 'string');
+    assert.equal(typeof structured.contentSize, 'number');
     assert.ok((structured.markdown as string).includes('Hello'));
     assertTextBlockMatchesStructured(response);
+  });
+
+  it('returns extracted metadata fields when available', async (t) => {
+    const html = `
+      <html>
+        <head>
+          <title>Metadata Title</title>
+          <meta name="description" content="Metadata description" />
+          <meta name="author" content="Metadata Author" />
+          <meta property="article:published_time" content="2026-01-01T00:00:00Z" />
+          <meta property="article:modified_time" content="2026-01-02T00:00:00Z" />
+        </head>
+        <body><main><p>Hello metadata</p></main></body>
+      </html>
+    `;
+
+    t.mock.method(globalThis, 'fetch', async () => {
+      return new Response(html, {
+        status: 200,
+        headers: { 'content-type': 'text/html' },
+      });
+    });
+
+    const response = await fetchUrlToolHandler({
+      url: 'https://example.com/metadata',
+    });
+
+    const structured = response.structuredContent;
+    assert.ok(structured);
+    const metadata = structured.metadata as
+      | {
+          title?: string;
+          description?: string;
+          author?: string;
+          publishedAt?: string;
+          modifiedAt?: string;
+        }
+      | undefined;
+    assert.ok(metadata);
+    assert.equal(metadata?.title, 'Metadata Title');
+    assert.equal(metadata?.description, 'Metadata description');
+    assert.equal(metadata?.author, 'Metadata Author');
+    assert.equal(metadata?.publishedAt, '2026-01-01T00:00:00Z');
+    assert.equal(metadata?.modifiedAt, '2026-01-02T00:00:00Z');
   });
 
   it('respects cancellation via the MCP request abort signal', async (t) => {
@@ -176,7 +223,9 @@ describe('fetchUrlToolHandler', () => {
     const response = await fetchUrlToolHandler({ url });
     const structured = response.structuredContent;
     assert.ok(structured);
+    assert.equal(structured.fromCache, true);
     assert.equal(structured.truncated, true);
+    assert.equal(typeof structured.fetchedAt, 'string');
   });
 
   it('returns truncated markdown even when cache + http mode are enabled', async (t) => {

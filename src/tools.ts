@@ -189,12 +189,65 @@ const fetchUrlOutputSchema = z.strictObject({
     .optional()
     .describe('The normalized or transformed URL that was fetched'),
   title: z.string().max(512).optional().describe('Page title'),
+  metadata: z
+    .strictObject({
+      title: z.string().max(512).optional().describe('Detected page title'),
+      description: z
+        .string()
+        .max(2048)
+        .optional()
+        .describe('Detected page description'),
+      author: z.string().max(512).optional().describe('Detected page author'),
+      image: z
+        .string()
+        .max(config.constants.maxUrlLength)
+        .optional()
+        .describe('Detected page preview image URL'),
+      favicon: z
+        .string()
+        .max(config.constants.maxUrlLength)
+        .optional()
+        .describe('Detected page favicon URL'),
+      publishedAt: z
+        .string()
+        .max(64)
+        .optional()
+        .describe('Detected publication date (if present)'),
+      modifiedAt: z
+        .string()
+        .max(64)
+        .optional()
+        .describe('Detected last modified date (if present)'),
+    })
+    .optional()
+    .describe('Detected metadata extracted from page markup'),
   markdown: (config.constants.maxInlineContentChars > 0
     ? z.string().max(config.constants.maxInlineContentChars)
     : z.string()
   )
     .optional()
     .describe('The extracted content in Markdown format'),
+  fromCache: z
+    .boolean()
+    .optional()
+    .describe('Whether this response was served from cache'),
+  fetchedAt: z
+    .string()
+    .max(64)
+    .optional()
+    .describe('ISO timestamp of fetch/cache retrieval time'),
+  contentSize: z
+    .number()
+    .int()
+    .min(0)
+    .max(config.constants.maxHtmlSize * 4)
+    .optional()
+    .describe('Full markdown size in characters before inline truncation'),
+  cacheKey: z
+    .string()
+    .max(256)
+    .optional()
+    .describe('Internal cache key for this response when available'),
   truncated: z
     .boolean()
     .optional()
@@ -961,11 +1014,51 @@ type MarkdownPipelineResult = MarkdownTransformResult & {
   readonly content: string;
 };
 
+function normalizeExtractedMetadata(
+  metadata:
+    | {
+        title?: string | undefined;
+        description?: string | undefined;
+        author?: string | undefined;
+        image?: string | undefined;
+        favicon?: string | undefined;
+        publishedAt?: string | undefined;
+        modifiedAt?: string | undefined;
+      }
+    | undefined
+): MarkdownPipelineResult['metadata'] | undefined {
+  if (!metadata) return undefined;
+
+  const normalized = {
+    ...(metadata.title ? { title: metadata.title } : {}),
+    ...(metadata.description ? { description: metadata.description } : {}),
+    ...(metadata.author ? { author: metadata.author } : {}),
+    ...(metadata.image ? { image: metadata.image } : {}),
+    ...(metadata.favicon ? { favicon: metadata.favicon } : {}),
+    ...(metadata.publishedAt ? { publishedAt: metadata.publishedAt } : {}),
+    ...(metadata.modifiedAt ? { modifiedAt: metadata.modifiedAt } : {}),
+  };
+
+  if (Object.keys(normalized).length === 0) return undefined;
+  return normalized;
+}
+
 const cachedMarkdownSchema = z
   .object({
     markdown: z.string().optional(),
     content: z.string().optional(),
     title: z.string().optional(),
+    metadata: z
+      .strictObject({
+        title: z.string().optional(),
+        description: z.string().optional(),
+        author: z.string().optional(),
+        image: z.string().optional(),
+        favicon: z.string().optional(),
+        publishedAt: z.string().optional(),
+        modifiedAt: z.string().optional(),
+      })
+      .optional(),
     truncated: z.boolean().optional(),
   })
   .catchall(z.unknown())
@@ -985,10 +1078,13 @@ export function parseCachedMarkdownResult(
   const markdown = result.data.markdown ?? result.data.content;
   if (typeof markdown !== 'string') return undefined;
 
+  const metadata = normalizeExtractedMetadata(result.data.metadata);
+
   return {
     content: markdown,
     markdown,
     title: result.data.title,
+    ...(metadata ? { metadata } : {}),
     truncated: result.data.truncated ?? false,
   };
 }
@@ -1014,6 +1110,7 @@ function serializeMarkdownResult(result: MarkdownPipelineResult): string {
   return JSON.stringify({
     markdown: result.markdown,
     title: result.title,
+    metadata: result.metadata,
     truncated: result.truncated,
   });
 }
@@ -1028,13 +1125,19 @@ function buildStructuredContent(
   inputUrl: string
 ): Record<string, unknown> {
   const truncated = inlineResult.truncated ?? pipeline.data.truncated;
+  const { metadata } = pipeline.data;
 
   return {
     url: pipeline.originalUrl ?? pipeline.url,
     resolvedUrl: pipeline.url,
     inputUrl,
     title: pipeline.data.title,
+    ...(metadata ? { metadata } : {}),
     markdown: inlineResult.content,
+    fromCache: pipeline.fromCache,
+    fetchedAt: pipeline.fetchedAt,
+    contentSize: inlineResult.contentSize,
+    ...(pipeline.cacheKey ? { cacheKey: pipeline.cacheKey } : {}),
     ...(truncated ? { truncated: true } : {}),
   };
 }

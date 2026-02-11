@@ -55,6 +55,7 @@ export interface MarkdownTransformResult {
   markdown: string;
   title: string | undefined;
   truncated: boolean;
+  metadata?: ExtractedMetadata;
 }
 
 /**
@@ -115,7 +116,12 @@ export interface TransformWorkerCancelMessage {
 export interface TransformWorkerResultMessage {
   type: 'result';
   id: string;
-  result: { markdown: string; title?: string; truncated: boolean };
+  result: {
+    markdown: string;
+    title?: string;
+    truncated: boolean;
+    metadata?: ExtractedMetadata;
+  };
 }
 
 export interface TransformWorkerErrorMessage {
