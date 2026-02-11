@@ -27,6 +27,7 @@ import {
   logWarn,
   runWithRequestContext,
 } from './observability.js';
+import { wrapToolHandler } from './tool-wrapper.js';
 import type { MarkdownTransformResult } from './transform-types.js';
 import { transformBufferToMarkdown } from './transform.js';
 import { isObject } from './type-guards.js';
@@ -83,7 +84,9 @@ export type ToolErrorResponse = CallToolResult & {
   isError: true;
 };
 
-export type ToolResponseBase = CallToolResult;
+export type ToolResponseBase = CallToolResult & {
+  structuredContent: Record<string, unknown>;
+};
 
 export interface FetchPipelineOptions<T> {
   url: string;
@@ -1259,6 +1262,10 @@ export function registerTools(server: McpServer): void {
       // Use specific tool icon here
       icons: [TOOL_ICON],
     } as { inputSchema: typeof fetchUrlInputSchema } & Record<string, unknown>,
-    withRequestContextIfMissing(TOOL_DEFINITION.handler)
+    withRequestContextIfMissing(
+      wrapToolHandler(TOOL_DEFINITION.handler, {
+        progressMessage: (args) => `🌐︎ Fetching ${args.url}`,
+      })
+    )
   );
 }
