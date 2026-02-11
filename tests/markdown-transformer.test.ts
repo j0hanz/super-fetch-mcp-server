@@ -155,6 +155,21 @@ describe('htmlToMarkdown noise filtering', () => {
     assert.match(markdown, /^ {4}- Child\s*$/m);
     assert.match(markdown, /^ {8}- Grandchild\s*$/m);
   });
+
+  it('does not promote orphan headings without following content', () => {
+    const html = `
+      <html>
+        <body>
+          <p>Overview</p>
+        </body>
+      </html>
+    `;
+
+    const markdown = htmlToMarkdown(html);
+
+    assert.ok(markdown.includes('Overview'));
+    assert.ok(!markdown.includes('## Overview'));
+  });
 });
 
 describe('htmlToMarkdown metadata footer', () => {
@@ -199,6 +214,15 @@ describe('htmlToMarkdown code blocks', () => {
 
     assert.ok(markdown.includes('```javascript'));
     assert.ok(markdown.includes('const x = 1;'));
+  });
+
+  it('does not resolve relative links inside fenced code blocks', () => {
+    const html = '<pre><code>[Doc](./doc.md)</code></pre>';
+    const markdown = htmlToMarkdown(html, undefined, {
+      url: 'https://example.com/base/page',
+    });
+
+    assert.ok(markdown.includes('[Doc](./doc.md)'));
   });
 });
 

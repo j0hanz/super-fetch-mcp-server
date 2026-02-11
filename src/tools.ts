@@ -412,7 +412,6 @@ export function createProgressReporter(
 interface InlineContentResult {
   content?: string;
   contentSize: number;
-  error?: string;
   truncated?: boolean;
 }
 
@@ -489,6 +488,26 @@ function truncateWithMarker(
   }
 
   return `${tentativeContent}${marker}`;
+}
+
+function appendTruncationMarker(content: string, marker: string): string {
+  if (!content) return marker;
+  if (content.endsWith(marker)) return content;
+
+  const openFence = getOpenCodeFence(content);
+  const contentWithFence = openFence
+    ? `${content}\n${openFence.fenceChar.repeat(openFence.fenceLength)}\n`
+    : content;
+
+  const safeBoundary = findSafeLinkBoundary(
+    contentWithFence,
+    contentWithFence.length
+  );
+  if (safeBoundary < contentWithFence.length) {
+    return `${contentWithFence.substring(0, safeBoundary)}${marker}`;
+  }
+
+  return `${contentWithFence}${marker}`;
 }
 
 class InlineContentLimiter {
@@ -723,6 +742,23 @@ export async function executeFetchPipeline<T>(
       normalizedUrl: finalUrl || resolvedUrl.normalizedUrl,
       cacheNamespace: options.cacheNamespace,
     });
+
+    if (finalUrl && finalUrl !== resolvedUrl.normalizedUrl) {
+      const finalCacheKey = cache.createCacheKey(
+        options.cacheNamespace,
+        finalUrl,
+        options.cacheVary
+      );
+      if (finalCacheKey && finalCacheKey !== cacheKey) {
+        persistCache({
+          cacheKey: finalCacheKey,
+          data,
+          serialize: options.serialize,
+          normalizedUrl: finalUrl,
+          cacheNamespace: options.cacheNamespace,
+        });
+      }
+    }
   }
 
   return {
@@ -967,6 +1003,14 @@ function buildStructuredContent(
   inputUrl: string
 ): Record<string, unknown> {
   const truncated = inlineResult.truncated ?? pipeline.data.truncated;
+  let markdown = inlineResult.content;
+  if (
+    pipeline.data.truncated &&
+    !inlineResult.truncated &&
+    typeof markdown === 'string'
+  ) {
+    markdown = appendTruncationMarker(markdown, TRUNCATION_MARKER);
+  }
   const { metadata } = pipeline.data;
 
   return {
@@ -976,7 +1020,7 @@ function buildStructuredContent(
     inputUrl,
     title: pipeline.data.title,
     ...(metadata ? { metadata } : {}),
-    markdown: inlineResult.content,
+    markdown,
     fromCache: pipeline.fromCache,
     fetchedAt: pipeline.fetchedAt,
     contentSize: inlineResult.contentSize,
@@ -1077,10 +1121,6 @@ async function executeFetch(
 
   if (pipeline.fromCache) {
     void progress.report(3, 'Using cached content');
-  }
-
-  if (inlineResult.error) {
-    return createToolErrorResponse(inlineResult.error, url);
   }
 
   void progress.report(4, 'Finalizing response');

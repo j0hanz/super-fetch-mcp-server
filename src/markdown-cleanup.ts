@@ -157,12 +157,8 @@ function tryPromoteOrphan(
   const prefix = getHeadingPrefix(trimmed);
   if (!prefix) return null;
 
-  const isTitleCaseOnly =
-    prefix === '## ' &&
-    !SPECIAL_PREFIXES.test(trimmed) &&
-    trimmed.includes(' ');
-
-  if (isTitleCaseOnly && !hasFollowingContent(lines, i)) return null;
+  const isSpecialPrefix = SPECIAL_PREFIXES.test(trimmed);
+  if (!isSpecialPrefix && !hasFollowingContent(lines, i)) return null;
 
   return `${prefix}${trimmed}`;
 }

@@ -228,6 +228,45 @@ describe('fetchUrlToolHandler', () => {
     assert.equal(typeof structured.fetchedAt, 'string');
   });
 
+  it('adds truncation marker when HTML size truncation occurs', async (t) => {
+    const originalCacheEnabled = config.cache.enabled;
+    const originalInlineLimit = config.constants.maxInlineContentChars;
+    const originalMaxHtmlSize = config.constants.maxHtmlSize;
+    const originalMaxWorkerScale = config.transform.maxWorkerScale;
+    config.cache.enabled = false;
+    config.constants.maxInlineContentChars = 10000;
+    config.constants.maxHtmlSize = 200;
+    config.transform.maxWorkerScale = 0;
+
+    await shutdownTransformWorkerPool();
+
+    const html = `<html><body><p>${'a'.repeat(2000)}</p></body></html>`;
+
+    try {
+      t.mock.method(globalThis, 'fetch', async () => {
+        return new Response(html, {
+          status: 200,
+          headers: { 'content-type': 'text/html' },
+        });
+      });
+
+      const response = await fetchUrlToolHandler({
+        url: 'https://example.com/html-size-truncate',
+      });
+
+      const structured = response.structuredContent;
+      assert.ok(structured);
+      assert.equal(structured.truncated, true);
+      assert.ok(String(structured.markdown).includes('[truncated]'));
+    } finally {
+      await shutdownTransformWorkerPool();
+      config.cache.enabled = originalCacheEnabled;
+      config.constants.maxInlineContentChars = originalInlineLimit;
+      config.constants.maxHtmlSize = originalMaxHtmlSize;
+      config.transform.maxWorkerScale = originalMaxWorkerScale;
+    }
+  });
+
   it('returns truncated markdown even when cache + http mode are enabled', async (t) => {
     const originalHttpMode = config.runtime.httpMode;
     const originalCacheEnabled = config.cache.enabled;

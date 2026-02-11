@@ -85,6 +85,21 @@ describe('transformHtmlToMarkdown raw content detection', () => {
     });
   });
 
+  it('resolves relative links in raw markdown content', async () => {
+    const input = '# Title\n\n[Doc](./doc.md)';
+    const result = await transformHtmlToMarkdown(
+      input,
+      'https://example.com/base/page',
+      {
+        includeMetadata: false,
+      }
+    );
+
+    assert.ok(
+      result.markdown.includes('[Doc](https://example.com/base/doc.md)')
+    );
+  });
+
   it('treats >5 common HTML tags as HTML even if markdown patterns exist', () => {
     return runRawContentCase({
       input:

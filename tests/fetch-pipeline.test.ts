@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 
 import * as cache from '../dist/cache.js';
 import { createCacheKey } from '../dist/cache.js';
+import { config } from '../dist/config.js';
 import { normalizeUrl } from '../dist/fetch.js';
 import { executeFetchPipeline } from '../dist/tools.js';
 
@@ -160,5 +161,52 @@ describe('executeFetchPipeline', () => {
 
     assert.equal(result.fromCache, false);
     assert.equal(result.url, expectedRaw);
+  });
+
+  it('caches final redirect URL under an alias key', async (t) => {
+    const originalCacheEnabled = config.cache.enabled;
+    config.cache.enabled = true;
+
+    const url = 'https://example.com/redirect-start';
+    const finalUrl = 'https://example.com/redirect-final';
+    const cacheNamespace = 'pipeline-test-redirect-alias';
+
+    let callCount = 0;
+    t.mock.method(globalThis, 'fetch', async () => {
+      callCount += 1;
+      if (callCount === 1) {
+        return new Response(null, {
+          status: 302,
+          headers: { location: finalUrl },
+        });
+      }
+      return new Response('<p>ok</p>', {
+        status: 200,
+        headers: { 'content-type': 'text/html' },
+      });
+    });
+
+    try {
+      const result = await executeFetchPipeline<string>({
+        url,
+        cacheNamespace,
+        transform: async (input) => {
+          const text = new TextDecoder(input.encoding).decode(input.buffer);
+          return text;
+        },
+      });
+
+      const normalizedUrl = normalizeUrl(url).normalizedUrl;
+      const primaryKey = createCacheKey(cacheNamespace, normalizedUrl);
+      const finalKey = createCacheKey(cacheNamespace, finalUrl);
+
+      assert.ok(primaryKey);
+      assert.ok(finalKey);
+      assert.ok(cache.get(primaryKey));
+      assert.ok(cache.get(finalKey));
+      assert.equal(result.finalUrl, finalUrl);
+    } finally {
+      config.cache.enabled = originalCacheEnabled;
+    }
   });
 });

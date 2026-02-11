@@ -1336,14 +1336,13 @@ function isAbsoluteOrSpecialUrl(href: string): boolean {
   return URL.canParse(trimmedHref);
 }
 
-function resolveRelativeUrls(markdown: string, baseUrl: string): string {
-  let origin: string;
-  try {
-    ({ origin } = new URL(baseUrl));
-  } catch {
-    return markdown;
-  }
+const FENCE_LINE_PATTERN = /^\s*(`{3,}|~{3,})/;
 
+function resolveRelativeUrlsInSegment(
+  markdown: string,
+  baseUrl: string,
+  origin: string
+): string {
   let cursor = 0;
   let output = '';
 
@@ -1364,6 +1363,58 @@ function resolveRelativeUrls(markdown: string, baseUrl: string): string {
     cursor = link.closeParen + 1;
   }
 
+  return output;
+}
+
+function resolveRelativeUrls(markdown: string, baseUrl: string): string {
+  let origin: string;
+  try {
+    ({ origin } = new URL(baseUrl));
+  } catch {
+    return markdown;
+  }
+
+  if (!markdown) return markdown;
+
+  const lines = markdown.split('\n');
+  let output = '';
+  let buffer = '';
+  let fenceMarker: string | null = null;
+
+  const flushBuffer = (): void => {
+    if (!buffer) return;
+    output += resolveRelativeUrlsInSegment(buffer, baseUrl, origin);
+    buffer = '';
+  };
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i] ?? '';
+    const trimmed = line.trimStart();
+    const lineWithNewline = i < lines.length - 1 ? `${line}\n` : line;
+
+    if (fenceMarker) {
+      output += lineWithNewline;
+      if (
+        trimmed.startsWith(fenceMarker) &&
+        trimmed.slice(fenceMarker.length).trim() === ''
+      ) {
+        fenceMarker = null;
+      }
+      continue;
+    }
+
+    const fenceMatch = FENCE_LINE_PATTERN.exec(line);
+    if (fenceMatch?.[1]) {
+      flushBuffer();
+      output += lineWithNewline;
+      fenceMarker = fenceMatch[1];
+      continue;
+    }
+
+    buffer += lineWithNewline;
+  }
+
+  flushBuffer();
   return output;
 }
 
@@ -1465,9 +1516,13 @@ function buildRawMarkdownPayload(params: {
   includeMetadata: boolean;
 }): { content: string; title: string | undefined } {
   const title = extractTitleFromRawMarkdown(params.rawContent);
-  const content = params.includeMetadata
+  let content = params.includeMetadata
     ? addSourceToMarkdown(params.rawContent, params.url)
     : params.rawContent;
+
+  if (params.url) {
+    content = resolveRelativeUrls(content, params.url);
+  }
 
   return { content, title };
 }

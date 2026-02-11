@@ -26,7 +26,7 @@ import {
   runWithRequestContext,
   setMcpServer,
 } from './observability.js';
-import { GET_HELP_PROMPT_NAME, registerPrompts } from './prompts.js';
+import { registerPrompts } from './prompts.js';
 import { type CreateTaskResult, taskManager, type TaskState } from './tasks.js';
 import {
   FETCH_URL_TOOL_NAME,
@@ -122,23 +122,10 @@ function emptyCompletion(): CompletionResult {
   return { completion: { values: [], total: 0, hasMore: false } };
 }
 
-function handlePromptCompletion(name: string): CompletionResult {
-  if (name === GET_HELP_PROMPT_NAME) {
-    return emptyCompletion();
-  }
-  throw new McpError(ErrorCode.InvalidParams, `Prompt '${name}' not found`);
-}
-
 function registerCompletionHandlers(server: McpServer): void {
-  server.server.setRequestHandler(CompleteRequestSchema, async (request) => {
-    const { ref } = request.params;
-
-    if (ref.type === 'ref/prompt') {
-      return Promise.resolve(handlePromptCompletion(ref.name));
-    }
-
-    return Promise.resolve(emptyCompletion());
-  });
+  server.server.setRequestHandler(CompleteRequestSchema, () =>
+    Promise.resolve(emptyCompletion())
+  );
 }
 
 async function createServerInstructions(
