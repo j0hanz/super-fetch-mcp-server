@@ -2066,7 +2066,12 @@ class HttpFetcher {
   async fetchNormalizedUrlBuffer(
     normalizedUrl: string,
     options?: FetchOptions
-  ): Promise<{ buffer: Uint8Array; encoding: string; truncated: boolean }> {
+  ): Promise<{
+    buffer: Uint8Array;
+    encoding: string;
+    truncated: boolean;
+    finalUrl: string;
+  }> {
     return this.fetchNormalized(normalizedUrl, 'buffer', options);
   }
 
@@ -2079,13 +2084,24 @@ class HttpFetcher {
     normalizedUrl: string,
     mode: 'buffer',
     options?: FetchOptions
-  ): Promise<{ buffer: Uint8Array; encoding: string; truncated: boolean }>;
+  ): Promise<{
+    buffer: Uint8Array;
+    encoding: string;
+    truncated: boolean;
+    finalUrl: string;
+  }>;
   private async fetchNormalized(
     normalizedUrl: string,
     mode: 'text' | 'buffer',
     options?: FetchOptions
   ): Promise<
-    string | { buffer: Uint8Array; encoding: string; truncated: boolean }
+    | string
+    | {
+        buffer: Uint8Array;
+        encoding: string;
+        truncated: boolean;
+        finalUrl: string;
+      }
   > {
     const hostname = extractHostname(normalizedUrl);
 
@@ -2125,6 +2141,7 @@ class HttpFetcher {
         buffer: payload.buffer,
         encoding: payload.encoding,
         truncated: payload.truncated,
+        finalUrl,
       };
     } catch (error: unknown) {
       const mapped = mapFetchError(error, normalizedUrl, timeoutMs);
@@ -2255,6 +2272,11 @@ export async function fetchNormalizedUrl(
 export async function fetchNormalizedUrlBuffer(
   normalizedUrl: string,
   options?: FetchOptions
-): Promise<{ buffer: Uint8Array; encoding: string; truncated: boolean }> {
+): Promise<{
+  buffer: Uint8Array;
+  encoding: string;
+  truncated: boolean;
+  finalUrl: string;
+}> {
   return httpFetcher.fetchNormalizedUrlBuffer(normalizedUrl, options);
 }

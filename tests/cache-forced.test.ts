@@ -3,6 +3,7 @@ import { after, describe, it } from 'node:test';
 
 import * as cache from '../dist/cache.js';
 import { config } from '../dist/config.js';
+import { normalizeUrl } from '../dist/fetch.js';
 import { fetchUrlToolHandler } from '../dist/tools.js';
 import { shutdownTransformWorkerPool } from '../dist/transform.js';
 
@@ -11,13 +12,17 @@ after(async () => {
 });
 
 describe('Forced Cache on Truncation', () => {
-  it('generates a resource URI when content is truncated even if cache is disabled', async (t) => {
+  it('does not emit resource links or force cache when disabled', async (t) => {
     const originalCacheEnabled = config.cache.enabled;
     const originalInlineLimit = config.constants.maxInlineContentChars;
     config.cache.enabled = false;
     config.constants.maxInlineContentChars = 20000;
 
-    // Create content larger than maxInlineContentChars (20000)
+    const url = `https://example.com/forced-cache-${Date.now()}`;
+    const normalizedUrl = normalizeUrl(url).normalizedUrl;
+    const cacheKey = cache.createCacheKey('markdown', normalizedUrl);
+    assert.ok(cacheKey);
+
     const largeContent = 'a'.repeat(25000);
     const html = `<html><body><p>${largeContent}</p></body></html>`;
 
@@ -29,40 +34,18 @@ describe('Forced Cache on Truncation', () => {
         });
       });
 
-      const response = await fetchUrlToolHandler({
-        url: 'https://example.com/forced-cache',
-      });
+      const response = await fetchUrlToolHandler({ url });
 
-      // Check if we got a resource link block
       const resourceBlock = response.content.find(
-        (b) => b.type === 'resource_link'
+        (b) => b.type === 'resource' || b.type === 'resource_link'
       );
-
-      assert.ok(resourceBlock, 'Should include a resource_link block');
-      assert.ok(
-        resourceBlock.uri.startsWith('superfetch://cache/markdown/'),
-        'URI should be a cache URI'
-      );
-
-      const uri = resourceBlock.uri;
-      const urlHash = uri.split('/').pop();
-      const cacheKey = `markdown:${urlHash}`;
+      assert.equal(resourceBlock, undefined);
 
       const cachedEntry = cache.get(cacheKey, { force: true });
-      assert.ok(
-        cachedEntry,
-        'Content should be present in cache store when forced'
-      );
-
-      const hiddenEntry = cache.get(cacheKey);
       assert.equal(
-        hiddenEntry,
+        cachedEntry,
         undefined,
-        'Content should be hidden from normal access when cache disabled'
-      );
-      assert.ok(
-        cachedEntry.content.includes(largeContent),
-        'Cached content should be the full content'
+        'Content should not be forced into cache when disabled'
       );
     } finally {
       config.cache.enabled = originalCacheEnabled;

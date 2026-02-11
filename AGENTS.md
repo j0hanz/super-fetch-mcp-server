@@ -25,7 +25,7 @@
   - `config.ts` — Centralized env-based configuration (all settings)
   - `fetch.ts` — URL normalization, HTTP fetching
   - `transform.ts` / `workers/` — HTML→Markdown transform with worker pool
-  - `cache.ts` — In-memory content cache with resource serving
+  - `cache.ts` — In-memory content cache
   - `errors.ts` — `FetchError`, `getErrorMessage`, error helpers
   - `session.ts` — HTTP session store and lifecycle
   - `ip-blocklist.ts` — Private/metadata IP blocking

@@ -43,34 +43,6 @@ export interface ToolContentBlock {
   text: string;
 }
 
-export interface ToolContentResourceLinkBlock {
-  type: 'resource_link';
-  uri: string;
-  name: string;
-  title?: string;
-  description?: string;
-  mimeType?: string;
-  annotations?: {
-    audience?: ('user' | 'assistant')[];
-    priority?: number;
-    lastModified?: string;
-  };
-}
-
-export interface ToolContentResourceBlock {
-  type: 'resource';
-  resource: {
-    uri: string;
-    mimeType?: string;
-    text: string;
-    annotations?: {
-      audience?: ('user' | 'assistant')[];
-      priority?: number;
-      lastModified?: string;
-    };
-  };
-}
-
 export type ToolContentBlockUnion = ContentBlock;
 
 export type ToolErrorResponse = CallToolResult & {
@@ -106,6 +78,7 @@ export interface PipelineResult<T> {
   fromCache: boolean;
   url: string;
   originalUrl?: string;
+  finalUrl?: string;
   fetchedAt: string;
   cacheKey?: string | null;
 }
@@ -188,6 +161,11 @@ const fetchUrlOutputSchema = z.strictObject({
     .max(config.constants.maxUrlLength)
     .optional()
     .describe('The normalized or transformed URL that was fetched'),
+  finalUrl: z
+    .string()
+    .max(config.constants.maxUrlLength)
+    .optional()
+    .describe('The final response URL after redirects'),
   title: z.string().max(512).optional().describe('Page title'),
   metadata: z
     .strictObject({
@@ -243,11 +221,6 @@ const fetchUrlOutputSchema = z.strictObject({
     .max(config.constants.maxHtmlSize * 4)
     .optional()
     .describe('Full markdown size in characters before inline truncation'),
-  cacheKey: z
-    .string()
-    .max(256)
-    .optional()
-    .describe('Internal cache key for this response when available'),
   truncated: z
     .boolean()
     .optional()
@@ -439,9 +412,6 @@ export function createProgressReporter(
 interface InlineContentResult {
   content?: string;
   contentSize: number;
-  inlineLimit: number;
-  resourceUri?: string;
-  resourceMimeType?: string;
   error?: string;
   truncated?: boolean;
 }
@@ -522,27 +492,17 @@ function truncateWithMarker(
 }
 
 class InlineContentLimiter {
-  apply(
-    content: string,
-    cacheKey: string | null,
-    inlineLimitOverride?: number
-  ): InlineContentResult {
+  apply(content: string, inlineLimitOverride?: number): InlineContentResult {
     const contentSize = content.length;
     const inlineLimit = this.resolveInlineLimit(inlineLimitOverride);
 
     if (inlineLimit <= 0) {
-      return { content, contentSize, inlineLimit };
+      return { content, contentSize };
     }
 
     if (contentSize <= inlineLimit) {
-      return { content, contentSize, inlineLimit };
+      return { content, contentSize };
     }
-
-    const isTruncated = contentSize > inlineLimit;
-    const resourceUri =
-      cacheKey && (cache.isEnabled() || isTruncated)
-        ? cache.toResourceUri(cacheKey)
-        : null;
 
     const truncatedContent = truncateWithMarker(
       content,
@@ -550,21 +510,9 @@ class InlineContentLimiter {
       TRUNCATION_MARKER
     );
 
-    if (resourceUri) {
-      return {
-        content: truncatedContent,
-        contentSize,
-        inlineLimit,
-        resourceUri,
-        resourceMimeType: 'text/markdown',
-        truncated: true,
-      };
-    }
-
     return {
       content: truncatedContent,
       contentSize,
-      inlineLimit,
       truncated: true,
     };
   }
@@ -586,14 +534,13 @@ const inlineLimiter = new InlineContentLimiter();
 
 function applyInlineContentLimit(
   content: string,
-  cacheKey: string | null,
   inlineLimitOverride?: number
 ): InlineContentResult {
-  return inlineLimiter.apply(content, cacheKey, inlineLimitOverride);
+  return inlineLimiter.apply(content, inlineLimitOverride);
 }
 
 /* -------------------------------------------------------------------------------------------------
- * Tool response blocks (text + optional resource + optional link)
+ * Tool response blocks (text only)
  * ------------------------------------------------------------------------------------------------- */
 
 function buildTextBlock(
@@ -605,106 +552,10 @@ function buildTextBlock(
   };
 }
 
-function buildResourceLink(
-  inlineResult: InlineResult,
-  name: string
-): ToolContentResourceLinkBlock | null {
-  if (!inlineResult.resourceUri) return null;
-  const limitDescription =
-    inlineResult.inlineLimit > 0
-      ? `Content exceeds inline limit (${inlineResult.inlineLimit} chars)`
-      : 'Content exceeds inline output limit';
-
-  const block: ToolContentResourceLinkBlock = {
-    type: 'resource_link',
-    uri: inlineResult.resourceUri,
-    name,
-    description: limitDescription,
-    annotations: {
-      audience: ['user', 'assistant'],
-      priority: 0.8,
-    },
-  };
-
-  if (inlineResult.resourceMimeType !== undefined) {
-    block.mimeType = inlineResult.resourceMimeType;
-  }
-
-  return block;
-}
-
-function buildEmbeddedResource(
-  content: string,
-  url: string,
-  title?: string
-): ToolContentResourceBlock | null {
-  if (!content) return null;
-
-  const filename = cache.generateSafeFilename(url, title, undefined, '.md');
-  const uri = new URL(filename, 'file:///').href;
-
-  return {
-    type: 'resource',
-    resource: {
-      uri,
-      mimeType: 'text/markdown',
-      text: content,
-      annotations: {
-        audience: ['user', 'assistant'],
-        priority: 0.7,
-      },
-    },
-  };
-}
-
-function appendResourceBlocks(params: {
-  blocks: ToolContentBlockUnion[];
-  inlineResult: InlineResult;
-  resourceName: string;
-  url: string | undefined;
-  title: string | undefined;
-  fullContent: string | undefined;
-}): void {
-  const { blocks, inlineResult, resourceName, url, title, fullContent } =
-    params;
-
-  const contentToEmbed = config.runtime.httpMode
-    ? inlineResult.content
-    : (fullContent ?? inlineResult.content);
-
-  if (contentToEmbed && url) {
-    const embedded = buildEmbeddedResource(contentToEmbed, url, title);
-    if (embedded) blocks.push(embedded);
-  }
-
-  const link = buildResourceLink(inlineResult, resourceName);
-  if (link) blocks.push(link);
-}
-
-type ToolContentBlocks = ReturnType<typeof buildToolContentBlocks>;
-
-function buildToolContentBlocks(params: {
-  structuredContent: Record<string, unknown>;
-  inlineResult: InlineResult;
-  resourceName: string;
-  url?: string;
-  title?: string;
-  fullContent?: string;
-}): ToolContentBlockUnion[] {
-  const blocks: ToolContentBlockUnion[] = [
-    buildTextBlock(params.structuredContent),
-  ];
-
-  appendResourceBlocks({
-    blocks,
-    inlineResult: params.inlineResult,
-    resourceName: params.resourceName,
-    url: params.url,
-    title: params.title,
-    fullContent: params.fullContent,
-  });
-
-  return blocks;
+function buildToolContentBlocks(
+  structuredContent: Record<string, unknown>
+): ToolContentBlockUnion[] {
+  return [buildTextBlock(structuredContent)];
 }
 
 /* -------------------------------------------------------------------------------------------------
@@ -853,13 +704,15 @@ export async function executeFetchPipeline<T>(
 
   logDebug('Fetching URL', { url: resolvedUrl.normalizedUrl });
 
-  const { buffer, encoding, truncated } = await fetchNormalizedUrlBuffer(
-    resolvedUrl.normalizedUrl,
-    withSignal(options.signal)
-  );
+  const { buffer, encoding, truncated, finalUrl } =
+    await fetchNormalizedUrlBuffer(
+      resolvedUrl.normalizedUrl,
+      withSignal(options.signal)
+    );
+  const transformUrl = finalUrl || resolvedUrl.normalizedUrl;
   const data = await options.transform(
     { buffer, encoding, ...(truncated ? { truncated: true } : {}) },
-    resolvedUrl.normalizedUrl
+    transformUrl
   );
 
   if (cache.isEnabled()) {
@@ -867,7 +720,7 @@ export async function executeFetchPipeline<T>(
       cacheKey,
       data,
       serialize: options.serialize,
-      normalizedUrl: resolvedUrl.normalizedUrl,
+      normalizedUrl: finalUrl || resolvedUrl.normalizedUrl,
       cacheNamespace: options.cacheNamespace,
     });
   }
@@ -877,6 +730,7 @@ export async function executeFetchPipeline<T>(
     fromCache: false,
     url: resolvedUrl.normalizedUrl,
     originalUrl: resolvedUrl.originalUrl,
+    finalUrl,
     fetchedAt: new Date().toISOString(),
     cacheKey,
   };
@@ -927,20 +781,8 @@ export async function performSharedFetch<T extends { content: string }>(
   const pipeline = await executePipeline<T>(pipelineOptions);
   const inlineResult = applyInlineContentLimit(
     pipeline.data.content,
-    pipeline.cacheKey ?? null,
     options.maxInlineChars
   );
-
-  if (inlineResult.truncated && !pipeline.fromCache && !cache.isEnabled()) {
-    persistCache({
-      cacheKey: pipeline.cacheKey ?? null,
-      data: pipeline.data,
-      serialize: options.serialize,
-      normalizedUrl: pipeline.url,
-      cacheNamespace: 'markdown',
-      force: true,
-    });
-  }
 
   return { pipeline, inlineResult };
 }
@@ -1130,6 +972,7 @@ function buildStructuredContent(
   return {
     url: pipeline.originalUrl ?? pipeline.url,
     resolvedUrl: pipeline.url,
+    ...(pipeline.finalUrl ? { finalUrl: pipeline.finalUrl } : {}),
     inputUrl,
     title: pipeline.data.title,
     ...(metadata ? { metadata } : {}),
@@ -1137,24 +980,14 @@ function buildStructuredContent(
     fromCache: pipeline.fromCache,
     fetchedAt: pipeline.fetchedAt,
     contentSize: inlineResult.contentSize,
-    ...(pipeline.cacheKey ? { cacheKey: pipeline.cacheKey } : {}),
     ...(truncated ? { truncated: true } : {}),
   };
 }
 
 function buildFetchUrlContentBlocks(
-  structuredContent: Record<string, unknown>,
-  pipeline: PipelineResult<MarkdownPipelineResult>,
-  inlineResult: InlineResult
-): ToolContentBlocks {
-  return buildToolContentBlocks({
-    structuredContent,
-    inlineResult,
-    resourceName: 'Fetched markdown',
-    url: pipeline.url,
-    ...(pipeline.data.title !== undefined && { title: pipeline.data.title }),
-    fullContent: pipeline.data.content,
-  });
+  structuredContent: Record<string, unknown>
+): ToolContentBlockUnion[] {
+  return buildToolContentBlocks(structuredContent);
 }
 
 function buildResponse(
@@ -1167,11 +1000,7 @@ function buildResponse(
     inlineResult,
     inputUrl
   );
-  const content = buildFetchUrlContentBlocks(
-    structuredContent,
-    pipeline,
-    inlineResult
-  );
+  const content = buildFetchUrlContentBlocks(structuredContent);
 
   // Runtime validation guard: verify output matches schema
   const validation = fetchUrlOutputSchema.safeParse(structuredContent);

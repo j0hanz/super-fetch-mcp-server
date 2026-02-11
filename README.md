@@ -18,7 +18,7 @@ superFetch is a [Model Context Protocol](https://modelcontextprotocol.io) (MCP) 
 
 - HTML to Markdown using Mozilla Readability + node-html-markdown.
 - Raw content URL rewriting for GitHub, GitLab, Bitbucket, and Gist.
-- In-memory LRU cache exposed as MCP resources and HTTP download endpoints.
+- In-memory LRU cache for faster repeat fetches.
 - Stdio or Streamable HTTP transport with session management.
 - SSRF protections: blocked private IP ranges and internal hostnames.
 
@@ -53,7 +53,7 @@ URL → Validate → DNS Preflight → HTTP Fetch → Decompress
 2. **Fetch** — HTTP request via `undici` with redirect following, DNS preflight SSRF checks, and size limits
 3. **Transform** — Offloaded to worker threads: parse HTML with `linkedom`, extract with Readability, remove DOM noise, convert to Markdown
 4. **Cleanup** — Multi-pass Markdown normalization (heading promotion, spacing, skip-link removal, TypeDoc comment stripping)
-5. **Cache + Respond** — Store result, apply inline content limits, return structured content with optional resource links
+5. **Cache + Respond** — Store result, apply inline content limits, return structured content
 
 ## Repository Structure
 
@@ -85,7 +85,6 @@ superFetch/
 │   ├── mcp-validator.ts
 │   ├── mcp.ts
 │   ├── observability.ts
-│   ├── resources.ts
 │   ├── server-tuning.ts
 │   ├── session.ts
 │   ├── tasks.ts
@@ -297,6 +296,7 @@ Fetches a webpage and converts it to clean Markdown format optimized for LLM con
 {
   "url": "https://example.com",
   "resolvedUrl": "https://example.com",
+  "finalUrl": "https://example.com",
   "inputUrl": "https://example.com",
   "title": "Example Domain",
   "markdown": "# Example Domain\n\nThis domain is for use in illustrative examples...",
@@ -304,17 +304,22 @@ Fetches a webpage and converts it to clean Markdown format optimized for LLM con
 }
 ```
 
-| Field         | Type       | Description                                     |
-| ------------- | ---------- | ----------------------------------------------- |
-| `url`         | `string`   | The canonical URL (pre-raw-transform)           |
-| `inputUrl`    | `string`   | The original URL provided by the caller         |
-| `resolvedUrl` | `string`   | The normalized/transformed URL that was fetched |
-| `title`       | `string?`  | Extracted page title                            |
-| `markdown`    | `string?`  | Extracted content in Markdown format            |
-| `truncated`   | `boolean?` | Whether inline markdown was truncated           |
-| `error`       | `string?`  | Error message if the request failed             |
-| `statusCode`  | `number?`  | HTTP status code for failed requests            |
-| `details`     | `object?`  | Additional error details                        |
+| Field         | Type       | Description                                        |
+| ------------- | ---------- | -------------------------------------------------- |
+| `url`         | `string`   | The canonical URL (pre-raw-transform)              |
+| `inputUrl`    | `string`   | The original URL provided by the caller            |
+| `resolvedUrl` | `string`   | The normalized/transformed URL that was fetched    |
+| `finalUrl`    | `string?`  | Final response URL after redirects                 |
+| `title`       | `string?`  | Extracted page title                               |
+| `metadata`    | `object?`  | Extracted metadata (title, description, author...) |
+| `markdown`    | `string?`  | Extracted content in Markdown format               |
+| `fromCache`   | `boolean?` | Whether the response was served from cache         |
+| `fetchedAt`   | `string?`  | ISO timestamp for fetch/cache retrieval            |
+| `contentSize` | `number?`  | Full markdown size before inline truncation        |
+| `truncated`   | `boolean?` | Whether inline markdown was truncated              |
+| `error`       | `string?`  | Error message if the request failed                |
+| `statusCode`  | `number?`  | HTTP status code for failed requests               |
+| `details`     | `object?`  | Additional error details                           |
 
 ##### Annotations
 
@@ -344,28 +349,15 @@ Then poll `tasks/get` until the task status is `completed` or `failed`, and retr
 
 ### Prompts
 
-| Name             | Description                                                      |
-| ---------------- | ---------------------------------------------------------------- |
-| `get-help`       | Returns server usage guidance and workflow hints                 |
-| `summarize-page` | Generates a user prompt to fetch and summarize a URL             |
-| `extract-data`   | Generates a user prompt to fetch a URL and extract targeted data |
-
-### Completions
-
-The server supports `completion/complete` for:
-
-- Prompt arguments (`summarize-page.url`, `extract-data.url`, `extract-data.instruction`)
-- Cache resource template arguments (`superfetch://cache/{namespace}/{urlHash}`)
+| Name       | Description                                      |
+| ---------- | ------------------------------------------------ |
+| `get-help` | Returns server usage guidance and workflow hints |
 
 ### Resources
 
-| URI Pattern                                | MIME Type          | Description                                      |
-| ------------------------------------------ | ------------------ | ------------------------------------------------ |
-| `internal://instructions`                  | `text/markdown`    | Server instructions and usage guidance           |
-| `internal://config`                        | `application/json` | Current runtime configuration (secrets redacted) |
-| `superfetch://cache/{namespace}/{urlHash}` | `text/markdown`    | Cached web content snapshots (subscribable)      |
-
-The `superfetch://cache/...` resource supports subscriptions — clients receive notifications when cached content is updated.
+| URI Pattern               | MIME Type       | Description                            |
+| ------------------------- | --------------- | -------------------------------------- |
+| `internal://instructions` | `text/markdown` | Server instructions and usage guidance |
 
 ### Tasks
 

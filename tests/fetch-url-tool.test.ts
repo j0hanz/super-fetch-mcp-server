@@ -256,21 +256,10 @@ describe('fetchUrlToolHandler', () => {
       assert.equal(typeof structured.markdown, 'string');
       assert.ok(String(structured.markdown).includes('[truncated]'));
       assertTextBlockMatchesStructured(response);
-
-      const resourceBlock = response.content.find(
-        (block) => block.type === 'resource'
+      const nonTextBlock = response.content.find(
+        (block) => block.type !== 'text'
       );
-      assert.ok(resourceBlock && resourceBlock.type === 'resource');
-      assert.equal(resourceBlock.resource.mimeType, 'text/markdown');
-      assert.equal(resourceBlock.resource.text, structured.markdown);
-
-      const resourceLinkBlock = response.content.find(
-        (block) => block.type === 'resource_link'
-      );
-      assert.ok(
-        resourceLinkBlock && resourceLinkBlock.type === 'resource_link'
-      );
-      assert.match(resourceLinkBlock.uri, /^superfetch:\/\/cache\/markdown\//);
+      assert.equal(nonTextBlock, undefined);
     } finally {
       config.runtime.httpMode = originalHttpMode;
       config.cache.enabled = originalCacheEnabled;

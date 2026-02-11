@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { createCacheKey, parseCacheKey, set } from '../dist/cache.js';
 import { createMcpServer } from '../dist/mcp.js';
 
 describe('MCP Server', () => {
@@ -126,106 +125,6 @@ describe('MCP Server', () => {
     });
   });
 
-  describe('Resources', () => {
-    it('registers and handles internal://config resource', async () => {
-      const server = await createMcpServer();
-      const resourceName = 'config';
-      // Access private property for testing
-      // @ts-ignore
-      const templates = server._registeredResourceTemplates;
-      // @ts-ignore
-      const resource = templates[resourceName];
-
-      assert.ok(resource, 'Config resource should be registered');
-
-      const uri = new URL('internal://config');
-      // Use the actual internal handler name: readCallback
-      const result = await resource.readCallback(uri);
-
-      assert.ok(result.contents, 'Result should have contents');
-      assert.strictEqual(result.contents.length, 1);
-      assert.strictEqual(result.contents[0].mimeType, 'application/json');
-
-      const configData = JSON.parse(result.contents[0].text);
-      assert.ok(configData.server, 'Config should contain server info');
-      assert.ok(configData.fetcher, 'Config should contain fetcher info');
-
-      // Verify security measures
-      if (configData.auth?.clientSecret) {
-        assert.equal(
-          configData.auth.clientSecret,
-          '<REDACTED>',
-          'Client secret should be redacted'
-        );
-      }
-      if (configData.security?.apiKey) {
-        assert.equal(
-          configData.security.apiKey,
-          '<REDACTED>',
-          'API key should be redacted'
-        );
-      }
-    });
-
-    it('lists cached resources with title, URL-aware description, and size', async () => {
-      const url = `https://example.com/listed-${Date.now()}`;
-      const cacheKey = createCacheKey('markdown', url);
-      assert.ok(cacheKey);
-      set(
-        cacheKey,
-        JSON.stringify({
-          markdown: '# Cached resource content',
-          title: 'Listed',
-        }),
-        { title: 'Listed', url }
-      );
-
-      const urlHash = parseCacheKey(cacheKey)?.urlHash;
-      assert.ok(urlHash, 'url hash should be generated');
-
-      const server = await createMcpServer();
-      const templates = (
-        server as unknown as {
-          _registeredResourceTemplates: Record<
-            string,
-            {
-              resourceTemplate: {
-                listCallback?: () => Promise<{
-                  resources: Array<{
-                    uri: string;
-                    title?: string;
-                    description: string;
-                    size?: number;
-                  }>;
-                }>;
-              };
-            }
-          >;
-        }
-      )._registeredResourceTemplates;
-
-      const cachedContentTemplate = templates['cached-content'];
-      assert.ok(cachedContentTemplate, 'cached-content template should exist');
-
-      const listed =
-        await cachedContentTemplate.resourceTemplate.listCallback?.();
-      assert.ok(listed, 'list callback should return resources');
-
-      const match = listed?.resources.find((resource) =>
-        resource.uri.endsWith(`/markdown/${urlHash}`)
-      );
-
-      assert.ok(match, 'cached entry should be discoverable');
-      assert.equal(match?.title, 'Listed');
-      assert.match(
-        String(match?.description),
-        /https:\/\/example\.com\/listed-/
-      );
-      assert.equal(typeof match?.size, 'number');
-      assert.ok((match?.size ?? 0) > 0);
-    });
-  });
-
   describe('Prompts', () => {
     it('registers get-help prompt', async () => {
       const server = await createMcpServer();
@@ -235,37 +134,6 @@ describe('MCP Server', () => {
 
       assert.ok(prompt, 'get-help prompt should be registered');
       assert.equal(typeof prompt.callback, 'function');
-    });
-
-    it('registers bounded URL/instruction prompt schemas', async () => {
-      const server = await createMcpServer();
-      const prompts = (
-        server as unknown as {
-          _registeredPrompts?: Record<
-            string,
-            {
-              argsSchema?: {
-                def?: {
-                  shape?: Record<
-                    string,
-                    { maxLength?: number; minLength?: number }
-                  >;
-                };
-              };
-            }
-          >;
-        }
-      )._registeredPrompts;
-
-      const summarizeArgs = prompts?.['summarize-page']?.argsSchema;
-      const extractArgs = prompts?.['extract-data']?.argsSchema;
-
-      assert.ok(summarizeArgs, 'summarize-page args schema should exist');
-      assert.ok(extractArgs, 'extract-data args schema should exist');
-      assert.equal(summarizeArgs?.def?.shape?.url?.maxLength, 2048);
-      assert.equal(extractArgs?.def?.shape?.url?.maxLength, 2048);
-      assert.equal(extractArgs?.def?.shape?.instruction?.minLength, 3);
-      assert.equal(extractArgs?.def?.shape?.instruction?.maxLength, 1000);
     });
   });
 

@@ -7,9 +7,9 @@ Available as resource (internal://instructions) or prompt (get-help). Load when 
 ## CORE CAPABILITY
 
 - Domain: Fetch public web pages and convert HTML to clean, LLM-readable Markdown.
-- Primary Resources: Markdown content, cached snapshots (superfetch://cache/...).
+- Primary Output: Markdown content (inline; may be truncated).
 - Tools: fetch-url (READ-ONLY; no write tools exist).
-- Prompts: get-help, summarize-page, extract-data.
+- Prompts: get-help.
 
 ---
 
@@ -19,8 +19,7 @@ Available as resource (internal://instructions) or prompt (get-help). Load when 
 
 - Call fetch-url with: { "url": "https://..." }
 - Read the “markdown” field from “structuredContent”.
-- If truncated (ends with "...[truncated]"): read the "resource_link" URI to get full content.
-  NOTE: Never guess URIs; always use the one returned.
+- If truncated (ends with "...[truncated]"): re-run with a higher maxInlineChars or configure MAX_INLINE_CONTENT_CHARS.
 
 ### WORKFLOW B: ASYNC EXECUTION (LARGE SITES / TIMEOUTS)
 
@@ -55,5 +54,3 @@ fetch-url
 ## RESOURCES
 
 - internal://instructions — This document.
-- internal://config — Current server limits (secrets redacted).
-- superfetch://cache/{key} — Immutable cached snapshots. Re-fetch for fresh content.

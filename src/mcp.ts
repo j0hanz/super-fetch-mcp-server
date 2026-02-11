@@ -17,13 +17,7 @@ import {
   type ServerResult,
 } from '@modelcontextprotocol/sdk/types.js';
 
-import {
-  get as getCachedEntry,
-  keys as getCacheKeys,
-  type McpIcon,
-  parseCacheKey,
-  registerCachedContentResource,
-} from './cache.js';
+import { type McpIcon } from './cache.js';
 import { config } from './config.js';
 import {
   logError,
@@ -32,13 +26,7 @@ import {
   runWithRequestContext,
   setMcpServer,
 } from './observability.js';
-import {
-  EXTRACT_DATA_PROMPT_NAME,
-  GET_HELP_PROMPT_NAME,
-  registerPrompts,
-  SUMMARIZE_PAGE_PROMPT_NAME,
-} from './prompts.js';
-import { registerAgentsResource, registerConfigResource } from './resources.js';
+import { GET_HELP_PROMPT_NAME, registerPrompts } from './prompts.js';
 import { type CreateTaskResult, taskManager, type TaskState } from './tasks.js';
 import {
   FETCH_URL_TOOL_NAME,
@@ -100,9 +88,9 @@ function createServerCapabilities(): {
   };
 } {
   return {
-    prompts: { listChanged: true },
-    tools: { listChanged: true },
-    resources: { listChanged: true, subscribe: true },
+    prompts: { listChanged: false },
+    tools: { listChanged: false },
+    resources: { listChanged: false, subscribe: false },
     completions: {},
     logging: {},
     tasks: {
@@ -121,227 +109,34 @@ function createServerCapabilities(): {
  * Completion support (completion/complete)
  * ------------------------------------------------------------------------------------------------- */
 
-const MAX_COMPLETION_VALUES = 100;
-const CACHE_RESOURCE_TEMPLATE_URI = 'superfetch://cache/{namespace}/{urlHash}';
-const CACHE_NAMESPACE = 'markdown';
-
-const URL_PREFIX_COMPLETIONS = ['https://', 'http://'] as const;
-
-const EXTRACT_DATA_INSTRUCTION_COMPLETIONS = [
-  'Extract all pricing tiers and limits',
-  'Extract installation prerequisites and setup steps',
-  'Extract API authentication requirements',
-  'Extract all links and referenced resources',
-  'Extract release/version information',
-] as const;
-
-function normalizeCompletionValue(value: string): string {
-  return value.trim().toLowerCase();
-}
-
-function dedupeCompletions(values: readonly string[]): string[] {
-  const seen = new Set<string>();
-  const deduped: string[] = [];
-
-  for (const value of values) {
-    if (!value) continue;
-    if (seen.has(value)) continue;
-    seen.add(value);
-    deduped.push(value);
-  }
-
-  return deduped;
-}
-
-function filterCompletionCandidates(
-  values: readonly string[],
-  input: string
-): string[] {
-  const normalizedInput = normalizeCompletionValue(input);
-  const candidates = dedupeCompletions(values);
-
-  if (!normalizedInput) return candidates;
-
-  const startsWith: string[] = [];
-  const includes: string[] = [];
-
-  for (const value of candidates) {
-    const normalized = normalizeCompletionValue(value);
-    if (normalized.startsWith(normalizedInput)) {
-      startsWith.push(value);
-      continue;
-    }
-    if (normalized.includes(normalizedInput)) {
-      includes.push(value);
-    }
-  }
-
-  return [...startsWith, ...includes];
-}
-
-function buildCompletionResult(
-  values: readonly string[],
-  input: string
-): {
+type CompletionResult = {
   completion: {
     values: string[];
     total: number;
     hasMore: boolean;
   };
-} {
-  const filtered = filterCompletionCandidates(values, input);
-  const limited = filtered.slice(0, MAX_COMPLETION_VALUES);
+};
 
-  return {
-    completion: {
-      values: limited,
-      total: filtered.length,
-      hasMore: filtered.length > limited.length,
-    },
-  };
+function emptyCompletion(): CompletionResult {
+  return { completion: { values: [], total: 0, hasMore: false } };
 }
 
-function listCachedUrls(): string[] {
-  const urls: string[] = [];
-
-  for (const key of getCacheKeys()) {
-    const entry = getCachedEntry(key, { force: true });
-    if (!entry?.url) continue;
-    urls.push(entry.url);
+function handlePromptCompletion(name: string): CompletionResult {
+  if (name === GET_HELP_PROMPT_NAME) {
+    return emptyCompletion();
   }
-
-  return dedupeCompletions(urls);
-}
-
-function listCacheNamespaces(): string[] {
-  const namespaces = new Set<string>([CACHE_NAMESPACE]);
-
-  for (const key of getCacheKeys()) {
-    const parsed = parseCacheKey(key);
-    if (!parsed?.namespace) continue;
-    namespaces.add(parsed.namespace);
-  }
-
-  return [...namespaces].sort((left, right) => left.localeCompare(right));
-}
-
-function listCacheUrlHashes(namespace?: string): string[] {
-  const hashes: string[] = [];
-
-  for (const key of getCacheKeys()) {
-    const parsed = parseCacheKey(key);
-    if (!parsed) continue;
-    if (namespace && parsed.namespace !== namespace) continue;
-    hashes.push(parsed.urlHash);
-  }
-
-  return dedupeCompletions(hashes);
-}
-
-function handlePromptCompletion(request: {
-  name: string;
-  argumentName: string;
-  argumentValue: string;
-}): {
-  completion: {
-    values: string[];
-    total: number;
-    hasMore: boolean;
-  };
-} {
-  const { name, argumentName, argumentValue } = request;
-
-  switch (name) {
-    case GET_HELP_PROMPT_NAME:
-      return buildCompletionResult([], argumentValue);
-    case SUMMARIZE_PAGE_PROMPT_NAME: {
-      if (argumentName !== 'url') {
-        return buildCompletionResult([], argumentValue);
-      }
-      return buildCompletionResult(
-        [...URL_PREFIX_COMPLETIONS, ...listCachedUrls()],
-        argumentValue
-      );
-    }
-    case EXTRACT_DATA_PROMPT_NAME: {
-      if (argumentName === 'url') {
-        return buildCompletionResult(
-          [...URL_PREFIX_COMPLETIONS, ...listCachedUrls()],
-          argumentValue
-        );
-      }
-      if (argumentName === 'instruction') {
-        return buildCompletionResult(
-          EXTRACT_DATA_INSTRUCTION_COMPLETIONS,
-          argumentValue
-        );
-      }
-      return buildCompletionResult([], argumentValue);
-    }
-    default:
-      throw new McpError(ErrorCode.InvalidParams, `Prompt '${name}' not found`);
-  }
-}
-
-function handleResourceTemplateCompletion(request: {
-  uri: string;
-  argumentName: string;
-  argumentValue: string;
-  contextArguments?: Record<string, string>;
-}): {
-  completion: {
-    values: string[];
-    total: number;
-    hasMore: boolean;
-  };
-} {
-  const { uri, argumentName, argumentValue, contextArguments } = request;
-
-  if (uri !== CACHE_RESOURCE_TEMPLATE_URI) {
-    throw new McpError(
-      ErrorCode.InvalidParams,
-      `Resource template '${uri}' not found`
-    );
-  }
-
-  if (argumentName === 'namespace') {
-    return buildCompletionResult(listCacheNamespaces(), argumentValue);
-  }
-
-  if (argumentName === 'urlHash') {
-    const namespace = contextArguments?.namespace;
-    return buildCompletionResult(listCacheUrlHashes(namespace), argumentValue);
-  }
-
-  return buildCompletionResult([], argumentValue);
+  throw new McpError(ErrorCode.InvalidParams, `Prompt '${name}' not found`);
 }
 
 function registerCompletionHandlers(server: McpServer): void {
   server.server.setRequestHandler(CompleteRequestSchema, async (request) => {
-    const {
-      ref,
-      argument: { name, value },
-      context,
-    } = request.params;
+    const { ref } = request.params;
 
     if (ref.type === 'ref/prompt') {
-      return Promise.resolve(
-        handlePromptCompletion({
-          name: ref.name,
-          argumentName: name,
-          argumentValue: value,
-        })
-      );
+      return Promise.resolve(handlePromptCompletion(ref.name));
     }
 
-    const resourceRequest = {
-      uri: ref.uri,
-      argumentName: name,
-      argumentValue: value,
-      ...(context?.arguments ? { contextArguments: context.arguments } : {}),
-    };
-
-    return Promise.resolve(handleResourceTemplateCompletion(resourceRequest));
+    return Promise.resolve(emptyCompletion());
   });
 }
 
@@ -385,7 +180,11 @@ function registerInstructionsResource(
 ): void {
   server.registerResource(
     'instructions',
-    new ResourceTemplate('internal://instructions', { list: undefined }),
+    new ResourceTemplate('internal://instructions', {
+      list: () => ({
+        resources: [{ uri: 'internal://instructions', name: 'instructions' }],
+      }),
+    }),
     {
       title: `SuperFetch MCP | ${config.server.version}`,
       description: 'Guidance for using the superFetch MCP server.',
@@ -1010,10 +809,11 @@ async function createMcpServerWithOptions(
 
   registerTools(server);
   registerPrompts(server, instructions, localIcons);
-  registerCachedContentResource(server, localIcons);
+  server.server.registerCapabilities({
+    tools: { listChanged: false },
+    prompts: { listChanged: false },
+  });
   registerInstructionsResource(server, instructions);
-  registerAgentsResource(server);
-  registerConfigResource(server);
   registerCompletionHandlers(server);
   registerTaskHandlers(server);
 

@@ -251,31 +251,6 @@ function registerCacheKeyParsingTest(): void {
   });
 }
 
-function registerResourceUriConversionTest(): void {
-  it('converts cache key to resource URI format', () => {
-    const cacheKey = 'markdown:abc123def456';
-
-    const uri = cache.toResourceUri(cacheKey);
-    assert.ok(uri, 'Should generate URI');
-    assert.ok(
-      uri.startsWith('superfetch://cache/'),
-      'Should have correct scheme and base'
-    );
-    assert.ok(uri.includes('markdown'), 'Should include namespace');
-    assert.ok(uri.includes('abc123def456'), 'Should include hash');
-  });
-
-  it('returns null for invalid cache key format', () => {
-    const uri = cache.toResourceUri('invalid-key-format');
-    assert.strictEqual(uri, null, 'Should return null for invalid key');
-  });
-
-  it('returns null for empty cache key', () => {
-    const uri = cache.toResourceUri('');
-    assert.strictEqual(uri, null, 'Should handle empty input');
-  });
-}
-
 function registerFilenameGenerationTest(): void {
   it('generates safe filename from URL path', () => {
     const url = 'https://example.com/docs/guide.html';
@@ -734,7 +709,6 @@ describe('cache', () => {
   registerCachedPayloadParsingTest();
   registerCacheContentResolutionTest();
   registerCacheKeyParsingTest();
-  registerResourceUriConversionTest();
   registerFilenameGenerationTest();
   registerCacheExpirationTest();
   registerCacheEvictionOrderTest();
