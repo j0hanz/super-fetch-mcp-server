@@ -50,6 +50,11 @@ export interface ToolContentResourceLinkBlock {
   title?: string;
   description?: string;
   mimeType?: string;
+  annotations?: {
+    audience?: ('user' | 'assistant')[];
+    priority?: number;
+    lastModified?: string;
+  };
 }
 
 export interface ToolContentResourceBlock {
@@ -58,6 +63,11 @@ export interface ToolContentResourceBlock {
     uri: string;
     mimeType?: string;
     text: string;
+    annotations?: {
+      audience?: ('user' | 'assistant')[];
+      priority?: number;
+      lastModified?: string;
+    };
   };
 }
 
@@ -555,6 +565,10 @@ function buildResourceLink(
     uri: inlineResult.resourceUri,
     name,
     description: limitDescription,
+    annotations: {
+      audience: ['user', 'assistant'],
+      priority: 0.8,
+    },
   };
 
   if (inlineResult.resourceMimeType !== undefined) {
@@ -580,6 +594,10 @@ function buildEmbeddedResource(
       uri,
       mimeType: 'text/markdown',
       text: content,
+      annotations: {
+        audience: ['user', 'assistant'],
+        priority: 0.7,
+      },
     },
   };
 }

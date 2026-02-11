@@ -38,6 +38,10 @@ export function registerConfigResource(server: McpServer): void {
       title: 'Server Configuration',
       description: 'Current runtime configuration (secrets redacted)',
       mimeType: JSON_MIME,
+      annotations: {
+        audience: ['assistant'],
+        priority: 0.3,
+      },
     },
     (uri) => {
       const scrubbed = scrubConfig(config);
@@ -62,6 +66,10 @@ export function registerAgentsResource(server: McpServer): void {
       title: 'Agent Instructions',
       description: 'Project context and guidelines for AI agents.',
       mimeType: 'text/markdown',
+      annotations: {
+        audience: ['assistant'],
+        priority: 0.5,
+      },
     },
     async (uri) => {
       try {

@@ -383,6 +383,10 @@ function registerInstructionsResource(
       title: `SuperFetch MCP | ${config.server.version}`,
       description: 'Guidance for using the superFetch MCP server.',
       mimeType: 'text/markdown',
+      annotations: {
+        audience: ['assistant'],
+        priority: 0.9,
+      },
     },
     (uri) => ({
       contents: [
@@ -992,7 +996,7 @@ async function createMcpServerWithOptions(
   }
 
   registerTools(server);
-  registerPrompts(server, instructions);
+  registerPrompts(server, instructions, localIcons);
   registerCachedContentResource(server, localIcons);
   registerInstructionsResource(server, instructions);
   registerAgentsResource(server);

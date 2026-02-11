@@ -334,6 +334,11 @@ function listCachedResources(): {
     uri: string;
     description: string;
     mimeType: string;
+    annotations: {
+      audience: ('user' | 'assistant')[];
+      priority: number;
+      lastModified?: string;
+    };
   }[];
 } {
   const resources = store
@@ -343,12 +348,21 @@ function listCachedResources(): {
       (parts): parts is CacheKeyParts =>
         parts !== null && parts.namespace === 'markdown'
     )
-    .map(({ namespace, urlHash }) => ({
-      name: `${namespace}:${urlHash}`,
-      uri: `superfetch://cache/${namespace}/${urlHash}`,
-      description: `Cached content entry for ${namespace}`,
-      mimeType: 'text/markdown',
-    }));
+    .map(({ namespace, urlHash }) => {
+      const cacheKey = `${namespace}:${urlHash}`;
+      const entry = store.get(cacheKey, { force: true });
+      return {
+        name: `${namespace}:${urlHash}`,
+        uri: `superfetch://cache/${namespace}/${urlHash}`,
+        description: `Cached content entry for ${namespace}`,
+        mimeType: 'text/markdown',
+        annotations: {
+          audience: ['user', 'assistant'] as ('user' | 'assistant')[],
+          priority: 0.6,
+          ...(entry?.fetchedAt ? { lastModified: entry.fetchedAt } : {}),
+        },
+      };
+    });
 
   return { resources };
 }
@@ -379,6 +393,10 @@ export function registerCachedContentResource(
       description: 'Access previously fetched web content from cache.',
       mimeType: 'text/markdown',
       ...(serverIcons ? { icons: serverIcons } : {}),
+      annotations: {
+        audience: ['user', 'assistant'],
+        priority: 0.6,
+      },
     },
     (uri, params) => {
       const parsed = CacheResourceParamsSchema.safeParse(params);

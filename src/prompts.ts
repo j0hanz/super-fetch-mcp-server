@@ -2,19 +2,25 @@ import { z } from 'zod';
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
+import type { McpIcon } from './cache.js';
 import { FETCH_URL_TOOL_NAME } from './tools.js';
 
 export const GET_HELP_PROMPT_NAME = 'get-help';
 export const SUMMARIZE_PAGE_PROMPT_NAME = 'summarize-page';
 export const EXTRACT_DATA_PROMPT_NAME = 'extract-data';
 
-export function registerPrompts(server: McpServer, instructions: string): void {
+export function registerPrompts(
+  server: McpServer,
+  instructions: string,
+  icons?: McpIcon[]
+): void {
   // Get Help Prompt
   server.registerPrompt(
     GET_HELP_PROMPT_NAME,
     {
       title: 'Get Help',
       description: 'Returns usage guidance for the superFetch MCP server.',
+      ...(icons ? { icons } : {}),
     },
     () => ({
       description: 'superFetch MCP usage guidance',
@@ -36,6 +42,7 @@ export function registerPrompts(server: McpServer, instructions: string): void {
     {
       title: 'Summarize Page',
       description: 'Creates a prompt to fetch and summarize a webpage.',
+      ...(icons ? { icons } : {}),
       argsSchema: {
         url: z.url().describe('The URL of the webpage to summarize'),
       },
@@ -64,6 +71,7 @@ export function registerPrompts(server: McpServer, instructions: string): void {
       title: 'Extract Data',
       description:
         'Creates a prompt to fetch a webpage and extract specific data.',
+      ...(icons ? { icons } : {}),
       argsSchema: {
         url: z.url().describe('The URL of the webpage to extract data from'),
         instruction: z
