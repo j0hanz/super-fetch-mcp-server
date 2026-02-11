@@ -1,0 +1,7 @@
+services:
+  fetch-url-mcp:
+    build: .
+    stdin_open: true
+    volumes:
+      - ./:/projects/workspace:ro
+    command: ['/projects/workspace']
