@@ -1,6 +1,15 @@
 /* eslint-disable */
 import { spawn } from 'node:child_process';
-import { access, chmod, cp, glob, mkdir, rm, stat } from 'node:fs/promises';
+import {
+  access,
+  chmod,
+  cp,
+  glob,
+  mkdir,
+  readdir,
+  rm,
+  stat,
+} from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
@@ -113,7 +122,18 @@ const System = {
           : (options.signal ?? timeoutSignal);
 
       if (combinedSignal?.aborted) {
-        reject(new Error(`${command} aborted before start`));
+        const reason = combinedSignal.reason;
+        const reasonText =
+          reason instanceof Error
+            ? reason.message
+            : reason
+              ? String(reason)
+              : undefined;
+        reject(
+          new Error(
+            `${command} aborted before start${reasonText ? `: ${reasonText}` : ''}`
+          )
+        );
         return;
       }
 
@@ -125,9 +145,11 @@ const System = {
       });
 
       let aborted = false;
+      let abortReason;
       const abortListener = combinedSignal
         ? () => {
             aborted = true;
+            abortReason = combinedSignal.reason;
           }
         : null;
 
@@ -153,8 +175,18 @@ const System = {
       proc.on('close', (code, signal) => {
         cleanup();
         if (aborted) {
+          const reasonText =
+            abortReason instanceof Error
+              ? abortReason.message
+              : abortReason
+                ? String(abortReason)
+                : undefined;
           const suffix = signal ? ` (signal ${signal})` : '';
-          reject(new Error(`${command} aborted${suffix}`));
+          reject(
+            new Error(
+              `${command} aborted${suffix}${reasonText ? `: ${reasonText}` : ''}`
+            )
+          );
           return;
         }
         if (code === 0) return resolve();
@@ -188,20 +220,20 @@ const BuildTasks = {
     await System.copy(CONFIG.paths.instructions, CONFIG.paths.distInstructions);
 
     if (await System.isDirectory(CONFIG.paths.assets)) {
-      // Check logo size
       try {
-        const logoPath = join(CONFIG.paths.assets, 'logo.svg');
-        if (await System.exists(logoPath)) {
-          const stats = await stat(logoPath);
-          const sizeMB = stats.size / (1024 * 1024);
-          if (sizeMB >= 2) {
-            console.warn(
-              `Warning: Logo size (${sizeMB.toFixed(2)}MB) exceeds 2MB limit.`
-            );
+        const files = await readdir(CONFIG.paths.assets);
+        for (const file of files) {
+          if (/^logo\.(svg|png|jpe?g)$/i.test(file)) {
+            const stats = await stat(join(CONFIG.paths.assets, file));
+            if (stats.size >= 2 * 1024 * 1024) {
+              Logger.info(
+                `[WARNING] Icon ${file} is size ${stats.size} bytes (>= 2MB). Large icons may be rejected by clients.`
+              );
+            }
           }
         }
       } catch {
-        /* ignore check errors */
+        // ignore errors during check
       }
 
       await System.copy(CONFIG.paths.assets, CONFIG.paths.distAssets, {
