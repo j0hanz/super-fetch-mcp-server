@@ -129,6 +129,32 @@ describe('htmlToMarkdown noise filtering', () => {
     assert.ok(markdown.includes('Intro'));
     assert.ok(markdown.includes('Content'));
   });
+
+  it('uses four-space indentation for nested list items', () => {
+    const html = `
+      <html>
+        <body>
+          <ul>
+            <li>Parent
+              <ul>
+                <li>Child
+                  <ul>
+                    <li>Grandchild</li>
+                  </ul>
+                </li>
+              </ul>
+            </li>
+          </ul>
+        </body>
+      </html>
+    `;
+
+    const markdown = htmlToMarkdown(html);
+
+    assert.match(markdown, /^- Parent\s*$/m);
+    assert.match(markdown, /^ {4}- Child\s*$/m);
+    assert.match(markdown, /^ {8}- Grandchild\s*$/m);
+  });
 });
 
 describe('htmlToMarkdown metadata footer', () => {

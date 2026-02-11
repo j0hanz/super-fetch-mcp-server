@@ -1513,7 +1513,7 @@ class ResponseTextReader {
     const byteLimit = maxBytes <= 0 ? Number.POSITIVE_INFINITY : maxBytes;
     const captureChunks = byteLimit !== Number.POSITIVE_INFINITY;
     let effectiveEncoding = encoding ?? 'utf-8';
-    let checkedBinary = false;
+    let encodingResolved = false;
     let total = 0;
     const chunks: Buffer[] = [];
 
@@ -1532,21 +1532,22 @@ class ResponseTextReader {
                 (chunk as Uint8Array).byteLength
               );
 
-          if (!checkedBinary) {
-            checkedBinary = true;
+          if (!encodingResolved) {
+            encodingResolved = true;
             effectiveEncoding =
               resolveEncoding(encoding, buf) ?? encoding ?? 'utf-8';
-            if (isBinaryContent(buf, effectiveEncoding)) {
-              callback(
-                new FetchError(
-                  'Detailed content type check failed: binary content detected',
-                  url,
-                  500,
-                  { reason: 'binary_content_detected' }
-                )
-              );
-              return;
-            }
+          }
+
+          if (isBinaryContent(buf, effectiveEncoding)) {
+            callback(
+              new FetchError(
+                'Detailed content type check failed: binary content detected',
+                url,
+                500,
+                { reason: 'binary_content_detected' }
+              )
+            );
+            return;
           }
 
           const newTotal = total + buf.length;
@@ -1739,17 +1740,19 @@ function extractEncodingTokens(value: string): string[] {
   return tokens;
 }
 
-function parseSingleContentEncoding(
-  value: string | null
-): string | null | undefined {
+type ContentEncoding = 'gzip' | 'deflate' | 'br';
+
+function parseContentEncodings(value: string | null): string[] | null {
   if (!value) return null;
-
   const tokens = extractEncodingTokens(value);
-
   if (tokens.length === 0) return null;
-  if (tokens.length > 1) return undefined;
+  return tokens;
+}
 
-  return tokens[0] ?? null;
+function isSupportedContentEncoding(
+  encoding: string
+): encoding is ContentEncoding {
+  return encoding === 'gzip' || encoding === 'deflate' || encoding === 'br';
 }
 
 function createUnsupportedContentEncodingError(
@@ -1765,6 +1768,22 @@ function createUnsupportedContentEncodingError(
       encoding: encodingHeader,
     }
   );
+}
+
+function createDecompressor(
+  encoding: ContentEncoding
+):
+  | ReturnType<typeof createGunzip>
+  | ReturnType<typeof createInflate>
+  | ReturnType<typeof createBrotliDecompress> {
+  switch (encoding) {
+    case 'gzip':
+      return createGunzip();
+    case 'deflate':
+      return createInflate();
+    case 'br':
+      return createBrotliDecompress();
+  }
 }
 
 function createPumpedStream(
@@ -1828,18 +1847,19 @@ async function decodeResponseIfNeeded(
   signal?: AbortSignal
 ): Promise<Response> {
   const encodingHeader = response.headers.get('content-encoding');
-  const encoding = parseSingleContentEncoding(encodingHeader);
+  const parsedEncodings = parseContentEncodings(encodingHeader);
+  if (!parsedEncodings) return response;
 
-  if (encoding === null || encoding === 'identity') return response;
-  if (encoding === undefined) {
-    throw createUnsupportedContentEncodingError(url, encodingHeader ?? '');
-  }
+  const encodings = parsedEncodings.filter((token) => token !== 'identity');
+  if (encodings.length === 0) return response;
 
-  if (encoding !== 'gzip' && encoding !== 'deflate' && encoding !== 'br') {
-    throw createUnsupportedContentEncodingError(
-      url,
-      encodingHeader ?? encoding
-    );
+  for (const encoding of encodings) {
+    if (!isSupportedContentEncoding(encoding)) {
+      throw createUnsupportedContentEncodingError(
+        url,
+        encodingHeader ?? encoding
+      );
+    }
   }
 
   if (!response.body) return response;
@@ -1866,7 +1886,16 @@ async function decodeResponseIfNeeded(
     );
   }
 
-  if (!isLikelyCompressed(initialChunk, encoding)) {
+  const decodeOrder = encodings
+    .slice()
+    .reverse()
+    .filter(isSupportedContentEncoding);
+  const firstDecodeEncoding = decodeOrder[0];
+
+  if (
+    !firstDecodeEncoding ||
+    !isLikelyCompressed(initialChunk, firstDecodeEncoding)
+  ) {
     const body = createPumpedStream(initialChunk, reader);
     const headers = new Headers(response.headers);
     headers.delete('content-encoding');
@@ -1878,30 +1907,9 @@ async function decodeResponseIfNeeded(
     });
   }
 
-  // Set up decompression
-  let decompressor: ReturnType<typeof createGunzip> | null = null;
-  switch (encoding) {
-    case 'gzip':
-      decompressor = createGunzip();
-      break;
-    case 'deflate':
-      decompressor = createInflate();
-      break;
-    case 'br':
-      decompressor = createBrotliDecompress();
-      break;
-    default:
-      // Should have been caught by parseSingleContentEncoding check, but safe fallback
-      decompressor = null;
-  }
-
-  if (!decompressor) {
-    // Should be unreachable if encoding valid
-    throw createUnsupportedContentEncodingError(
-      url,
-      encodingHeader ?? encoding
-    );
-  }
+  const decompressors = decodeOrder.map((encoding) =>
+    createDecompressor(encoding)
+  );
 
   const sourceStream = Readable.fromWeb(
     createPumpedStream(
@@ -1910,15 +1918,17 @@ async function decodeResponseIfNeeded(
     ) as unknown as NodeReadableStream<Uint8Array>
   );
   const decodedNodeStream = new PassThrough();
-  const pipelinePromise = pipeline(
+  const pipelinePromise = pipeline([
     sourceStream,
-    decompressor,
-    decodedNodeStream
-  );
+    ...decompressors,
+    decodedNodeStream,
+  ]);
 
   const abortHandler = (): void => {
     sourceStream.destroy();
-    decompressor.destroy();
+    for (const decompressor of decompressors) {
+      decompressor.destroy();
+    }
     decodedNodeStream.destroy();
   };
 

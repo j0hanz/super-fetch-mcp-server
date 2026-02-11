@@ -246,7 +246,12 @@ function parseAllowedHosts(envValue: string | undefined): Set<string> {
 }
 
 const MAX_HTML_BYTES = 10 * 1024 * 1024; // 10 MB
-const MAX_INLINE_CONTENT_CHARS = 0;
+const MAX_INLINE_CONTENT_CHARS = parseInteger(
+  env.MAX_INLINE_CONTENT_CHARS,
+  0,
+  0,
+  MAX_HTML_BYTES
+);
 const DEFAULT_SESSION_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_SESSION_INIT_TIMEOUT_MS = 10000;
 const DEFAULT_MAX_SESSIONS = 200;

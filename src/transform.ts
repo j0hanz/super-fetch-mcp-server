@@ -295,6 +295,12 @@ function trimUtf8Buffer(buffer: Buffer, maxBytes: number): Buffer {
   return buffer.subarray(0, end);
 }
 
+function trimDanglingTagFragment(content: string): string {
+  const lastOpen = content.lastIndexOf('<');
+  const lastClose = content.lastIndexOf('>');
+  return lastOpen > lastClose ? content.substring(0, lastOpen) : content;
+}
+
 function truncateHtml(
   html: string,
   inputTruncated = false
@@ -309,19 +315,13 @@ function truncateHtml(
 
   const sliced = html.slice(0, maxSize);
   if (Buffer.byteLength(sliced, 'utf8') <= maxSize) {
-    return { html: sliced, truncated: true };
+    return { html: trimDanglingTagFragment(sliced), truncated: true };
   }
 
   const htmlBuffer = Buffer.from(sliced, 'utf8');
-  let content = trimUtf8Buffer(htmlBuffer, maxSize).toString('utf8');
-
-  // Avoid truncating inside tags.
-  const lastOpen = content.lastIndexOf('<');
-  const lastClose = content.lastIndexOf('>');
-
-  if (lastOpen > lastClose) {
-    content = content.substring(0, lastOpen);
-  }
+  const content = trimDanglingTagFragment(
+    trimUtf8Buffer(htmlBuffer, maxSize).toString('utf8')
+  );
 
   logWarn('HTML content exceeds maximum size, truncating', {
     size: byteLength,

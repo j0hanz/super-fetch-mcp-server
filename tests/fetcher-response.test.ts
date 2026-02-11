@@ -31,6 +31,25 @@ function createChunkedStreamResponse(chunks: string[]) {
   return new Response(stream, { status: 200 });
 }
 
+function createChunkedBufferResponse(
+  chunks: Uint8Array[],
+  headers?: HeadersInit
+) {
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const chunk of chunks) {
+        controller.enqueue(chunk);
+      }
+      controller.close();
+    },
+  });
+
+  return new Response(stream, {
+    status: 200,
+    headers,
+  });
+}
+
 describe('readResponseText', () => {
   it('reads text and size from responses', async () => {
     const response = new Response('hello', {
@@ -247,6 +266,26 @@ describe('readResponseText', () => {
     assert.equal(result.size, 5);
   });
 
+  it('decodes responses with multiple content-encoding values in decode order', async () => {
+    const gzipped = gzipSync(Buffer.from('hello', 'utf-8'));
+    const compressed = brotliCompressSync(gzipped);
+    const response = new Response(compressed, {
+      status: 200,
+      headers: {
+        'content-type': 'text/html; charset=utf-8',
+        'content-encoding': 'gzip, br',
+      },
+    });
+
+    const result = await readResponseText(
+      response,
+      'https://example.com',
+      1024
+    );
+    assert.equal(result.text, 'hello');
+    assert.equal(result.size, 5);
+  });
+
   it('allows responses with identity Content-Encoding', async () => {
     const response = new Response('hello', {
       status: 200,
@@ -273,6 +312,24 @@ describe('readResponseText', () => {
 
     await assert.rejects(
       () => readResponseText(response, 'https://example.com/image.jpg', 1024),
+      (error) => {
+        assert.ok(error instanceof FetchError);
+        assert.equal(error.statusCode, 500);
+        assert.match(error.message, /binary content detected/);
+        return true;
+      }
+    );
+  });
+
+  it('rejects binary content detected in later stream chunks', async () => {
+    const firstChunk = new Uint8Array([0x68, 0x65, 0x6c, 0x6c, 0x6f]); // hello
+    const secondChunk = new Uint8Array([0xff, 0xd8, 0xff, 0xe0]); // JPEG signature
+    const response = createChunkedBufferResponse([firstChunk, secondChunk], {
+      'content-type': 'text/plain',
+    });
+
+    await assert.rejects(
+      () => readResponseText(response, 'https://example.com/late-binary', 1024),
       (error) => {
         assert.ok(error instanceof FetchError);
         assert.equal(error.statusCode, 500);

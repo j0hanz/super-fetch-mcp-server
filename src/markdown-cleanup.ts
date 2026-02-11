@@ -30,6 +30,7 @@ const REGEX = {
   SPACING_ESCAPES: /\\([[\].])/g,
   SPACING_LIST_NUM_COMBINED:
     /^((?![-*+] |\d+\. |[ \t]).+)\n((?:[-*+]|\d+\.) )/gm,
+  NESTED_LIST_INDENT: /^( +)((?:[-*+])|\d+\.)\s/gm,
   TYPEDOC: /(`+)(?:(?!\1)[\s\S])*?\1|\s?\/\\?\*[\s\S]*?\\?\*\//g,
 } as const;
 
@@ -248,6 +249,8 @@ function applyGlobalRegexes(text: string): string {
     .replace(REGEX.SPACING_LIST_NUM_COMBINED, '$1\n\n$2')
     .replace(REGEX.DOUBLE_NEWLINE_REDUCER, '\n\n');
 
+  result = normalizeNestedListIndentation(result);
+
   // fixProperties
   for (let k = 0; k < 3; k++) {
     const next = result.replace(REGEX.CONCATENATED_PROPS, '$1$2\n\n$3');
@@ -256,6 +259,18 @@ function applyGlobalRegexes(text: string): string {
   }
 
   return result;
+}
+
+function normalizeNestedListIndentation(text: string): string {
+  return text.replace(
+    REGEX.NESTED_LIST_INDENT,
+    (match: string, spaces: string, marker: string): string => {
+      const count = spaces.length;
+      if (count < 2 || count % 2 !== 0) return match;
+      const normalized = ' '.repeat((count / 2) * 4);
+      return `${normalized}${marker} `;
+    }
+  );
 }
 
 function findNextLine(

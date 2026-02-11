@@ -17,6 +17,18 @@ after(async () => {
   await shutdownTransformWorkerPool();
 });
 
+type FetchUrlResponse = Awaited<ReturnType<typeof fetchUrlToolHandler>>;
+
+function assertTextBlockMatchesStructured(response: FetchUrlResponse): void {
+  const textBlock = response.content.find((block) => block.type === 'text');
+  assert.ok(textBlock && textBlock.type === 'text');
+
+  const parsed = JSON.parse(textBlock.text) as unknown;
+  assert.equal(typeof parsed, 'object');
+  assert.ok(parsed && !Array.isArray(parsed));
+  assert.deepEqual(parsed, response.structuredContent);
+}
+
 describe('fetchUrlToolHandler', () => {
   it('inserts spaces after inline links/code without touching fenced code blocks', () => {
     const input = [
@@ -78,6 +90,7 @@ describe('fetchUrlToolHandler', () => {
     assert.equal(structured.url, 'https://example.com/test');
     assert.equal(typeof structured.markdown, 'string');
     assert.ok((structured.markdown as string).includes('Hello'));
+    assertTextBlockMatchesStructured(response);
   });
 
   it('respects cancellation via the MCP request abort signal', async (t) => {
@@ -193,6 +206,22 @@ describe('fetchUrlToolHandler', () => {
       assert.equal(structured.truncated, true);
       assert.equal(typeof structured.markdown, 'string');
       assert.ok(String(structured.markdown).includes('[truncated]'));
+      assertTextBlockMatchesStructured(response);
+
+      const resourceBlock = response.content.find(
+        (block) => block.type === 'resource'
+      );
+      assert.ok(resourceBlock && resourceBlock.type === 'resource');
+      assert.equal(resourceBlock.resource.mimeType, 'text/markdown');
+      assert.equal(resourceBlock.resource.text, structured.markdown);
+
+      const resourceLinkBlock = response.content.find(
+        (block) => block.type === 'resource_link'
+      );
+      assert.ok(
+        resourceLinkBlock && resourceLinkBlock.type === 'resource_link'
+      );
+      assert.match(resourceLinkBlock.uri, /^superfetch:\/\/cache\/markdown\//);
     } finally {
       config.runtime.httpMode = originalHttpMode;
       config.cache.enabled = originalCacheEnabled;
@@ -250,6 +279,32 @@ describe('fetchUrlToolHandler', () => {
     const markdown = String(structured.markdown);
     assert.ok(markdown.includes('<details>'));
     assert.ok(markdown.includes('Source: https://example.com/readme.md'));
+    assertTextBlockMatchesStructured(response);
+  });
+
+  it('falls back to UTF-8 for invalid charset labels in worker transforms', async (t) => {
+    const html = '<html><body><p>café</p></body></html>';
+    const utf8 = Buffer.from(html, 'utf-8');
+
+    t.mock.method(globalThis, 'fetch', async () => {
+      return new Response(utf8, {
+        status: 200,
+        headers: {
+          'content-type': 'text/html; charset=invalid-charset',
+        },
+      });
+    });
+
+    const response = await fetchUrlToolHandler({
+      url: 'https://example.com/invalid-charset',
+    });
+
+    assert.equal(response.isError, undefined);
+    const structured = response.structuredContent;
+    assert.ok(structured);
+    assert.equal(typeof structured.markdown, 'string');
+    assert.match(String(structured.markdown), /café/);
+    assertTextBlockMatchesStructured(response);
   });
 
   it('returns an error response when markdown conversion fails', async (t) => {

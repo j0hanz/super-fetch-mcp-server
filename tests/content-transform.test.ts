@@ -144,6 +144,24 @@ describe('transformHtmlToMarkdown raw content detection', () => {
     assert.equal(result.error.statusCode, 499);
   });
 
+  it('removes dangling tag fragments when input is already truncated', async () => {
+    await withWorkerPoolDisabled(async () => {
+      const result = await transformHtmlToMarkdown(
+        '<html><body><p>Hello</p><',
+        'https://example.com/truncated',
+        {
+          includeMetadata: false,
+          inputTruncated: true,
+        }
+      );
+
+      assert.equal(result.truncated, true);
+      assert.ok(result.markdown.includes('Hello'));
+      assert.equal(result.markdown.includes('\n\n<'), false);
+      assert.equal(result.markdown.endsWith('<'), false);
+    });
+  });
+
   it('rejects content with high replacement character ratio (binary indicator)', async () => {
     // Simulate binary content that was decoded as UTF-8 with many replacement chars
     const replacementChar = '\ufffd';

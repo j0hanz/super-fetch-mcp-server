@@ -80,7 +80,12 @@ function decodeHtmlBuffer(htmlBuffer: Uint8Array, encoding?: string): string {
   if (!encoding || encoding === 'utf-8') {
     return decoder.decode(htmlBuffer);
   }
-  return new TextDecoder(encoding).decode(htmlBuffer);
+  try {
+    return new TextDecoder(encoding).decode(htmlBuffer);
+  } catch {
+    // Fall back to UTF-8 when server-provided charset labels are invalid.
+    return decoder.decode(htmlBuffer);
+  }
 }
 
 function handleTransform(msg: Record<string, unknown>): void {

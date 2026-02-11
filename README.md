@@ -208,6 +208,7 @@ When no `--stdio` flag is passed, the server starts in **HTTP mode** (Streamable
 
 | Variable                           | Default           | Description                                      |
 | ---------------------------------- | ----------------- | ------------------------------------------------ |
+| `MAX_INLINE_CONTENT_CHARS`         | `0`               | Global inline markdown limit (`0` = unlimited)   |
 | `SUPERFETCH_EXTRA_NOISE_TOKENS`    | _(empty)_         | Additional CSS class/id tokens for noise removal |
 | `SUPERFETCH_EXTRA_NOISE_SELECTORS` | _(empty)_         | Additional CSS selectors for noise removal       |
 | `MARKDOWN_HEADING_KEYWORDS`        | _(built-in list)_ | Keywords triggering heading promotion            |
@@ -225,7 +226,7 @@ When no `--stdio` flag is passed, the server starts in **HTTP mode** (Streamable
 | Setting                  | Value                           |
 | ------------------------ | ------------------------------- |
 | Max HTML size            | 10 MB                           |
-| Max inline content chars | 0 (unlimited)                   |
+| Max inline content chars | 0 (unlimited, configurable)     |
 | Fetch timeout            | 15 s                            |
 | Transform timeout        | 30 s                            |
 | Tool timeout             | Fetch + Transform + 5 s padding |
