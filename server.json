@@ -8,13 +8,15 @@
     "source": "github"
   },
   "websiteUrl": "https://github.com/j0hanz/fetch-url-mcp#readme",
-  "version": "2.7.1",
+  "version": "0.0.2",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "@j0hanz/fetch-url-mcp",
-      "version": "2.7.1",
-      "transport": { "type": "stdio" },
+      "version": "0.0.2",
+      "transport": {
+        "type": "stdio"
+      },
       "packageArguments": []
     }
   ]
