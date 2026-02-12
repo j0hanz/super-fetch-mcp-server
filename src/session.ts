@@ -112,24 +112,34 @@ class SessionCleanupLoop {
       const now = getNow();
       const evicted = this.store.evictExpired();
 
-      for (const session of evicted) {
-        unregisterMcpSessionServerByServer(session.server);
-        void Promise.allSettled([
-          session.transport.close(),
-          session.server.close(),
-        ]).then((results) => {
-          const [transportResult, serverResult] = results;
-          if (transportResult.status === 'rejected') {
-            logWarn('Failed to close expired session transport', {
-              error: formatError(transportResult.reason),
-            });
-          }
-          if (serverResult.status === 'rejected') {
-            logWarn('Failed to close expired session server', {
-              error: formatError(serverResult.reason),
-            });
-          }
-        });
+      const closeBatchSize = 10;
+      for (let i = 0; i < evicted.length; i += closeBatchSize) {
+        const batch = evicted.slice(i, i + closeBatchSize);
+
+        await Promise.allSettled(
+          batch.map(async (session) => {
+            unregisterMcpSessionServerByServer(session.server);
+
+            const results = await Promise.allSettled([
+              session.transport.close(),
+              session.server.close(),
+            ]);
+
+            const [transportResult, serverResult] = results;
+            if (transportResult.status === 'rejected') {
+              logWarn('Failed to close expired session transport', {
+                error: formatError(transportResult.reason),
+              });
+            }
+            if (serverResult.status === 'rejected') {
+              logWarn('Failed to close expired session server', {
+                error: formatError(serverResult.reason),
+              });
+            }
+          })
+        );
+
+        if (signal.aborted) return;
       }
 
       if (evicted.length > 0) {

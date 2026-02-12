@@ -576,6 +576,37 @@ function isReadabilityCompatible(doc: unknown): doc is Document {
   );
 }
 
+function resolveCollapsedTextLengthUpTo(text: string, max: number): number {
+  if (max <= 0) return 0;
+
+  let length = 0;
+  let seenNonWhitespace = false;
+  let pendingSpace = false;
+
+  for (let i = 0; i < text.length; i += 1) {
+    const code = text.charCodeAt(i);
+    const isWhitespace = code <= 0x20;
+
+    if (isWhitespace) {
+      if (seenNonWhitespace) pendingSpace = true;
+      continue;
+    }
+
+    if (!seenNonWhitespace) {
+      seenNonWhitespace = true;
+    } else if (pendingSpace) {
+      length += 1;
+      pendingSpace = false;
+      if (length >= max) return length;
+    }
+
+    length += 1;
+    if (length >= max) return length;
+  }
+
+  return length;
+}
+
 function extractArticle(
   document: unknown,
   url: string,
@@ -596,7 +627,7 @@ function extractArticle(
       doc.querySelector('body')?.textContent ??
       (doc.documentElement.textContent as string | null | undefined) ??
       '';
-    const textLength = rawText.replace(/\s+/g, ' ').trim().length;
+    const textLength = resolveCollapsedTextLengthUpTo(rawText, 401);
 
     if (textLength < 100) {
       logWarn(

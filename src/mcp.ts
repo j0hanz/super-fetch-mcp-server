@@ -140,6 +140,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return isObject(value);
 }
 
+function isServerResult(value: unknown): value is ServerResult {
+  return (
+    isObject(value) && Array.isArray((value as { content?: unknown }).content)
+  );
+}
+
+function tryReadToolStructuredError(value: unknown): string | undefined {
+  if (!isObject(value)) return undefined;
+  const record = value as { structuredContent?: unknown };
+  if (!isObject(record.structuredContent)) return undefined;
+  const structured = record.structuredContent as { error?: unknown };
+  return typeof structured.error === 'string' ? structured.error : undefined;
+}
+
 function resolveTaskOwnerKey(extra?: HandlerExtra): string {
   if (extra?.sessionId) return `session:${extra.sessionId}`;
   if (extra?.authInfo?.clientId) return `client:${extra.authInfo.clientId}`;
@@ -350,8 +364,7 @@ async function runFetchTaskExecution(params: {
         taskManager.updateTask(taskId, {
           status: isToolError ? 'failed' : 'completed',
           statusMessage: isToolError
-            ? ((result as { structuredContent?: { error?: string } })
-                .structuredContent?.error ?? 'Tool execution failed')
+            ? (tryReadToolStructuredError(result) ?? 'Tool execution failed')
             : 'Task completed successfully.',
           result,
         });
@@ -554,7 +567,9 @@ export function registerTaskHandlers(server: McpServer): void {
       throw new McpError(ErrorCode.InvalidRequest, 'Task was cancelled');
     }
 
-    const result = (task.result ?? { content: [] }) as ServerResult;
+    const result: ServerResult = isServerResult(task.result)
+      ? task.result
+      : { content: [] };
 
     return Promise.resolve({
       ...result,
