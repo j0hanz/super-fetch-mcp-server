@@ -32,13 +32,13 @@ export interface SessionStore {
   evictOldest: () => SessionEntry | undefined;
 }
 
-export interface SlotTracker {
+interface SlotTracker {
   readonly releaseSlot: () => void;
   readonly markInitialized: () => void;
   readonly isInitialized: () => boolean;
 }
 
-export type CloseHandler = (() => void) | undefined;
+type CloseHandler = (() => void) | undefined;
 
 export function composeCloseHandlers(
   first: CloseHandler,

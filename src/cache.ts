@@ -26,10 +26,10 @@ const CachedPayloadSchema = z.strictObject({
   markdown: z.string().optional(),
   title: z.string().optional(),
 });
-export type CachedPayload = z.infer<typeof CachedPayloadSchema>;
+type CachedPayload = z.infer<typeof CachedPayloadSchema>;
 
 // Cache Entry (Memory)
-export interface CacheEntry {
+interface CacheEntry {
   url: string;
   title?: string;
   content: string;
@@ -37,16 +37,16 @@ export interface CacheEntry {
   expiresAt: string;
 }
 
-export interface CacheKeyParts {
+interface CacheKeyParts {
   namespace: string;
   urlHash: string;
 }
 
-export interface CacheSetOptions {
+interface CacheSetOptions {
   force?: boolean;
 }
 
-export interface CacheGetOptions {
+interface CacheGetOptions {
   force?: boolean;
 }
 

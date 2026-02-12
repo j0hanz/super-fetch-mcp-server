@@ -4,12 +4,12 @@ import { z } from 'zod';
 
 export type JsonRpcId = string | number | null;
 
-export interface McpRequestParams {
+interface McpRequestParams {
   _meta?: Record<string, unknown>;
   [key: string]: unknown;
 }
 
-export interface McpRequestBody {
+interface McpRequestBody {
   jsonrpc: '2.0';
   method: string;
   id?: JsonRpcId;

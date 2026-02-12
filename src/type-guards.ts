@@ -5,8 +5,8 @@ export function isObject(
 }
 
 export function isError(value: unknown): value is Error {
-  const ErrorConstructor = Error as unknown as {
-    isError(err: unknown): err is Error;
+  const ErrorConstructor = Error as {
+    isError?: (err: unknown) => boolean;
   };
   if (typeof ErrorConstructor.isError === 'function') {
     return ErrorConstructor.isError(value);
@@ -14,7 +14,7 @@ export function isError(value: unknown): value is Error {
   return value instanceof Error;
 }
 
-export interface LikeNode {
+interface LikeNode {
   readonly tagName?: string | undefined;
   readonly nodeName?: string | undefined;
   readonly nodeType?: number | undefined;

@@ -26,11 +26,11 @@ import {
 } from './observability.js';
 import { isError, isObject } from './type-guards.js';
 
-export interface FetchOptions {
+interface FetchOptions {
   signal?: AbortSignal;
 }
 
-export interface TransformResult {
+interface TransformResult {
   readonly url: string;
   readonly transformed: boolean;
   readonly platform?: string;
@@ -908,7 +908,7 @@ type FetchChannelEvent =
 
 const fetchChannel = diagnosticsChannel.channel('fetch-url-mcp.fetch');
 
-export interface FetchTelemetryContext {
+interface FetchTelemetryContext {
   requestId: string;
   startTime: number;
   url: string;

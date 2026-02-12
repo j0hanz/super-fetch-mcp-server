@@ -39,14 +39,14 @@ export interface FetchUrlInput {
   maxInlineChars?: number | undefined;
 }
 
-export interface ToolContentBlock {
+interface ToolContentBlock {
   type: 'text';
   text: string;
 }
 
-export type ToolContentBlockUnion = ContentBlock;
+type ToolContentBlockUnion = ContentBlock;
 
-export type ToolErrorResponse = CallToolResult & {
+type ToolErrorResponse = CallToolResult & {
   structuredContent: {
     error: string;
     url: string;
@@ -56,11 +56,11 @@ export type ToolErrorResponse = CallToolResult & {
   isError: true;
 };
 
-export type ToolResponseBase = CallToolResult & {
+type ToolResponseBase = CallToolResult & {
   structuredContent: Record<string, unknown>;
 };
 
-export interface FetchPipelineOptions<T> {
+interface FetchPipelineOptions<T> {
   url: string;
   cacheNamespace: string;
   signal?: AbortSignal;
@@ -74,7 +74,7 @@ export interface FetchPipelineOptions<T> {
   deserialize?: (cached: string) => T | undefined;
 }
 
-export interface PipelineResult<T> {
+interface PipelineResult<T> {
   data: T;
   fromCache: boolean;
   url: string;
@@ -84,9 +84,9 @@ export interface PipelineResult<T> {
   cacheKey?: string | null;
 }
 
-export type ProgressToken = string | number;
+type ProgressToken = string | number;
 
-export interface RequestMeta {
+interface RequestMeta {
   progressToken?: ProgressToken | undefined;
   [key: string]: unknown;
 }
@@ -104,7 +104,7 @@ export interface ProgressNotification {
   params: ProgressNotificationParams;
 }
 
-export interface ToolHandlerExtra {
+interface ToolHandlerExtra {
   signal?: AbortSignal;
   requestId?: string | number;
   sessionId?: unknown;
@@ -458,7 +458,7 @@ interface InlineContentResult {
   truncated?: boolean;
 }
 
-export type InlineResult = ReturnType<InlineContentLimiter['apply']>;
+type InlineResult = ReturnType<InlineContentLimiter['apply']>;
 
 function getOpenCodeFence(
   content: string

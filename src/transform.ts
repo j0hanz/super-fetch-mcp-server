@@ -94,7 +94,7 @@ interface ExtractionContext extends ExtractionResult {
   truncated?: boolean;
 }
 
-export interface StageBudget {
+interface StageBudget {
   totalBudgetMs: number;
   elapsedMs: number;
 }
@@ -3137,7 +3137,7 @@ async function shutdownWorkerPool(): Promise<void> {
   workerPool = null;
 }
 
-export interface TransformPoolStats {
+interface TransformPoolStats {
   queueDepth: number;
   activeWorkers: number;
   capacity: number;

@@ -1,7 +1,7 @@
 import { config } from './config.js';
 import { logDebug, logWarn } from './observability.js';
 
-export interface HttpServerTuningTarget {
+interface HttpServerTuningTarget {
   headersTimeout?: number;
   requestTimeout?: number;
   keepAliveTimeout?: number;

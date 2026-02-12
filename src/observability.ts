@@ -6,7 +6,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 import { config, type LogLevel } from './config.js';
 
-export type LogMetadata = Record<string, unknown>;
+type LogMetadata = Record<string, unknown>;
 
 interface RequestContext {
   readonly requestId: string;

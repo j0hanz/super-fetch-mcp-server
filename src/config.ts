@@ -44,7 +44,7 @@ const DEFAULT_HEADING_KEYWORDS = [
   'appendix',
 ] as const;
 
-export type TransformWorkerMode = 'threads' | 'process';
+type TransformWorkerMode = 'threads' | 'process';
 
 type AuthMode = 'oauth' | 'static';
 

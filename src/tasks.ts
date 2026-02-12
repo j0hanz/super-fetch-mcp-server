@@ -38,7 +38,7 @@ interface InternalTaskState extends TaskState {
   _createdAtMs: number;
 }
 
-export interface CreateTaskOptions {
+interface CreateTaskOptions {
   ttl?: number;
 }
 
