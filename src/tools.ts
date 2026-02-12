@@ -168,6 +168,13 @@ const fetchUrlOutputSchema = z.strictObject({
     .max(config.constants.maxUrlLength)
     .optional()
     .describe('The final response URL after redirects'),
+  cacheResourceUri: z
+    .string()
+    .max(config.constants.maxUrlLength)
+    .optional()
+    .describe(
+      'Internal cache resource URI for retrieving full markdown via resources/read'
+    ),
   title: z.string().max(512).optional().describe('Page title'),
   metadata: z
     .strictObject({
@@ -629,11 +636,37 @@ function buildEmbeddedResource(
   };
 }
 
+function buildCacheResourceLink(
+  cacheResourceUri: string,
+  contentSize: number,
+  fetchedAt: string
+): ToolContentBlockUnion {
+  return {
+    type: 'resource_link',
+    uri: cacheResourceUri,
+    name: 'cached-markdown',
+    title: 'Cached Fetch Output',
+    description: 'Read full markdown via resources/read.',
+    mimeType: 'text/markdown',
+    ...(contentSize > 0 ? { size: contentSize } : {}),
+    annotations: {
+      audience: ['assistant'] as ['assistant'],
+      priority: 0.8,
+      lastModified: fetchedAt,
+    },
+  };
+}
+
 function buildToolContentBlocks(
   structuredContent: Record<string, unknown>,
+  resourceLink?: ToolContentBlockUnion | null,
   embeddedResource?: ToolContentBlockUnion | null
 ): ToolContentBlockUnion[] {
   const blocks: ToolContentBlockUnion[] = [buildTextBlock(structuredContent)];
+
+  if (resourceLink) {
+    blocks.push(resourceLink);
+  }
 
   if (embeddedResource) {
     blocks.push(embeddedResource);
@@ -1067,6 +1100,7 @@ function buildStructuredContent(
   inlineResult: InlineResult,
   inputUrl: string
 ): Record<string, unknown> {
+  const cacheResourceUri = resolveCacheResourceUri(pipeline.cacheKey);
   const truncated = inlineResult.truncated ?? pipeline.data.truncated;
   let markdown = inlineResult.content;
   if (
@@ -1082,6 +1116,7 @@ function buildStructuredContent(
     url: pipeline.originalUrl ?? pipeline.url,
     resolvedUrl: pipeline.url,
     ...(pipeline.finalUrl ? { finalUrl: pipeline.finalUrl } : {}),
+    ...(cacheResourceUri ? { cacheResourceUri } : {}),
     inputUrl,
     title: pipeline.data.title,
     ...(metadata ? { metadata } : {}),
@@ -1093,21 +1128,43 @@ function buildStructuredContent(
   };
 }
 
+function resolveCacheResourceUri(
+  cacheKey: string | null | undefined
+): string | undefined {
+  if (!cacheKey) return undefined;
+  if (!cache.isEnabled()) return undefined;
+  if (!cache.get(cacheKey)) return undefined;
+
+  const parsed = cache.parseCacheKey(cacheKey);
+  if (!parsed) return undefined;
+
+  return `internal://cache/${encodeURIComponent(parsed.namespace)}/${encodeURIComponent(parsed.urlHash)}`;
+}
+
 function buildFetchUrlContentBlocks(
   structuredContent: Record<string, unknown>,
   pipeline: PipelineResult<MarkdownPipelineResult>,
   inlineResult: InlineResult
 ): ToolContentBlockUnion[] {
+  const cacheResourceUri = readString(structuredContent, 'cacheResourceUri');
   const contentToEmbed = config.runtime.httpMode
     ? inlineResult.content
     : pipeline.data.content;
+
+  const resourceLink = cacheResourceUri
+    ? buildCacheResourceLink(
+        cacheResourceUri,
+        inlineResult.contentSize,
+        pipeline.fetchedAt
+      )
+    : null;
 
   const embedded =
     contentToEmbed && pipeline.url
       ? buildEmbeddedResource(contentToEmbed, pipeline.url, pipeline.data.title)
       : null;
 
-  return buildToolContentBlocks(structuredContent, embedded);
+  return buildToolContentBlocks(structuredContent, resourceLink, embedded);
 }
 
 function buildResponse(

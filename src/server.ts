@@ -70,7 +70,10 @@ type McpServerCapabilities = NonNullable<
 function createServerCapabilities(): McpServerCapabilities {
   return {
     logging: {},
-    resources: {},
+    resources: {
+      subscribe: true,
+      listChanged: true,
+    },
     tools: {},
     prompts: {},
     completions: {},

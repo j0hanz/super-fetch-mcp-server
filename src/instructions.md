@@ -22,7 +22,9 @@ Available as resource (`internal://instructions`) or prompt (`get-help`). Load w
 
 - `internal://instructions`: This document.
 - `internal://cache/{namespace}/{hash}`: Immutable cached Markdown snapshots from previous `fetch-url` calls. Ephemeral — lost when the server process restarts.
+- `fetch-url` responses include a `resource_link` content block when cache is enabled; use that URI directly with `resources/read`/`resources/subscribe`.
 - If inline Markdown is truncated (ends with `...[truncated]`), the full content may be available via the cache resource. Use `resources/read` with the cache URI to retrieve it.
+- Clients can subscribe to cache resource URIs via `resources/subscribe` and receive `notifications/resources/updated` when that specific cache entry changes.
 
 ---
 
@@ -44,7 +46,7 @@ Available as resource (`internal://instructions`) or prompt (`get-help`). Load w
 
 1. Call `fetch-url` with `{ "url": "https://..." }`.
 2. Read the `markdown` field from `structuredContent`.
-3. If `truncated` is `true`: use the cache resource URI or paginated access to get full content.
+3. If `truncated` is `true`: use `cacheResourceUri` from `structuredContent` with `resources/read` to get full content.
    NOTE: Never guess URIs; always use values returned in responses.
 
 ### WORKFLOW B: FRESH CONTENT (BYPASS CACHE)
@@ -77,13 +79,14 @@ Available as resource (`internal://instructions`) or prompt (`get-help`). Load w
   - `skipNoiseRemoval` (bool): Keeps navigation, footers, and other elements normally filtered.
   - `forceRefresh` (bool): Bypasses the cache and fetches live.
   - `maxInlineChars` (int, 0–10485760): Per-call inline limit. `0` means unlimited. If a global limit is configured, the lower value wins.
-- Output: `{ url, inputUrl, resolvedUrl, finalUrl, title, metadata, markdown, fromCache, fetchedAt, contentSize, truncated, error, statusCode, details }`
+- Output: `{ url, inputUrl, resolvedUrl, finalUrl, cacheResourceUri, title, metadata, markdown, fromCache, fetchedAt, contentSize, truncated, error, statusCode, details }`
   - `metadata`: Extracted page metadata — `title`, `description`, `author`, `image`, `favicon`, `publishedAt`, `modifiedAt`.
   - `markdown`: The extracted content. May be absent on error.
   - `truncated`: `true` when inline content was cut. Full content stored in cache.
   - `resolvedUrl`: The normalized/raw-transformed URL actually fetched (GitHub/GitLab/Bitbucket URLs auto-convert to raw content URLs).
   - `finalUrl`: The URL after following redirects.
 - Side effects: None (read-only, idempotent). Populates the in-memory cache automatically.
+- `cacheResourceUri`: Present when cache key generation succeeds; use with `resources/read` for full content retrieval.
 - Gotcha: Inline Markdown may be truncated when `MAX_INLINE_CONTENT_CHARS` is configured. Check the `truncated` field and use the cache resource for full content.
 - Gotcha: GitHub, GitLab, and Bitbucket URLs are auto-transformed to raw content endpoints. Check `resolvedUrl` to see the actual fetched URL.
 - Gotcha: Does not execute client-side JavaScript. Content requiring JS rendering may be incomplete.

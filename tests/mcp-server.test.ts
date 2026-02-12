@@ -65,6 +65,16 @@ describe('MCP Server', () => {
         serverInfo?.websiteUrl,
         'https://github.com/j0hanz/fetch-url-mcp'
       );
+
+      const capabilities = (
+        server.server as unknown as {
+          _capabilities?: {
+            resources?: { subscribe?: boolean; listChanged?: boolean };
+          };
+        }
+      )._capabilities;
+      assert.equal(capabilities?.resources?.subscribe, true);
+      assert.equal(capabilities?.resources?.listChanged, true);
     });
   });
 

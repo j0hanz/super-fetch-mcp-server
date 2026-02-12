@@ -92,6 +92,17 @@ describe('fetchUrlToolHandler', () => {
     assert.equal(structured.fromCache, false);
     assert.equal(typeof structured.fetchedAt, 'string');
     assert.equal(typeof structured.contentSize, 'number');
+    assert.equal(typeof structured.cacheResourceUri, 'string');
+    assert.match(
+      String(structured.cacheResourceUri),
+      /^internal:\/\/cache\/markdown\/[a-f0-9.]+$/i
+    );
+    const resourceLink = response.content.find(
+      (block) => block.type === 'resource_link'
+    );
+    assert.ok(resourceLink && resourceLink.type === 'resource_link');
+    assert.equal(resourceLink.uri, structured.cacheResourceUri);
+    assert.equal(resourceLink.mimeType, 'text/markdown');
     assert.ok((structured.markdown as string).includes('Hello'));
     assertTextBlockMatchesStructured(response);
   });
@@ -202,6 +213,7 @@ describe('fetchUrlToolHandler', () => {
       const structured = response.structuredContent;
       assert.ok(structured);
       assert.equal(structured.truncated, true);
+      assert.equal(structured.cacheResourceUri, undefined);
     } finally {
       config.cache.enabled = originalCacheEnabled;
       config.constants.maxInlineContentChars = originalInlineLimit;
@@ -226,6 +238,11 @@ describe('fetchUrlToolHandler', () => {
     assert.equal(structured.fromCache, true);
     assert.equal(structured.truncated, true);
     assert.equal(typeof structured.fetchedAt, 'string');
+    assert.equal(typeof structured.cacheResourceUri, 'string');
+    assert.match(
+      String(structured.cacheResourceUri),
+      /^internal:\/\/cache\/markdown\/[a-f0-9.]+$/i
+    );
   });
 
   it('adds truncation marker when HTML size truncation occurs', async (t) => {

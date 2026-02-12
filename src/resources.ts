@@ -6,15 +6,19 @@ import {
   ErrorCode,
   McpError,
   type ReadResourceResult,
+  SubscribeRequestSchema,
+  UnsubscribeRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 
 import {
   get as getCacheEntry,
   keys as listCacheKeys,
+  onCacheUpdate,
   parseCachedPayload,
   parseCacheKey,
   resolveCachedPayloadContent,
 } from './cache.js';
+import { logWarn } from './observability.js';
 
 interface IconInfo {
   src: string;
@@ -166,7 +170,6 @@ function listCacheResources(): {
   const resources = listCacheKeys()
     .map((key) => parseCacheKey(key))
     .filter((parts): parts is NonNullable<typeof parts> => Boolean(parts))
-    .slice(0, MAX_COMPLETION_VALUES)
     .map((parts) => {
       const cacheParts: CacheResourceParts = {
         namespace: parts.namespace,
@@ -186,6 +189,89 @@ function listCacheResources(): {
     });
 
   return { resources };
+}
+
+function createCacheKeySignature(): string {
+  return [...listCacheKeys()]
+    .sort((left, right) => left.localeCompare(right))
+    .join('\n');
+}
+
+function normalizeSubscriptionUri(uri: string): string {
+  if (!URL.canParse(uri)) {
+    throw new McpError(ErrorCode.InvalidParams, 'Invalid resource URI');
+  }
+
+  const parsedUri = new URL(uri);
+  const cacheParts = parseCacheResourceFromUri(parsedUri);
+  if (cacheParts) return toCacheResourceUri(cacheParts);
+
+  return parsedUri.href;
+}
+
+function registerCacheResourceNotifications(server: McpServer): void {
+  const subscribedResourceUris = new Set<string>();
+
+  server.server.setRequestHandler(SubscribeRequestSchema, async (request) => {
+    subscribedResourceUris.add(normalizeSubscriptionUri(request.params.uri));
+    return Promise.resolve({});
+  });
+
+  server.server.setRequestHandler(UnsubscribeRequestSchema, async (request) => {
+    subscribedResourceUris.delete(normalizeSubscriptionUri(request.params.uri));
+    return Promise.resolve({});
+  });
+
+  let previousSignature = createCacheKeySignature();
+
+  const unsubscribe = onCacheUpdate((event) => {
+    const changedUri = toCacheResourceUri({
+      namespace: event.namespace,
+      hash: event.urlHash,
+    });
+
+    if (server.isConnected() && subscribedResourceUris.has(changedUri)) {
+      void server.server
+        .sendResourceUpdated({ uri: changedUri })
+        .catch((error: unknown) => {
+          logWarn('Failed to send resource updated notification', {
+            uri: changedUri,
+            error,
+          });
+        });
+    }
+
+    const nextSignature = createCacheKeySignature();
+    if (nextSignature === previousSignature) return;
+    previousSignature = nextSignature;
+
+    if (!server.isConnected()) return;
+
+    try {
+      server.sendResourceListChanged();
+    } catch (error: unknown) {
+      logWarn('Failed to send resources list changed notification', { error });
+    }
+  });
+
+  let cleanedUp = false;
+  const cleanup = (): void => {
+    if (cleanedUp) return;
+    cleanedUp = true;
+    unsubscribe();
+  };
+
+  const originalOnClose = server.server.onclose;
+  server.server.onclose = () => {
+    cleanup();
+    originalOnClose?.();
+  };
+
+  const originalClose = server.close.bind(server);
+  server.close = async (): Promise<void> => {
+    cleanup();
+    await originalClose();
+  };
 }
 
 function resolveCacheResourceParts(
@@ -309,4 +395,6 @@ export function registerCacheResourceTemplate(
     (uri, variables): ReadResourceResult =>
       readCacheResource(uri, variables as Record<string, TemplateVariableValue>)
   );
+
+  registerCacheResourceNotifications(server);
 }
