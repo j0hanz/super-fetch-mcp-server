@@ -34,7 +34,7 @@
 - `tests/` — Unit/integration tests (46+ test files) using Node.js built-in test runner
 - `scripts/` — Build & test orchestration (`tasks.mjs`)
 - `assets/` — Server icon (`logo.svg`)
-- `.github/workflows/` — CI/CD (`release.yml`: lint → type-check → test → build → publish to npm, MCP Registry, Docker)
+- `.github/workflows/` — CI/CD (`release.yml`: lint → type-check → type-check:tests → test → build → publish to npm, MCP Registry, Docker)
 
 > Ignore: `dist/`, `node_modules/`, `coverage/`, `.cache/`, `.tsbuildinfo`
 
@@ -49,6 +49,7 @@ All commands verified from `.github/workflows/release.yml` (CI) and `package.jso
 - **Start:** `npm run start` → `node dist/index.js` (see `package.json`)
 - **Build:** `npm run build` → `node scripts/tasks.mjs build` — cleans `dist/`, compiles TS, validates `instructions.md`, copies assets, sets executable bit (see `scripts/tasks.mjs`, `package.json`)
 - **Type-check:** `npm run type-check` → `tsc -p tsconfig.json --noEmit` (see `scripts/tasks.mjs`, `.github/workflows/release.yml`)
+- **Type-check (tests):** `npm run type-check:tests` → build output + `tsc -p tsconfig.tests.json --noEmit` (see `scripts/tasks.mjs`, `.github/workflows/release.yml`)
 - **Lint:** `npm run lint` → `eslint .` (see `package.json`, `.github/workflows/release.yml`)
 - **Lint (fix):** `npm run lint:fix` → `eslint . --fix` (see `package.json`)
 - **Format:** `npm run format` → `prettier --write .` (see `package.json`)
@@ -135,7 +136,7 @@ All commands verified from `.github/workflows/release.yml` (CI) and `package.jso
   - Config values temporarily overridden per test with `try/finally` cleanup (observed in `tests/fetch-url-tool.test.ts`)
   - Worker pool shutdown in `after()` hooks for clean teardown (observed in `tests/fetch-url-tool.test.ts`)
   - No external services (DB/containers) required for tests
-- **CI validation order:** `lint` → `type-check` → `test` → `build` (see `.github/workflows/release.yml`)
+- **CI validation order:** `lint` → `type-check` → `type-check:tests` → `test` → `build` (see `.github/workflows/release.yml`)
 
 ## 7) Common Pitfalls (Verified Only)
 

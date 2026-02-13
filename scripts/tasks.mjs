@@ -49,6 +49,7 @@ const CONFIG = {
   commands: {
     tsc: ['node', [BIN.tsc, '-p', 'tsconfig.build.json']],
     tscCheck: ['node', [BIN.tsc, '-p', 'tsconfig.json', '--noEmit']],
+    tscTestsCheck: ['node', [BIN.tsc, '-p', 'tsconfig.tests.json', '--noEmit']],
   },
   test: {
     patterns: ['src/__tests__/**/*.test.ts', 'tests/**/*.test.ts'],
@@ -292,11 +293,27 @@ async function findTestPatterns() {
 }
 
 const TestTasks = {
-  async typeCheck() {
+  async typeCheckSource() {
     await Runner.runShellTask('Type-checking src', async () => {
       const [cmd, args] = CONFIG.commands.tscCheck;
       await System.exec(cmd, args);
     });
+  },
+
+  async typeCheckTests() {
+    await Runner.runShellTask('Compiling TypeScript', async () => {
+      const [cmd, args] = CONFIG.commands.tsc;
+      await System.exec(cmd, args);
+    });
+
+    await Runner.runShellTask('Type-checking tests', async () => {
+      const [cmd, args] = CONFIG.commands.tscTestsCheck;
+      await System.exec(cmd, args);
+    });
+  },
+
+  async typeCheck() {
+    await this.typeCheckSource();
   },
 
   async test(args = []) {
@@ -380,6 +397,7 @@ const CLI = {
       Runner.runTask('Making executable', BuildTasks.makeExecutable),
     build: Pipeline.fullBuild,
     'type-check': () => TestTasks.typeCheck(),
+    'type-check:tests': () => TestTasks.typeCheckTests(),
     test: (args) => TestTasks.test(args),
   },
 

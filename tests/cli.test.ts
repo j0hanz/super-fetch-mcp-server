@@ -9,10 +9,9 @@ function assertParseSuccess(args: readonly string[]): {
   version: boolean;
 } {
   const result = parseCliArgs(args);
-  assert.equal(result.ok, true);
-  if (!result.ok) {
+  if (!result.ok)
     throw new Error(`Expected parse success, got: ${result.message}`);
-  }
+  assert.equal(result.ok, true);
   return result.values;
 }
 

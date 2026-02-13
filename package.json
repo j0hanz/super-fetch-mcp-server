@@ -52,6 +52,7 @@
     "start": "node dist/index.js",
     "format": "prettier --write .",
     "type-check": "node scripts/tasks.mjs type-check",
+    "type-check:tests": "node scripts/tasks.mjs type-check:tests",
     "type-check:diagnostics": "tsc --noEmit --extendedDiagnostics",
     "type-check:trace": "node -e \"require('fs').rmSync('.ts-trace',{recursive:true,force:true})\" && tsc --noEmit --generateTrace .ts-trace",
     "lint": "eslint .",
