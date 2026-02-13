@@ -77,12 +77,15 @@ function getLineEnding(content: string): '\n' | '\r\n' {
   return content.includes('\r\n') ? '\r\n' : '\n';
 }
 
+function isBlank(line: string | undefined): boolean {
+  return line === undefined || line.trim().length === 0;
+}
+
 function hasFollowingContent(lines: string[], startIndex: number): boolean {
   // Optimization: Bound lookahead to avoid checking too many lines in huge files
   const max = Math.min(lines.length, startIndex + 50);
   for (let i = startIndex + 1; i < max; i++) {
-    const line = lines[i];
-    if (line && line.trim().length > 0) return true;
+    if (!isBlank(lines[i])) return true;
   }
   return false;
 }
@@ -180,9 +183,10 @@ function getTocBlockStats(
 function skipTocLines(lines: string[], startIndex: number): number {
   for (let i = startIndex; i < lines.length; i++) {
     const line = lines[i];
-    if (!line) continue;
-    if (line.trim().length === 0) continue;
-    if (!REGEX.TOC_LINK.test(line)) return i;
+    if (line === undefined) continue;
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    if (!REGEX.TOC_LINK.test(trimmed)) return i;
   }
   return lines.length;
 }

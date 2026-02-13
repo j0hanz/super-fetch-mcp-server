@@ -5,11 +5,11 @@ export function isObject(
 }
 
 export function isError(value: unknown): value is Error {
-  const ErrorConstructor = Error as {
+  const { isError: isErrorFn } = Error as {
     isError?: (err: unknown) => boolean;
   };
-  if (typeof ErrorConstructor.isError === 'function') {
-    return ErrorConstructor.isError(value);
+  if (typeof isErrorFn === 'function') {
+    return isErrorFn(value);
   }
   return value instanceof Error;
 }

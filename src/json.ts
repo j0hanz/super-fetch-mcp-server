@@ -21,8 +21,11 @@ function processValue(
   seen.add(obj);
 
   try {
+    const processChild = (value: unknown): unknown =>
+      processValue(value, depth + 1, seen);
+
     if (Array.isArray(obj)) {
-      return obj.map((item) => processValue(item, depth + 1, seen));
+      return obj.map((item) => processChild(item));
     }
 
     const keys = Object.keys(obj).sort((a, b) => a.localeCompare(b));
@@ -30,7 +33,7 @@ function processValue(
     const sortedObj: Record<string, unknown> = {};
 
     for (const key of keys) {
-      sortedObj[key] = processValue(record[key], depth + 1, seen);
+      sortedObj[key] = processChild(record[key]);
     }
 
     return sortedObj;

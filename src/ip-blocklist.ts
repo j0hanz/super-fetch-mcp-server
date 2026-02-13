@@ -20,6 +20,7 @@ const IPV6_2002 = buildIpv6(['2002', 0, 0, 0, 0, 0, 0, 0]);
 const IPV6_FC00 = buildIpv6(['fc00', 0, 0, 0, 0, 0, 0, 0]);
 const IPV6_FE80 = buildIpv6(['fe80', 0, 0, 0, 0, 0, 0, 0]);
 const IPV6_FF00 = buildIpv6(['ff00', 0, 0, 0, 0, 0, 0, 0]);
+const IPV6_MAPPED_PREFIX = '::ffff:';
 
 type BlockedSubnet = Readonly<{
   subnet: string;
@@ -57,9 +58,8 @@ export function createDefaultBlockList(): BlockList {
 }
 
 function extractMappedIpv4(ip: string): string | null {
-  const prefix = '::ffff:';
-  if (!ip.startsWith(prefix)) return null;
-  const mapped = ip.slice(prefix.length);
+  if (!ip.startsWith(IPV6_MAPPED_PREFIX)) return null;
+  const mapped = ip.slice(IPV6_MAPPED_PREFIX.length);
   return isIP(mapped) === 4 ? mapped : null;
 }
 

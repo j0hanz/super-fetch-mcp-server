@@ -5,13 +5,18 @@ import { transformHtmlToMarkdownInProcess } from '../transform.js';
 
 const send = process.send?.bind(process);
 if (!send) throw new Error('transform-child started without IPC channel');
+const sendMessage = send as (message: Record<string, unknown>) => void;
+
+function postMessage(message: Record<string, unknown>): void {
+  sendMessage(message);
+}
 
 const controllersById = new Map<string, AbortController>();
 const decoder = new TextDecoder('utf-8');
 
 function postError(id: string, url: string, error: unknown): void {
   if (error instanceof FetchError) {
-    send?.({
+    postMessage({
       type: 'error',
       id,
       error: {
@@ -25,7 +30,7 @@ function postError(id: string, url: string, error: unknown): void {
     return;
   }
 
-  send?.({
+  postMessage({
     type: 'error',
     id,
     error: {
@@ -71,7 +76,7 @@ function isValidMessage(msg: Record<string, unknown>): msg is {
 }
 
 function postValidationError(id: string, url: string, message: string): void {
-  send?.({
+  postMessage({
     type: 'error',
     id,
     error: { name: 'ValidationError', message, url },
@@ -131,7 +136,7 @@ function handleTransform(msg: Record<string, unknown>): void {
     });
 
     const { markdown, metadata, title, truncated } = result;
-    send?.({
+    postMessage({
       type: 'result',
       id,
       result:

@@ -168,6 +168,10 @@ function moveSessionToEnd(
   sessions.set(sessionId, session);
 }
 
+function isBlankSessionId(sessionId: string): boolean {
+  return sessionId.length === 0;
+}
+
 class InMemorySessionStore implements SessionStore {
   private readonly sessions = new Map<string, SessionEntry>();
   private inflight = 0;
@@ -175,12 +179,12 @@ class InMemorySessionStore implements SessionStore {
   constructor(private readonly sessionTtlMs: number) {}
 
   get(sessionId: string): SessionEntry | undefined {
-    if (!sessionId) return undefined;
+    if (isBlankSessionId(sessionId)) return undefined;
     return this.sessions.get(sessionId);
   }
 
   touch(sessionId: string): void {
-    if (!sessionId) return;
+    if (isBlankSessionId(sessionId)) return;
 
     const session = this.sessions.get(sessionId);
     if (!session) return;
@@ -190,12 +194,12 @@ class InMemorySessionStore implements SessionStore {
   }
 
   set(sessionId: string, entry: SessionEntry): void {
-    if (!sessionId) return;
+    if (isBlankSessionId(sessionId)) return;
     moveSessionToEnd(this.sessions, sessionId, entry);
   }
 
   remove(sessionId: string): SessionEntry | undefined {
-    if (!sessionId) return undefined;
+    if (isBlankSessionId(sessionId)) return undefined;
 
     const session = this.sessions.get(sessionId);
     this.sessions.delete(sessionId);

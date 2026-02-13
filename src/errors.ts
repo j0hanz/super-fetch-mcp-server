@@ -27,15 +27,19 @@ export class FetchError extends Error {
 
 export function getErrorMessage(error: unknown): string {
   if (isError(error)) return error.message;
-  if (typeof error === 'string' && error.length > 0) return error;
+  if (isNonEmptyString(error)) return error;
   if (isErrorWithMessage(error)) return error.message;
   return formatUnknownError(error);
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0;
 }
 
 function isErrorWithMessage(error: unknown): error is { message: string } {
   if (!isObject(error)) return false;
   const { message } = error;
-  return typeof message === 'string' && message.length > 0;
+  return isNonEmptyString(message);
 }
 
 function formatUnknownError(error: unknown): string {

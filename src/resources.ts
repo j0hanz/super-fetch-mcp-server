@@ -59,17 +59,20 @@ function decodeSegment(value: string): string {
   }
 }
 
+function trimToValue(value: string): string | undefined {
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
 function firstVariableValue(value: TemplateVariableValue): string | undefined {
   if (typeof value === 'string') {
-    const trimmed = value.trim();
-    return trimmed.length > 0 ? trimmed : undefined;
+    return trimToValue(value);
   }
 
   if (Array.isArray(value)) {
     const first = value[0];
     if (typeof first !== 'string') return undefined;
-    const trimmed = first.trim();
-    return trimmed.length > 0 ? trimmed : undefined;
+    return trimToValue(first);
   }
 
   return undefined;

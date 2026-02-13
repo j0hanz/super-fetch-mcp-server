@@ -88,6 +88,14 @@ function decodeHtmlBuffer(htmlBuffer: Uint8Array, encoding?: string): string {
   }
 }
 
+function resolveHtmlContent(
+  html: string | undefined,
+  htmlBuffer: Uint8Array | undefined,
+  encoding: string | undefined
+): string {
+  return htmlBuffer ? decodeHtmlBuffer(htmlBuffer, encoding) : (html ?? '');
+}
+
 function handleTransform(msg: Record<string, unknown>): void {
   if (!isValidMessage(msg)) return;
 
@@ -116,9 +124,7 @@ function handleTransform(msg: Record<string, unknown>): void {
   controllersById.set(id, controller);
 
   try {
-    const content = htmlBuffer
-      ? decodeHtmlBuffer(htmlBuffer, encoding)
-      : (html ?? '');
+    const content = resolveHtmlContent(html, htmlBuffer, encoding);
 
     const result = transformHtmlToMarkdownInProcess(content, url, {
       includeMetadata,

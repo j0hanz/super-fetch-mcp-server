@@ -1102,10 +1102,10 @@ function buildStructuredContent(
 ): Record<string, unknown> {
   const cacheResourceUri = resolveCacheResourceUri(pipeline.cacheKey);
   const truncated = inlineResult.truncated ?? pipeline.data.truncated;
-  let markdown = inlineResult.content;
-  if (pipeline.data.truncated && typeof markdown === 'string') {
-    markdown = appendTruncationMarker(markdown, TRUNCATION_MARKER);
-  }
+  const markdown = applyTruncationMarker(
+    inlineResult.content,
+    pipeline.data.truncated
+  );
   const { metadata } = pipeline.data;
 
   return {
@@ -1122,6 +1122,14 @@ function buildStructuredContent(
     contentSize: inlineResult.contentSize,
     ...(truncated ? { truncated: true } : {}),
   };
+}
+
+function applyTruncationMarker(
+  content: string | undefined,
+  truncated: boolean
+): string | undefined {
+  if (!truncated || typeof content !== 'string') return content;
+  return appendTruncationMarker(content, TRUNCATION_MARKER);
 }
 
 function resolveCacheResourceUri(

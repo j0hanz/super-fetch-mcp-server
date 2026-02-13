@@ -34,13 +34,17 @@ export function isMcpRequestBody(body: unknown): body is McpRequestBody {
   return mcpRequestSchema.safeParse(body).success;
 }
 
+function parseAcceptHeader(
+  header: string | null | undefined
+): readonly string[] {
+  if (!header) return [];
+  return header.split(',').map((value) => value.trim());
+}
+
 export function acceptsEventStream(header: string | null | undefined): boolean {
-  if (!header) return false;
-  return header
-    .split(',')
-    .some((value) =>
-      value.trim().toLowerCase().startsWith('text/event-stream')
-    );
+  return parseAcceptHeader(header).some((value) =>
+    value.trim().toLowerCase().startsWith('text/event-stream')
+  );
 }
 
 function hasAcceptedMediaType(
@@ -48,9 +52,7 @@ function hasAcceptedMediaType(
   exact: string,
   wildcardPrefix: string
 ): boolean {
-  if (!header) return false;
-
-  return header.split(',').some((rawPart) => {
+  return parseAcceptHeader(header).some((rawPart) => {
     const mediaType = rawPart.trim().split(';', 1)[0]?.trim().toLowerCase();
     if (!mediaType) return false;
     if (mediaType === '*/*') return true;

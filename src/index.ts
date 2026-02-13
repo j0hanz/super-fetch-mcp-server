@@ -10,6 +10,10 @@ import { startStdioServer } from './server.js';
 const FORCE_EXIT_TIMEOUT_MS = 10_000;
 let forcedExitTimer: NodeJS.Timeout | undefined;
 
+function toError(value: unknown): Error {
+  return value instanceof Error ? value : new Error(String(value));
+}
+
 function scheduleForcedExit(reason: string): void {
   if (forcedExitTimer) return;
   forcedExitTimer = setTimeout(() => {
@@ -80,8 +84,11 @@ process.on('uncaughtException', (error) => {
 });
 
 process.on('unhandledRejection', (reason) => {
-  const error = reason instanceof Error ? reason : new Error(String(reason));
-  handleFatalError('Unhandled rejection', error, 'UNHANDLED_REJECTION');
+  handleFatalError(
+    'Unhandled rejection',
+    toError(reason),
+    'UNHANDLED_REJECTION'
+  );
 });
 
 try {
@@ -93,11 +100,9 @@ try {
     registerHttpSignalHandlers();
   }
 } catch (error: unknown) {
-  logError(
-    'Failed to start server',
-    error instanceof Error ? error : undefined
-  );
-  const message = error instanceof Error ? error.message : String(error);
+  const resolvedError = toError(error);
+  logError('Failed to start server', resolvedError);
+  const { message } = resolvedError;
   process.stderr.write(`Failed to start server: ${message}\n`);
   process.exitCode = 1;
   scheduleForcedExit('Startup failure');

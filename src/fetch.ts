@@ -790,9 +790,13 @@ function createMissingRedirectLocationFetchError(url: string): FetchError {
   return new FetchError('Redirect response missing Location header', url);
 }
 
+function buildNetworkErrorMessage(url: string): string {
+  return `Network error: Could not reach ${url}`;
+}
+
 function createNetworkFetchError(url: string, message?: string): FetchError {
   return new FetchError(
-    `Network error: Could not reach ${url}`,
+    buildNetworkErrorMessage(url),
     url,
     undefined,
     message ? { message } : {}
@@ -863,15 +867,10 @@ function mapFetchError(
     return new FetchError(error.message, url, 400, { code });
   }
 
-  return new FetchError(
-    `Network error: Could not reach ${url}`,
-    url,
-    undefined,
-    {
-      code,
-      message: error.message,
-    }
-  );
+  return new FetchError(buildNetworkErrorMessage(url), url, undefined, {
+    code,
+    message: error.message,
+  });
 }
 
 type FetchChannelEvent =

@@ -136,10 +136,7 @@ function isBashLine(line: string): boolean {
 }
 
 function detectBashIndicators(lines: readonly string[]): boolean {
-  for (const line of lines) {
-    if (isBashLine(line)) return true;
-  }
-  return false;
+  return lines.some((line) => isBashLine(line));
 }
 
 function detectCssStructure(lines: readonly string[]): boolean {

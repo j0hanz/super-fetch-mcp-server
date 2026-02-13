@@ -89,6 +89,10 @@ function getTagName(node: unknown): string {
   return typeof raw === 'string' ? raw.toUpperCase() : '';
 }
 
+function asError(value: unknown): Error | undefined {
+  return value instanceof Error ? value : undefined;
+}
+
 interface ExtractionContext extends ExtractionResult {
   document: Document;
   truncated?: boolean;
@@ -685,10 +689,7 @@ function extractArticle(
       ...(parsed.siteName != null && { siteName: parsed.siteName }),
     };
   } catch (error: unknown) {
-    logError(
-      'Failed to extract article with Readability',
-      error instanceof Error ? error : undefined
-    );
+    logError('Failed to extract article with Readability', asError(error));
     return null;
   }
 }
@@ -779,10 +780,7 @@ function extractContentContext(
 
     abortPolicy.throwIfAborted(options.signal, url, 'extract:error');
 
-    logError(
-      'Failed to extract content',
-      error instanceof Error ? error : undefined
-    );
+    logError('Failed to extract content', asError(error));
 
     const { document } = parseHTML('<html></html>');
     return { article: null, metadata: {}, document };
@@ -1524,10 +1522,7 @@ export function htmlToMarkdown(
   } catch (error: unknown) {
     if (error instanceof FetchError) throw error;
 
-    logError(
-      'Failed to convert HTML to markdown',
-      error instanceof Error ? error : undefined
-    );
+    logError('Failed to convert HTML to markdown', asError(error));
     throw new FetchError('Failed to convert HTML to markdown', url, 500, {
       reason: 'markdown_convert_failed',
     });

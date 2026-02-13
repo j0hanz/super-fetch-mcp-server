@@ -98,7 +98,7 @@ class TaskManager {
   private removeExpiredTasks(): void {
     const now = Date.now();
     for (const [id, task] of this.tasks) {
-      if (now - task._createdAtMs > task.ttl) {
+      if (this.isExpired(task, now)) {
         this.tasks.delete(id);
       }
     }
@@ -244,7 +244,7 @@ class TaskManager {
     for (const task of this.tasks.values()) {
       if (task.ownerKey !== ownerKey) continue;
 
-      if (now - task._createdAtMs > task.ttl) {
+      if (this.isExpired(task, now)) {
         this.tasks.delete(task.taskId);
         continue;
       }
@@ -414,8 +414,8 @@ class TaskManager {
     for (const waiter of waiters) waiter(task);
   }
 
-  private isExpired(task: InternalTaskState): boolean {
-    return Date.now() - task._createdAtMs > task.ttl;
+  private isExpired(task: InternalTaskState, now = Date.now()): boolean {
+    return now - task._createdAtMs > task.ttl;
   }
 
   private encodeCursor(index: number): string {

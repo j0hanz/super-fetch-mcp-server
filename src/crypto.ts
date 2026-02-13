@@ -33,6 +33,12 @@ function assertAllowedAlgorithm(
   }
 }
 
+function padBuffer(buffer: Buffer, length: number): Buffer {
+  const padded = Buffer.alloc(length);
+  buffer.copy(padded);
+  return padded;
+}
+
 export function timingSafeEqualUtf8(a: string, b: string): boolean {
   const aBuffer = Buffer.from(a, 'utf8');
   const bBuffer = Buffer.from(b, 'utf8');
@@ -42,10 +48,8 @@ export function timingSafeEqualUtf8(a: string, b: string): boolean {
 
   // Avoid early return timing differences on length mismatch.
   const maxLength = Math.max(aBuffer.length, bBuffer.length);
-  const paddedA = Buffer.alloc(maxLength);
-  const paddedB = Buffer.alloc(maxLength);
-  aBuffer.copy(paddedA);
-  bBuffer.copy(paddedB);
+  const paddedA = padBuffer(aBuffer, maxLength);
+  const paddedB = padBuffer(bBuffer, maxLength);
 
   return timingSafeEqual(paddedA, paddedB) && aBuffer.length === bBuffer.length;
 }

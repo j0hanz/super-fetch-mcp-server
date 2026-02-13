@@ -167,6 +167,12 @@ function mapToMcpLevel(
   }
 }
 
+function resolveErrorText(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (typeof err === 'string') return err;
+  return 'unknown error';
+}
+
 function safeWriteStderr(line: string): void {
   if (!stderrAvailable) return;
   if (process.stderr.destroyed || process.stderr.writableEnded) {
@@ -205,13 +211,7 @@ function writeLog(level: LogLevel, message: string, meta?: LogMetadata): void {
       )
       .catch((err: unknown) => {
         if (!isDebugEnabled()) return;
-
-        let errorText = 'unknown error';
-        if (err instanceof Error) {
-          errorText = err.message;
-        } else if (typeof err === 'string') {
-          errorText = err;
-        }
+        const errorText = resolveErrorText(err);
 
         safeWriteStderr(
           `[${createTimestamp()}] WARN: Failed to forward log to MCP${
@@ -222,7 +222,7 @@ function writeLog(level: LogLevel, message: string, meta?: LogMetadata): void {
   } catch (err: unknown) {
     if (!isDebugEnabled()) return;
 
-    const errorText = err instanceof Error ? err.message : 'unknown error';
+    const errorText = resolveErrorText(err);
     safeWriteStderr(
       `[${createTimestamp()}] WARN: Failed to forward log to MCP (sync error): ${errorText}\n`
     );

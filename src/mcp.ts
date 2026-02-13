@@ -140,6 +140,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return isObject(value);
 }
 
+function normalizeSendNotification(
+  sendNotification: unknown
+): ((notification: ProgressNotification) => Promise<void>) | undefined {
+  if (typeof sendNotification !== 'function') return undefined;
+  const notify = sendNotification as (
+    notification: ProgressNotification
+  ) => Promise<void> | void;
+  return async (notification: ProgressNotification): Promise<void> => {
+    await Promise.resolve(notify(notification));
+  };
+}
+
 function parseHandlerExtra(extra: unknown): HandlerExtra | undefined {
   if (!isObject(extra)) return undefined;
 
@@ -161,15 +173,10 @@ function parseHandlerExtra(extra: unknown): HandlerExtra | undefined {
     parsed.requestId = requestId;
   }
 
-  if (typeof sendNotification === 'function') {
-    const notify = sendNotification as (
-      notification: ProgressNotification
-    ) => Promise<void> | void;
-    parsed.sendNotification = async (
-      notification: ProgressNotification
-    ): Promise<void> => {
-      await Promise.resolve(notify(notification));
-    };
+  const normalizedSendNotification =
+    normalizeSendNotification(sendNotification);
+  if (normalizedSendNotification) {
+    parsed.sendNotification = normalizedSendNotification;
   }
 
   return parsed;

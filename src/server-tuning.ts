@@ -15,6 +15,14 @@ interface HttpServerTuningTarget {
 
 const DROP_LOG_INTERVAL_MS = 10_000;
 
+function setIfDefined<T>(
+  value: T | undefined,
+  setter: (resolved: T) => void
+): void {
+  if (value === undefined) return;
+  setter(value);
+}
+
 export function applyHttpServerTuning(server: HttpServerTuningTarget): void {
   const {
     headersTimeoutMs,
@@ -25,25 +33,21 @@ export function applyHttpServerTuning(server: HttpServerTuningTarget): void {
     maxConnections,
   } = config.server.http;
 
-  if (headersTimeoutMs !== undefined) {
-    server.headersTimeout = headersTimeoutMs;
-  }
-
-  if (requestTimeoutMs !== undefined) {
-    server.requestTimeout = requestTimeoutMs;
-  }
-
-  if (keepAliveTimeoutMs !== undefined) {
-    server.keepAliveTimeout = keepAliveTimeoutMs;
-  }
-
-  if (keepAliveTimeoutBufferMs !== undefined) {
-    server.keepAliveTimeoutBuffer = keepAliveTimeoutBufferMs;
-  }
-
-  if (maxHeadersCount !== undefined) {
-    server.maxHeadersCount = maxHeadersCount;
-  }
+  setIfDefined(headersTimeoutMs, (value) => {
+    server.headersTimeout = value;
+  });
+  setIfDefined(requestTimeoutMs, (value) => {
+    server.requestTimeout = value;
+  });
+  setIfDefined(keepAliveTimeoutMs, (value) => {
+    server.keepAliveTimeout = value;
+  });
+  setIfDefined(keepAliveTimeoutBufferMs, (value) => {
+    server.keepAliveTimeoutBuffer = value;
+  });
+  setIfDefined(maxHeadersCount, (value) => {
+    server.maxHeadersCount = value;
+  });
 
   if (typeof maxConnections === 'number' && maxConnections > 0) {
     server.maxConnections = maxConnections;

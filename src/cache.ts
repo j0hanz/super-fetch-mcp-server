@@ -165,13 +165,17 @@ class InMemoryCacheStore {
     return config.cache.enabled;
   }
 
+  private isExpired(entry: StoredCacheEntry, now = Date.now()): boolean {
+    return entry.expiresAtMs <= now;
+  }
+
   keys(): readonly string[] {
     if (!this.isEnabled()) return [];
     const now = Date.now();
 
     const result: string[] = [];
     for (const [key, entry] of this.entries) {
-      if (entry.expiresAtMs > now) result.push(key);
+      if (!this.isExpired(entry, now)) result.push(key);
     }
     return result;
   }
@@ -210,7 +214,7 @@ class InMemoryCacheStore {
     if (!entry) return undefined;
 
     const now = Date.now();
-    if (entry.expiresAtMs <= now) {
+    if (this.isExpired(entry, now)) {
       this.delete(cacheKey);
       this.notify(cacheKey, true);
       return undefined;

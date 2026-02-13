@@ -7,6 +7,10 @@ export interface CancellableTimeout<T> {
   cancel: () => void;
 }
 
+function isAbortError(error: unknown): boolean {
+  return isError(error) && error.name === 'AbortError';
+}
+
 export function createUnrefTimeout<T>(
   timeoutMs: number,
   value: T
@@ -17,7 +21,7 @@ export function createUnrefTimeout<T>(
     ref: false,
     signal: controller.signal,
   }).catch((err: unknown) => {
-    if (isError(err) && err.name === 'AbortError') {
+    if (isAbortError(err)) {
       return new Promise<T>(() => {});
     }
     throw err;

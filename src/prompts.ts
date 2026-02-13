@@ -12,22 +12,14 @@ export function registerGetHelpPrompt(
   iconInfo?: IconInfo
 ): void {
   const description = 'Return the Fetch URL usage instructions.';
+  const iconConfig = iconInfo ? { icons: [{ ...iconInfo }] } : {};
 
   server.registerPrompt(
     'get-help',
     {
       title: 'Get Help',
       description,
-      ...(iconInfo
-        ? {
-            icons: [
-              {
-                src: iconInfo.src,
-                mimeType: iconInfo.mimeType,
-              },
-            ],
-          }
-        : {}),
+      ...iconConfig,
     },
     (): GetPromptResult => ({
       description,

@@ -296,34 +296,26 @@ interface WorkerResourceLimits {
 function resolveWorkerResourceLimits(): WorkerResourceLimits | undefined {
   const limits: WorkerResourceLimits = {};
   let hasAny = false;
-  const maxOldGenerationSizeMb = parseOptionalInteger(
-    env['TRANSFORM_WORKER_MAX_OLD_GENERATION_MB'],
-    1
-  );
-  const maxYoungGenerationSizeMb = parseOptionalInteger(
-    env['TRANSFORM_WORKER_MAX_YOUNG_GENERATION_MB'],
-    1
-  );
-  const codeRangeSizeMb = parseOptionalInteger(
-    env['TRANSFORM_WORKER_CODE_RANGE_MB'],
-    1
-  );
-  const stackSizeMb = parseOptionalInteger(env['TRANSFORM_WORKER_STACK_MB'], 1);
 
-  if (maxOldGenerationSizeMb !== undefined) {
-    limits.maxOldGenerationSizeMb = maxOldGenerationSizeMb;
-    hasAny = true;
-  }
-  if (maxYoungGenerationSizeMb !== undefined) {
-    limits.maxYoungGenerationSizeMb = maxYoungGenerationSizeMb;
-    hasAny = true;
-  }
-  if (codeRangeSizeMb !== undefined) {
-    limits.codeRangeSizeMb = codeRangeSizeMb;
-    hasAny = true;
-  }
-  if (stackSizeMb !== undefined) {
-    limits.stackSizeMb = stackSizeMb;
+  const entries: [keyof WorkerResourceLimits, number | undefined][] = [
+    [
+      'maxOldGenerationSizeMb',
+      parseOptionalInteger(env['TRANSFORM_WORKER_MAX_OLD_GENERATION_MB'], 1),
+    ],
+    [
+      'maxYoungGenerationSizeMb',
+      parseOptionalInteger(env['TRANSFORM_WORKER_MAX_YOUNG_GENERATION_MB'], 1),
+    ],
+    [
+      'codeRangeSizeMb',
+      parseOptionalInteger(env['TRANSFORM_WORKER_CODE_RANGE_MB'], 1),
+    ],
+    ['stackSizeMb', parseOptionalInteger(env['TRANSFORM_WORKER_STACK_MB'], 1)],
+  ];
+
+  for (const [key, value] of entries) {
+    if (value === undefined) continue;
+    limits[key] = value;
     hasAny = true;
   }
 

@@ -153,6 +153,10 @@ function buildTokenRegex(tokens: Set<string>): RegExp {
   );
 }
 
+function addTokens(target: Set<string>, tokens: readonly string[]): void {
+  for (const token of tokens) target.add(token);
+}
+
 function getPromoMatchers(
   currentConfig: NoiseRemovalConfig,
   flags: NoiseContext['flags']
@@ -161,16 +165,18 @@ function getPromoMatchers(
   const aggressiveTokens = new Set<string>();
 
   if (currentConfig.aggressiveMode) {
-    for (const t of PROMO_TOKENS_AGGRESSIVE) aggressiveTokens.add(t);
+    addTokens(aggressiveTokens, PROMO_TOKENS_AGGRESSIVE);
   }
 
-  if (flags.cookieBanners)
-    for (const t of PROMO_TOKENS_BY_CATEGORY['cookie-banners'])
-      baseTokens.add(t);
-  if (flags.newsletters)
-    for (const t of PROMO_TOKENS_BY_CATEGORY['newsletters']) baseTokens.add(t);
-  if (flags.socialShare)
-    for (const t of PROMO_TOKENS_BY_CATEGORY['social-share']) baseTokens.add(t);
+  if (flags.cookieBanners) {
+    addTokens(baseTokens, PROMO_TOKENS_BY_CATEGORY['cookie-banners']);
+  }
+  if (flags.newsletters) {
+    addTokens(baseTokens, PROMO_TOKENS_BY_CATEGORY['newsletters']);
+  }
+  if (flags.socialShare) {
+    addTokens(baseTokens, PROMO_TOKENS_BY_CATEGORY['social-share']);
+  }
 
   for (const t of currentConfig.extraTokens) {
     const n = t.toLowerCase().trim();

@@ -41,6 +41,21 @@ function toErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+type ParsedValues = ReturnType<typeof parseArgs>['values'];
+
+function toBoolean(value: ParsedValues[keyof ParsedValues]): boolean {
+  return value === true;
+}
+
+function buildCliValues(values: ParsedValues): CliValues {
+  const { stdio, help, version } = values;
+  return {
+    stdio: toBoolean(stdio),
+    help: toBoolean(help),
+    version: toBoolean(version),
+  };
+}
+
 export function renderCliUsage(): string {
   return `${usageLines.join('\n')}\n`;
 }
@@ -56,11 +71,7 @@ export function parseCliArgs(args: readonly string[]): CliParseResult {
 
     return {
       ok: true,
-      values: {
-        stdio: values.stdio,
-        help: values.help,
-        version: values.version,
-      },
+      values: buildCliValues(values),
     };
   } catch (error: unknown) {
     return {

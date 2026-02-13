@@ -140,16 +140,14 @@ interface AuthenticatedContext extends RequestContext {
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.statusCode = status;
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('Cache-Control', 'no-store');
+  setNoStoreHeaders(res);
   res.end(JSON.stringify(body));
 }
 
 function sendText(res: ServerResponse, status: number, body: string): void {
   res.statusCode = status;
   res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('Cache-Control', 'no-store');
+  setNoStoreHeaders(res);
   res.end(body);
 }
 
@@ -157,6 +155,11 @@ function sendEmpty(res: ServerResponse, status: number): void {
   res.statusCode = status;
   res.setHeader('Content-Length', '0');
   res.end();
+}
+
+function setNoStoreHeaders(res: ServerResponse): void {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Cache-Control', 'no-store');
 }
 
 function drainRequest(req: IncomingMessage): void {

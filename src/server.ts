@@ -108,6 +108,10 @@ function createServerInfo(icons?: IconInfo[]): {
   };
 }
 
+function toIconList(icon?: IconInfo): IconInfo[] | undefined {
+  return icon ? [icon] : undefined;
+}
+
 /* -------------------------------------------------------------------------------------------------
  * Server lifecycle
  * ------------------------------------------------------------------------------------------------- */
@@ -137,16 +141,7 @@ async function createMcpServerWithOptions(
     serverConfig.instructions = serverInstructions;
   }
 
-  const serverInfo = createServerInfo(
-    localIcon
-      ? [
-          {
-            src: localIcon.src,
-            mimeType: localIcon.mimeType,
-          },
-        ]
-      : undefined
-  );
+  const serverInfo = createServerInfo(toIconList(localIcon));
   const server = new McpServer(serverInfo, serverConfig);
 
   if (options?.registerObservabilityServer ?? true) {

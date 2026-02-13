@@ -2,7 +2,7 @@ import { isIP, SocketAddress } from 'node:net';
 import { domainToASCII } from 'node:url';
 
 export function normalizeHost(value: string): string | null {
-  const trimmedLower = value.trim().toLowerCase();
+  const trimmedLower = trimToNull(value)?.toLowerCase();
   if (!trimmedLower) return null;
 
   const first = takeFirstHostValue(trimmedLower);
@@ -28,10 +28,7 @@ function takeFirstHostValue(value: string): string | null {
   // Faster than split(',') for large forwarded headers; preserves behavior.
   const commaIndex = value.indexOf(',');
   const first = commaIndex === -1 ? value : value.slice(0, commaIndex);
-  if (!first) return null;
-
-  const trimmed = first.trim();
-  return trimmed ? trimmed : null;
+  return first ? trimToNull(first) : null;
 }
 
 function stripIpv6Brackets(value: string): string | null {
@@ -52,7 +49,7 @@ function isIpV6Literal(value: string): boolean {
 }
 
 function normalizeHostname(value: string): string | null {
-  const trimmed = value.trim().toLowerCase();
+  const trimmed = trimToNull(value)?.toLowerCase();
   if (!trimmed) return null;
 
   if (isIP(trimmed)) return stripTrailingDots(trimmed);
@@ -71,6 +68,11 @@ function parseHostWithUrl(value: string): string | null {
   } catch {
     return null;
   }
+}
+
+function trimToNull(value: string): string | null {
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
 }
 
 function stripTrailingDots(value: string): string {
