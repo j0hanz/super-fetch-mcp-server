@@ -25,29 +25,38 @@ import { isObject } from './type-guards.js';
  * Tasks API schemas
  * ------------------------------------------------------------------------------------------------- */
 
-const TaskGetSchema = z.strictObject({
-  method: z.literal('tasks/get'),
-  params: z.strictObject({ taskId: z.string() }),
-});
+const TaskGetSchema = z
+  .object({
+    method: z.literal('tasks/get'),
+    params: z.object({ taskId: z.string() }).loose(),
+  })
+  .loose();
 
-const TaskListSchema = z.strictObject({
-  method: z.literal('tasks/list'),
-  params: z
-    .strictObject({
-      cursor: z.string().optional(),
-    })
-    .optional(),
-});
+const TaskListSchema = z
+  .object({
+    method: z.literal('tasks/list'),
+    params: z
+      .object({
+        cursor: z.string().optional(),
+      })
+      .loose()
+      .optional(),
+  })
+  .loose();
 
-const TaskCancelSchema = z.strictObject({
-  method: z.literal('tasks/cancel'),
-  params: z.strictObject({ taskId: z.string() }),
-});
+const TaskCancelSchema = z
+  .object({
+    method: z.literal('tasks/cancel'),
+    params: z.object({ taskId: z.string() }).loose(),
+  })
+  .loose();
 
-const TaskResultSchema = z.strictObject({
-  method: z.literal('tasks/result'),
-  params: z.strictObject({ taskId: z.string() }),
-});
+const TaskResultSchema = z
+  .object({
+    method: z.literal('tasks/result'),
+    params: z.object({ taskId: z.string() }).loose(),
+  })
+  .loose();
 
 /* -------------------------------------------------------------------------------------------------
  * Tool call interception (tools/call) with task support

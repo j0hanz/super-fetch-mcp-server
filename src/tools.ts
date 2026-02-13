@@ -1362,7 +1362,7 @@ function resolveSessionIdFromExtra(extra: unknown): string | undefined {
 export function registerTools(server: McpServer): void {
   if (!config.tools.enabled.includes(FETCH_URL_TOOL_NAME)) return;
 
-  server.registerTool(
+  const registeredTool = server.registerTool(
     TOOL_DEFINITION.name,
     {
       title: TOOL_DEFINITION.title,
@@ -1371,9 +1371,9 @@ export function registerTools(server: McpServer): void {
       outputSchema: TOOL_DEFINITION.outputSchema,
       annotations: TOOL_DEFINITION.annotations,
       execution: TOOL_DEFINITION.execution,
-      // Use specific tool icon here
       icons: [TOOL_ICON],
     } as { inputSchema: typeof fetchUrlInputSchema } & Record<string, unknown>,
     withRequestContextIfMissing(TOOL_DEFINITION.handler)
   );
+  registeredTool.execution = TOOL_DEFINITION.execution;
 }
