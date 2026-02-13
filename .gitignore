@@ -27,6 +27,7 @@ yarn-debug.log*
 yarn-error.log*
 logs/
 .memdb/
+.tmp/
 
 # Editor directories and files
 .github/*
@@ -39,6 +40,7 @@ logs/
 *.swo
 *~
 .DS_Store
+.agents
 
 # OS files
 Thumbs.db
