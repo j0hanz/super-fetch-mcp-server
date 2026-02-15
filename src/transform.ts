@@ -3226,20 +3226,17 @@ function resolveWorkerFallback(
     return transformInputInProcess(htmlOrBuffer, url, options);
   }
 
-  if (error instanceof FetchError) throw error;
   abortPolicy.throwIfAborted(options.signal, url, 'transform:worker-fallback');
 
+  if (error instanceof FetchError) throw error;
+
   const message = getErrorMessage(error);
-  logWarn('Transform worker failed; refusing in-process fallback', {
+  logWarn('Transform worker failed; falling back to in-process', {
     url: redactUrl(url),
     error: message,
   });
 
-  throw new FetchError('Transform worker failed', url, 503, {
-    reason: 'worker_failed',
-    stage: 'transform:worker',
-    error: message,
-  });
+  return transformInputInProcess(htmlOrBuffer, url, options);
 }
 
 async function runWorkerTransformWithFallback(

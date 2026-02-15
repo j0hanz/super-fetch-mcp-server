@@ -320,6 +320,52 @@ describe('fetchUrlToolHandler', () => {
     }
   });
 
+  it('persists truncation marker in cached markdown payloads', async (t) => {
+    const originalCacheEnabled = config.cache.enabled;
+    const originalInlineLimit = config.constants.maxInlineContentChars;
+    const originalMaxHtmlSize = config.constants.maxHtmlSize;
+    const originalFetchMax = config.fetcher.maxContentLength;
+    config.cache.enabled = true;
+    config.constants.maxInlineContentChars = 10000;
+    config.constants.maxHtmlSize = 1000;
+    config.fetcher.maxContentLength = 200;
+
+    const url = 'https://example.com/fetch-size-truncate-cache';
+    const html = `<html><body><p>${'a'.repeat(2000)}</p></body></html>`;
+
+    try {
+      t.mock.method(globalThis, 'fetch', async () => {
+        return new Response(html, {
+          status: 200,
+          headers: { 'content-type': 'text/html' },
+        });
+      });
+
+      await fetchUrlToolHandler({ url });
+
+      const normalizedUrl = normalizeUrl(url).normalizedUrl;
+      const cacheKey = cache.createCacheKey('markdown', normalizedUrl);
+      assert.ok(cacheKey);
+
+      const cachedEntry = cache.get(cacheKey);
+      assert.ok(cachedEntry);
+
+      const payload = JSON.parse(cachedEntry.content) as {
+        markdown?: unknown;
+        truncated?: unknown;
+      };
+
+      assert.equal(payload.truncated, true);
+      assert.equal(typeof payload.markdown, 'string');
+      assert.ok(String(payload.markdown).includes('...[truncated]'));
+    } finally {
+      config.cache.enabled = originalCacheEnabled;
+      config.constants.maxInlineContentChars = originalInlineLimit;
+      config.constants.maxHtmlSize = originalMaxHtmlSize;
+      config.fetcher.maxContentLength = originalFetchMax;
+    }
+  });
+
   it('returns truncated markdown even when cache + http mode are enabled', async (t) => {
     const originalHttpMode = config.runtime.httpMode;
     const originalCacheEnabled = config.cache.enabled;

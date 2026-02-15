@@ -1,0 +1,44 @@
+import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
+import path from 'node:path';
+import process from 'node:process';
+import test from 'node:test';
+import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
+
+const execFileAsync = promisify(execFile);
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+test('mcp fetch-url client supports task mode', async () => {
+  const repoRoot = path.resolve(__dirname, '..');
+  const clientPath = path.join(
+    repoRoot,
+    'dist',
+    'examples',
+    'mcp-fetch-url-client.js'
+  );
+  const mockServerPath = path.join(
+    repoRoot,
+    'tests',
+    'fixtures',
+    'mock-fetch-url-server.js'
+  );
+
+  const { stdout } = await execFileAsync(
+    process.execPath,
+    [
+      clientPath,
+      'https://example.com/mock',
+      '--task',
+      '--server',
+      mockServerPath,
+      '--cwd',
+      repoRoot,
+    ],
+    { cwd: repoRoot }
+  );
+
+  assert.match(stdout, /# Mock Fetch/);
+  assert.match(stdout, /https:\/\/example.com\/mock/);
+});

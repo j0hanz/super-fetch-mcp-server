@@ -21,6 +21,15 @@ function deserializePayload(value: string): CachedPayload | undefined {
   return JSON.parse(value) as CachedPayload;
 }
 
+function serializeString(value: string): string {
+  return JSON.stringify(value);
+}
+
+function deserializeString(value: string): string | undefined {
+  const parsed = JSON.parse(value) as unknown;
+  return typeof parsed === 'string' ? parsed : undefined;
+}
+
 function buildTestUrl(): string {
   return 'https://example.com/pipeline-test';
 }
@@ -163,6 +172,65 @@ describe('executeFetchPipeline', () => {
     assert.equal(result.url, expectedRaw);
   });
 
+  it('revalidates transformed raw URLs against blocked hosts', async () => {
+    const blockedHost = 'raw.githubusercontent.com';
+    const hadBlockedHost = config.security.blockedHosts.has(blockedHost);
+    config.security.blockedHosts.add(blockedHost);
+
+    try {
+      await assert.rejects(
+        () =>
+          executeFetchPipeline<string>({
+            url: 'https://github.com/octocat/Hello-World/blob/main/README.md',
+            cacheNamespace: 'pipeline-test-raw-blocked-host',
+            transform: async () => 'unreachable',
+          }),
+        (error) => {
+          assert.ok(error instanceof Error);
+          assert.match(
+            error.message,
+            /Blocked host: raw\.githubusercontent\.com/i
+          );
+          return true;
+        }
+      );
+    } finally {
+      if (!hadBlockedHost) {
+        config.security.blockedHosts.delete(blockedHost);
+      }
+    }
+  });
+
+  it('rejects when a transformed raw URL exceeds max URL length', async () => {
+    const maxLen = config.constants.maxUrlLength;
+    const githubPrefix = 'https://github.com/o/r/blob/main/';
+    const rawPrefix = 'https://raw.githubusercontent.com/o/r/main/';
+    const delta = rawPrefix.length - githubPrefix.length;
+
+    assert.ok(delta > 0);
+
+    const path = 'a'.repeat(maxLen - githubPrefix.length);
+    const url = `${githubPrefix}${path}`;
+    assert.equal(url.length, maxLen);
+
+    await assert.rejects(
+      () =>
+        executeFetchPipeline<string>({
+          url,
+          cacheNamespace: 'pipeline-test-raw-length-revalidation',
+          transform: async () => 'unreachable',
+        }),
+      (error) => {
+        assert.ok(error instanceof Error);
+        assert.match(
+          error.message,
+          new RegExp(`maximum length of ${maxLen} characters`, 'i')
+        );
+        return true;
+      }
+    );
+  });
+
   it('caches final redirect URL under an alias key', async (t) => {
     const originalCacheEnabled = config.cache.enabled;
     config.cache.enabled = true;
@@ -190,6 +258,8 @@ describe('executeFetchPipeline', () => {
       const result = await executeFetchPipeline<string>({
         url,
         cacheNamespace,
+        serialize: serializeString,
+        deserialize: deserializeString,
         transform: async (input) => {
           const text = new TextDecoder(input.encoding).decode(input.buffer);
           return text;
@@ -205,6 +275,20 @@ describe('executeFetchPipeline', () => {
       assert.ok(cache.get(primaryKey));
       assert.ok(cache.get(finalKey));
       assert.equal(result.finalUrl, finalUrl);
+
+      const cached = await executeFetchPipeline<string>({
+        url,
+        cacheNamespace,
+        serialize: serializeString,
+        deserialize: deserializeString,
+        transform: async () => {
+          throw new Error('transform should not run on cache hit');
+        },
+      });
+
+      assert.equal(cached.fromCache, true);
+      assert.equal(cached.finalUrl, finalUrl);
+      assert.equal(callCount, 2);
     } finally {
       config.cache.enabled = originalCacheEnabled;
     }

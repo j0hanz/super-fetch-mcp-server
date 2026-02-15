@@ -286,6 +286,20 @@ describe('readResponseText', () => {
     assert.equal(result.size, 5);
   });
 
+  it('falls back to passthrough when declared encoding cannot be decoded', async () => {
+    const response = new Response('hello', {
+      status: 200,
+      headers: {
+        'content-type': 'text/plain; charset=utf-8',
+        'content-encoding': 'br',
+      },
+    });
+
+    const result = await readResponseText(response, 'https://example.com', 64);
+    assert.equal(result.text, 'hello');
+    assert.equal(result.size, 5);
+  });
+
   it('allows responses with identity Content-Encoding', async () => {
     const response = new Response('hello', {
       status: 200,

@@ -20,8 +20,8 @@ describe('parseCachedMarkdownResult', () => {
     const parsed = parseCachedMarkdownResult(cached);
 
     assert.ok(parsed);
-    assert.equal(parsed.content, 'Hi');
-    assert.equal(parsed.markdown, 'Hi');
+    assert.equal(parsed.content, 'Hi...[truncated]');
+    assert.equal(parsed.markdown, 'Hi...[truncated]');
     assert.equal(parsed.title, undefined);
     assert.equal(parsed.truncated, true);
   });

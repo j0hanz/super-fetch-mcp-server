@@ -687,8 +687,22 @@ interface UrlResolution {
 
 function resolveNormalizedUrl(url: string): UrlResolution {
   const { normalizedUrl: validatedUrl } = normalizeUrl(url);
-  const { url: normalizedUrl, transformed } = transformToRawUrl(validatedUrl);
-  return { normalizedUrl, originalUrl: validatedUrl, transformed };
+  const transformedResult = transformToRawUrl(validatedUrl);
+  if (!transformedResult.transformed) {
+    return {
+      normalizedUrl: validatedUrl,
+      originalUrl: validatedUrl,
+      transformed: false,
+    };
+  }
+
+  // Re-validate transformed URLs so blocked-host and length policies still apply.
+  const { normalizedUrl: transformedUrl } = normalizeUrl(transformedResult.url);
+  return {
+    normalizedUrl: transformedUrl,
+    originalUrl: validatedUrl,
+    transformed: true,
+  };
 }
 
 function logRawUrlTransformation(resolvedUrl: UrlResolution): void {
@@ -750,11 +764,13 @@ function attemptCacheRetrieval<T>(params: {
   }
 
   logDebug('Cache hit', { namespace: cacheNamespace, url: normalizedUrl });
+  const finalUrl = cached.url !== normalizedUrl ? cached.url : undefined;
 
   return {
     data,
     fromCache: true,
     url: normalizedUrl,
+    ...(finalUrl ? { finalUrl } : {}),
     fetchedAt: cached.fetchedAt,
     cacheKey,
   };
@@ -1056,12 +1072,17 @@ export function parseCachedMarkdownResult(
 
   const metadata = normalizeExtractedMetadata(result.data.metadata);
 
+  const truncated = result.data.truncated ?? false;
+  const persistedMarkdown = truncated
+    ? appendTruncationMarker(markdown, TRUNCATION_MARKER)
+    : markdown;
+
   return {
-    content: markdown,
-    markdown,
+    content: persistedMarkdown,
+    markdown: persistedMarkdown,
     title: result.data.title,
     ...(metadata ? { metadata } : {}),
-    truncated: result.data.truncated ?? false,
+    truncated,
   };
 }
 
@@ -1083,8 +1104,12 @@ const markdownTransform = async (
 };
 
 function serializeMarkdownResult(result: MarkdownPipelineResult): string {
+  const persistedMarkdown = result.truncated
+    ? appendTruncationMarker(result.markdown, TRUNCATION_MARKER)
+    : result.markdown;
+
   return JSON.stringify({
-    markdown: result.markdown,
+    markdown: persistedMarkdown,
     title: result.title,
     metadata: result.metadata,
     truncated: result.truncated,

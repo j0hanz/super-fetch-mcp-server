@@ -52,6 +52,7 @@ URL → Validate → DNS Preflight → HTTP Fetch → Decompress
 ```text
 fetch-url-mcp/
 ├── assets/              # Server icon (logo.svg)
+├── examples/            # Client examples
 ├── scripts/             # Build & test orchestration
 ├── src/
 │   ├── workers/         # Worker-thread child for HTML transforms
@@ -94,6 +95,23 @@ Add to your MCP client configuration:
   }
 }
 ```
+
+## Client Example (CLI)
+
+Build the server and examples, then run the client:
+
+```bash
+npm run build
+node dist/examples/mcp-fetch-url-client.js https://example.com
+```
+
+Optional flags:
+
+- `--full` reads the cached markdown resource to avoid inline truncation.
+- `--task` enables task-based execution with streamed status updates.
+- `--task-ttl <ms>` sets task TTL; `--task-poll <ms>` sets poll interval.
+- `--http http://localhost:3000/mcp` connects to the Streamable HTTP server.
+- Progress updates (when emitted) are printed to stderr.
 
 ## Installation
 

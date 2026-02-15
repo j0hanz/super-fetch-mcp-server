@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, describe, it } from 'node:test';
+import { Worker } from 'node:worker_threads';
 
 import { config } from '../dist/config.js';
 import {
@@ -90,6 +91,27 @@ describe('transform worker options', () => {
 
       assert.equal(result.truncated, true);
       assert.ok(result.markdown.includes('# Header'));
+    });
+  });
+
+  it('falls back to in-process transform when worker dispatch fails', async (t) => {
+    await withTransformWorkerConfig('threads', 1, async () => {
+      t.mock.method(Worker.prototype, 'postMessage', () => {
+        throw new Error('forced worker dispatch failure');
+      });
+
+      const htmlBuffer = encoder.encode(
+        '<html><body><p>worker fallback</p></body></html>'
+      );
+      const result = await transformBufferToMarkdown(
+        htmlBuffer,
+        'https://example.com/worker-dispatch-failure',
+        {
+          includeMetadata: false,
+        }
+      );
+
+      assert.ok(result.markdown.includes('worker fallback'));
     });
   });
 });

@@ -33,8 +33,10 @@ const CONFIG = {
     tsBuildInfo: [
       '.tsbuildinfo',
       '.tsbuildinfo.build',
+      '.tsbuildinfo.examples',
       'tsconfig.tsbuildinfo',
       'tsconfig.build.tsbuildinfo',
+      'tsconfig.examples.tsbuildinfo',
     ],
     get distAssets() {
       return join(this.dist, 'assets');
@@ -48,6 +50,7 @@ const CONFIG = {
   },
   commands: {
     tsc: ['node', [BIN.tsc, '-p', 'tsconfig.build.json']],
+    tscExamples: ['node', [BIN.tsc, '-p', 'tsconfig.examples.json']],
     tscCheck: ['node', [BIN.tsc, '-p', 'tsconfig.json', '--noEmit']],
     tscTestsCheck: ['node', [BIN.tsc, '-p', 'tsconfig.tests.json', '--noEmit']],
   },
@@ -213,6 +216,8 @@ const BuildTasks = {
   async compile() {
     const [cmd, args] = CONFIG.commands.tsc;
     await System.exec(cmd, args);
+    const [examplesCmd, examplesArgs] = CONFIG.commands.tscExamples;
+    await System.exec(examplesCmd, examplesArgs);
   },
 
   async validate() {

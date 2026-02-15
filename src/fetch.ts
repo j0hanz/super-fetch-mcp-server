@@ -582,6 +582,13 @@ class SafeDnsResolver {
       throw createAbortSignalError();
     }
 
+    if (this.isBlockedHostname(normalizedHostname)) {
+      throw createErrorWithCode(
+        `Blocked host: ${normalizedHostname}. Internal hosts are not allowed`,
+        'EBLOCKED'
+      );
+    }
+
     if (isIP(normalizedHostname)) {
       if (this.ipBlocker.isBlockedIp(normalizedHostname)) {
         throw createErrorWithCode(
@@ -1598,12 +1605,12 @@ function createDecompressor(
 }
 
 function createPumpedStream(
-  initialChunk: Uint8Array,
+  initialChunk: Uint8Array | undefined,
   reader: ReadableStreamDefaultReader<Uint8Array>
 ): ReadableStream<Uint8Array> {
   return new ReadableStream({
     start(controller) {
-      if (initialChunk.byteLength > 0) {
+      if (initialChunk && initialChunk.byteLength > 0) {
         controller.enqueue(initialChunk);
       }
     },
@@ -1623,33 +1630,6 @@ function createPumpedStream(
       void reader.cancel(reason).catch(() => undefined);
     },
   });
-}
-
-function isLikelyCompressed(
-  chunk: Uint8Array,
-  encoding: 'gzip' | 'deflate' | 'br'
-): boolean {
-  if (chunk.byteLength === 0) return false;
-
-  if (encoding === 'gzip') {
-    return chunk.byteLength >= 2 && chunk[0] === 0x1f && chunk[1] === 0x8b;
-  }
-
-  if (encoding === 'deflate') {
-    if (chunk.byteLength < 2) return false;
-    const byte0 = chunk[0] ?? 0;
-    const byte1 = chunk[1] ?? 0;
-    const cm = byte0 & 0x0f;
-    if (cm !== 8) return false;
-    return (byte0 * 256 + byte1) % 31 === 0;
-  }
-  let nonPrintable = 0;
-  const limit = Math.min(chunk.length, 50);
-  for (let i = 0; i < limit; i += 1) {
-    const b = chunk[i] ?? 0;
-    if (b < 0x09 || (b > 0x0d && b < 0x20) || b === 0x7f) nonPrintable += 1;
-  }
-  return nonPrintable / limit > 0.1;
 }
 
 async function decodeResponseIfNeeded(
@@ -1674,70 +1654,32 @@ async function decodeResponseIfNeeded(
   }
 
   if (!response.body) return response;
-
-  // Peek at first chunk to check if actually compressed
-  const reader = response.body.getReader();
-  let initialChunk: Uint8Array;
-  try {
-    const { done, value } = await reader.read();
-    if (done) {
-      return new Response(null, {
-        status: response.status,
-        statusText: response.statusText,
-        headers: response.headers,
-      });
-    }
-    initialChunk = value;
-  } catch (error) {
-    // If read fails, throw properly
-    throw new FetchError(
-      `Failed to read response body: ${isError(error) ? error.message : String(error)}`,
-      url,
-      502
-    );
-  }
+  const [decodeBranch, passthroughBranch] = response.body.tee();
 
   const decodeOrder = encodings
     .slice()
     .reverse()
     .filter(isSupportedContentEncoding);
-  const firstDecodeEncoding = decodeOrder[0];
-
-  if (
-    !firstDecodeEncoding ||
-    !isLikelyCompressed(initialChunk, firstDecodeEncoding)
-  ) {
-    const body = createPumpedStream(initialChunk, reader);
-    const headers = new Headers(response.headers);
-    headers.delete('content-encoding');
-    headers.delete('content-length');
-    return new Response(body, {
-      status: response.status,
-      statusText: response.statusText,
-      headers,
-    });
-  }
 
   const decompressors = decodeOrder.map((encoding) =>
     createDecompressor(encoding)
   );
-
-  const sourceStream = Readable.fromWeb(
-    toNodeReadableStream(
-      createPumpedStream(initialChunk, reader),
-      url,
-      'response:decode-content-encoding'
-    )
+  const decodeSource = Readable.fromWeb(
+    toNodeReadableStream(decodeBranch, url, 'response:decode-content-encoding')
   );
   const decodedNodeStream = new PassThrough();
-  const pipelinePromise = pipeline([
-    sourceStream,
+  const decodedPipeline = pipeline([
+    decodeSource,
     ...decompressors,
     decodedNodeStream,
   ]);
 
-  const abortHandler = (): void => {
-    sourceStream.destroy();
+  const headers = new Headers(response.headers);
+  headers.delete('content-encoding');
+  headers.delete('content-length');
+
+  const abortDecodePipeline = (): void => {
+    decodeSource.destroy();
     for (const decompressor of decompressors) {
       decompressor.destroy();
     }
@@ -1745,36 +1687,70 @@ async function decodeResponseIfNeeded(
   };
 
   if (signal) {
-    signal.addEventListener('abort', abortHandler, { once: true });
+    signal.addEventListener('abort', abortDecodePipeline, { once: true });
   }
 
-  void pipelinePromise.catch((error: unknown) => {
+  void decodedPipeline.catch((error: unknown) => {
     decodedNodeStream.destroy(
       error instanceof Error ? error : new Error(String(error))
     );
   });
 
-  const decodedBody = toWebReadableStream(
+  const decodedBodyStream = toWebReadableStream(
     decodedNodeStream,
     url,
     'response:decode-content-encoding'
   );
+  const decodedReader = decodedBodyStream.getReader();
 
-  const headers = new Headers(response.headers);
-  headers.delete('content-encoding');
-  headers.delete('content-length');
+  const clearAbortListener = (): void => {
+    if (!signal) return;
+    signal.removeEventListener('abort', abortDecodePipeline);
+  };
 
-  if (signal) {
-    void finished(decodedNodeStream, { cleanup: true }).finally(() => {
-      signal.removeEventListener('abort', abortHandler);
+  try {
+    const first = await decodedReader.read();
+    if (first.done) {
+      clearAbortListener();
+      void passthroughBranch.cancel().catch(() => undefined);
+      return new Response(null, {
+        status: response.status,
+        statusText: response.statusText,
+        headers,
+      });
+    }
+
+    void passthroughBranch.cancel().catch(() => undefined);
+    const body = createPumpedStream(first.value, decodedReader);
+
+    if (signal) {
+      void finished(decodedNodeStream, { cleanup: true }).finally(() => {
+        clearAbortListener();
+      });
+    }
+
+    return new Response(body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    });
+  } catch (error: unknown) {
+    clearAbortListener();
+    abortDecodePipeline();
+    void decodedReader.cancel(error).catch(() => undefined);
+
+    logDebug('Content-Encoding decode failed; using passthrough body', {
+      url: redactUrl(url),
+      encoding: encodingHeader ?? encodings.join(','),
+      error: isError(error) ? error.message : String(error),
+    });
+
+    return new Response(passthroughBranch, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
     });
   }
-
-  return new Response(decodedBody, {
-    status: response.status,
-    statusText: response.statusText,
-    headers,
-  });
 }
 
 type ReadDecodedResponseResult =
