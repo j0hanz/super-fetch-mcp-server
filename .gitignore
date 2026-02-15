@@ -63,3 +63,4 @@ scripts/*
 !scripts/build.mjs
 !scripts/validate-fetch.mjs
 !scripts/tasks.mjs
+!scripts/mcp-audit.ps1
